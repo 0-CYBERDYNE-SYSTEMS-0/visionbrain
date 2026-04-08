@@ -21,6 +21,7 @@ from typing import Optional
 
 from PIL import Image
 
+from . import __version__
 from .loader import print_status, falcon_perception_record, sam31_record
 from .fp_inference import segment, detect, ocr
 from .sam3_inference import (
@@ -267,6 +268,9 @@ def main() -> None:
         description="VisionBrain — Agricultural vision AI on Apple Silicon",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"VisionBrain {__version__}"
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

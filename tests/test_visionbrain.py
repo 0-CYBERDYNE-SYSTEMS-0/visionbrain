@@ -308,6 +308,18 @@ class TestCLI:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert "--image" in result.stdout
 
+    def test_sam3_help(self):
+        import subprocess
+        import sys
+        result = subprocess.run(
+            [sys.executable, "-m", "visionbrain", "sam3", "--help"],
+            capture_output=True, text=True,
+            cwd=str(Path(__file__).parent.parent / "src"),
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "--image" in result.stdout
+        assert "--prompts" in result.stdout
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -1,5 +1,10 @@
 # VisionBrain
 
+[![PyPI Version](https://img.shields.io/pypi/v/visionbrain.svg)](https://pypi.org/project/visionbrain/)
+[![Python](https://img.shields.io/pypi/pyversions/visionbrain.svg)](https://pypi.org/project/visionbrain/)
+[![CI](https://github.com/0-CYBERDYNE-SYSTEMS-0/visionbrain/workflows/CI/badge.svg)](https://github.com/0-CYBERDYNE-SYSTEMS-0/visionbrain/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Agricultural vision AI on Apple Silicon — powered by Falcon Perception and SAM 3.1.
 
 > Built to run locally. Reads weights from your Hugging Face cache. Uses MLX on Apple Silicon.
