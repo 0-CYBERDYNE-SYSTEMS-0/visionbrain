@@ -1,0 +1,22 @@
+[project]
+name = "visionbrain"
+version = "0.1.0"
+description = "Agricultural vision intelligence — on-device AI for livestock, crops, and drone footage"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "FarmFriend / Cyberdyne Systems"}]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.24",
+    "pillow>=10.0",
+    "opencv-python>=4.10",
+    "pycocoa>=25.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+# mlx_vlm and mlx are expected to be pre-installed in the shared poetry venv.
+# VisionBrain detects them at runtime and falls back gracefully if missing.
