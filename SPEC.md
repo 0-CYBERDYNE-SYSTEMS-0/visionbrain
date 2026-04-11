@@ -195,7 +195,7 @@ VisionBrain/
 | `visionbrain ocr` | Text reading from images |
 | `visionbrain sam3` | SAM 3.1 multi-prompt detection |
 | `visionbrain track` | SAM 3.1 video object tracking |
-| `visionbrain analyze` | Full pipeline: SAM 3.1 track → Gemma 4 reasoning → report |
+| `visionbrain analyze` | Full pipeline: SAM 3.1 track → Falcon key-frames (optional) → Gemma 4 reasoning → report |
 | `visionbrain agent` | VLM-powered visual reasoning |
 
 #### `analyze` command
@@ -220,6 +220,8 @@ visionbrain analyze --video drone.mp4 --query "cattle in the pasture" --report
 --report-type       field | brief | json (default: field)
 --question          Custom question for Gemma 4
 --max-tokens        Max output tokens (default 512)
+--falcon-refine     Run Falcon Perception on K key frames for semantic deep-dive
+--falcon-frames     Number of key frames to pass to Falcon (default 6)
 ```
 
 ---

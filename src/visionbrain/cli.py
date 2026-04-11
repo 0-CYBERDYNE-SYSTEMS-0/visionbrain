@@ -220,11 +220,36 @@ def cmd_track(args: argparse.Namespace) -> None:
 # analyze — full pipeline: SAM 3.1 video → structured JSON → Gemma 4 reasoning
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _extract_key_frames(video_path: str, frame_data: list[dict], n: int = 8) -> list[tuple[int, float, "Image.Image"]]:
+    """Extract the N frames with the most detections as PIL Images.
+
+    Returns list of (frame_index, timestamp, pil_image) tuples.
+    """
+    import cv2
+
+    # Sort by detection count descending, take top N
+    ranked = sorted(frame_data, key=lambda f: f["n_detections"], reverse=True)[:n]
+    ranked_by_frame = sorted(ranked, key=lambda f: f["frame_index"])
+
+    cap = cv2.VideoCapture(video_path)
+    results = []
+    for frame_info in ranked_by_frame:
+        fi = frame_info["frame_index"]
+        cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
+        ret, frame_bgr = cap.read()
+        if ret:
+            pil = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+            results.append((fi, frame_info["timestamp"], pil))
+    cap.release()
+    return results
+
+
 def cmd_analyze(args: argparse.Namespace) -> None:
     """Run the full VisionBrain pipeline on a video:
 
     1. SAM 3.1 — track objects frame-by-frame, annotated video + structured JSON
-    2. Gemma 4 (remote) — reason about the detections, generate field report
+    2. Falcon Perception (optional) — semantic deep-dive on key frames
+    3. Gemma 4 (remote) — reason about the detections, generate field report
 
     Output: annotated video + per-frame JSON detections + natural-language report.
     """
@@ -254,8 +279,9 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     print()
 
     # Step 1: SAM 3.1 tracking with structured JSON export
+    total_steps = 4 if getattr(args, "falcon_refine", False) else 3
     prompts = args.prompts if args.prompts else [args.query]
-    print(f"[1/3] SAM 3.1 — tracking '{' '.join(prompts)}' in {video_path.name}...")
+    print(f"[1/{total_steps}] SAM 3.1 — tracking '{' '.join(prompts)}' in {video_path.name}...")
     print(f"       (every {args.every} frames, threshold {args.threshold}, resolution {args.resolution})")
     stats, frame_data = track_video_with_json(
         str(video_path),
@@ -275,14 +301,50 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     print(f"  → JSON detections: {out_json}")
     print()
 
-    # Step 2: Remote Gemma 4 reasoning
+    # Step 2 (optional): Falcon Perception key-frame refinement
+    falcon_summary_parts = []
+    if getattr(args, "falcon_refine", False):
+        rec = falcon_perception_record()
+        if not rec.can_load:
+            print(f"  WARNING: Falcon Perception not ready — skipping refine step ({rec.note})")
+        else:
+            frames_with_dets = [f for f in frame_data if f["n_detections"] > 0]
+            if frames_with_dets:
+                n_refine = min(getattr(args, "falcon_frames", 6), len(frames_with_dets))
+                print(f"[2/{total_steps}] Falcon Perception — semantic analysis on top {n_refine} frames...")
+                key_frames = _extract_key_frames(str(video_path), frames_with_dets, n=n_refine)
+                for fi, ts, pil_frame in key_frames:
+                    fp_results, fp_stats = detect(
+                        pil_frame,
+                        args.query,
+                        max_new_tokens=200,
+                    )
+                    det_strs = [
+                        f"  [{i+1}] score={r.score:.2f} cx={r.cx:.2f} cy={r.cy:.2f} h={r.h:.2f} w={r.w:.2f}"
+                        for i, r in enumerate(fp_results[:10])
+                    ]
+                    falcon_summary_parts.append(
+                        f"Frame {fi} (t={ts:.2f}s) — Falcon '{args.query}' "
+                        f"({fp_stats.total_ms:.0f}ms, {len(fp_results)} results):\n"
+                        + ("\n".join(det_strs) if det_strs else "  [no detections]")
+                    )
+                    print(f"  Frame {fi} (t={ts:.1f}s): {len(fp_results)} Falcon detections — {fp_stats.total_ms:.0f}ms")
+                print()
+            else:
+                print(f"[2/{total_steps}] Falcon Perception — no frames with SAM detections to refine; skipping.")
+                print()
+        step_gemma = f"[3/{total_steps}]"
+    else:
+        step_gemma = f"[2/{total_steps}]"
+
+    # Step 3: Remote Gemma 4 reasoning
     if not gemma_remote_available():
         print("WARNING: Gemma 4 server unreachable — detections saved but report not generated.")
         print(f"  Check: curl http://100.72.41.118:8080/v1/models")
         print(f"\n=== Pipeline complete (partial) ===")
         return
 
-    print(f"[2/3] Gemma 4 26B — reasoning about {video_path.name}...")
+    print(f"{step_gemma} Gemma 4 26B — reasoning about {video_path.name}...")
     print(f"       Sending {len(frame_data)} frames of structured detections...")
 
     # Build a compact summary for Gemma
@@ -315,6 +377,11 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             )
             summary_parts.append(f"  Frame {frame['frame_index']} (t={frame['timestamp']:.2f}s): {dets_str}")
 
+    if falcon_summary_parts:
+        summary_parts.append("")
+        summary_parts.append("Falcon Perception key-frame semantic analysis:")
+        summary_parts.extend(falcon_summary_parts)
+
     summary_text = "\n".join(summary_parts)
 
     if args.report:
@@ -346,7 +413,11 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         print(f"  {resp.text}")
         print(f"  Speed: {resp.stats.generation_tps:.1f} tok/s")
 
-    print(f"\n=== Pipeline complete ===")
+    stages = ["SAM 3.1 tracking"]
+    if getattr(args, "falcon_refine", False):
+        stages.append("Falcon Perception key-frames")
+    stages.append("Gemma 4 reasoning")
+    print(f"\n=== Pipeline complete ({' → '.join(stages)}) ===")
     print(f"  Annotated video : {out_video}")
     print(f"  Detection JSON  : {out_json}")
     if args.report:
@@ -472,6 +543,10 @@ def main() -> None:
                    help="Report format (default: field)")
     p.add_argument("--question", help="Custom question for Gemma (overrides default reasoning)")
     p.add_argument("--max-tokens", type=int, default=512, help="Max output tokens for Gemma")
+    p.add_argument("--falcon-refine", action="store_true",
+                   help="Run Falcon Perception on key frames for semantic deep-dive")
+    p.add_argument("--falcon-frames", type=int, default=6,
+                   help="Number of key frames to analyze with Falcon (default 6)")
 
     # agent
     p = sub.add_parser("agent", help="VLM-powered visual reasoning agent")
