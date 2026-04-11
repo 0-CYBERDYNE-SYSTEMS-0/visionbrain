@@ -18,7 +18,10 @@ from typing import Optional
 
 HF_CACHE = Path.home() / ".cache" / "huggingface" / "hub"
 FALCON_HF_ID = "tiiuae--Falcon-Perception"
-SAM31_HF_ID = "facebook--sam3.1"
+SAM31_HF_ID = "mlx-community--sam3.1-bf16"
+SAM31_HF_REPO = "mlx-community/sam3.1-bf16"
+GEMMA4_HF_ID = "mlx-community--gemma-4-26b-a4b-it-4bit"
+GEMMA4_HF_REPO = "mlx-community/gemma-4-26b-a4b-it-4bit"
 
 # Path to Falcon-Perception git repo (read-only)
 FALCON_REPO = Path.home() / "Falcon-Perception"
@@ -94,20 +97,40 @@ def sam31_record() -> ModelRecord:
     has_weights = cached.exists() and size > 0.5
     can_load = has_weights and mlx_ok
     return ModelRecord(
-        hf_id="facebook/sam3.1",
+        hf_id="mlx-community/sam3.1-bf16",
         cache_dir=cached,
         disk_gb=round(size, 2),
         is_cached=has_weights,
         can_load=can_load,
         note="Meta SAM 3.1 with Object Multiplex for video tracking."
              if can_load else
-             ("Run: huggingface-cli download facebook/sam3.1" if not has_weights else
+             ("Run: huggingface-cli download mlx-community/sam3.1-bf16" if not has_weights else
+              "mlx/mlx_vlm not in Python path"),
+    )
+
+
+def gemma4_record() -> ModelRecord:
+    """Status of Gemma 4 26B weights."""
+    cached = HF_CACHE / f"models--{GEMMA4_HF_ID.replace('/', '--')}"
+    size = _cache_size(cached)
+    mlx_ok = _check_mlx()
+    has_weights = cached.exists() and size > 1.0
+    can_load = has_weights and mlx_ok
+    return ModelRecord(
+        hf_id=GEMMA4_HF_REPO,
+        cache_dir=cached,
+        disk_gb=round(size, 2),
+        is_cached=has_weights,
+        can_load=can_load,
+        note="Google Gemma 4 26B MoE (~3.8B active params), 4-bit quantized."
+             if can_load else
+             ("Run: huggingface-cli download mlx-community/gemma-4-26b-a4b-it-4bit" if not has_weights else
               "mlx/mlx_vlm not in Python path"),
     )
 
 
 def all_records() -> list[ModelRecord]:
-    return [falcon_perception_record(), sam31_record()]
+    return [falcon_perception_record(), sam31_record(), gemma4_record()]
 
 
 def print_status() -> None:

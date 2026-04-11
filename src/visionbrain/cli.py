@@ -22,14 +22,18 @@ from typing import Optional
 from PIL import Image
 
 from . import __version__
-from .loader import print_status, falcon_perception_record, sam31_record
+from .loader import print_status, falcon_perception_record, sam31_record, gemma4_record
 from .fp_inference import segment, detect, ocr
 from .sam3_inference import (
     track_video,
+    track_video_with_json,
     track_realtime,
     detect_multi,
     sam31_available,
+    Sam31Detection,
 )
+from .gemma_inference import ask as gemma_ask_local, generate_report as gemma_report_local
+from .remote_gemma_inference import ask as gemma_ask, generate_report as gemma_report, gemma_available as gemma_remote_available
 from .viz import render_som, render_detections
 
 
@@ -213,8 +217,140 @@ def cmd_track(args: argparse.Namespace) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# agent
+# analyze — full pipeline: SAM 3.1 video → structured JSON → Gemma 4 reasoning
 # ──────────────────────────────────────────────────────────────────────────────
+
+def cmd_analyze(args: argparse.Namespace) -> None:
+    """Run the full VisionBrain pipeline on a video:
+
+    1. SAM 3.1 — track objects frame-by-frame, annotated video + structured JSON
+    2. Gemma 4 (remote) — reason about the detections, generate field report
+
+    Output: annotated video + per-frame JSON detections + natural-language report.
+    """
+    import json
+    from pathlib import Path
+
+    video_path = Path(args.video)
+    if not video_path.exists():
+        print(f"ERROR: video not found: {video_path}", file=sys.stderr)
+        sys.exit(1)
+
+    if not sam31_available():
+        rec = sam31_record()
+        print(f"ERROR: SAM 3.1 not ready — {rec.note}", file=sys.stderr)
+        print("Run: huggingface-cli download mlx-community/sam3.1-bf16", file=sys.stderr)
+        sys.exit(1)
+
+    stem = video_path.stem
+    out_video = args.output or str(video_path.parent / f"{stem}_analyzed{video_path.suffix}")
+    out_json = args.json_output or str(video_path.parent / f"{stem}_detections.json")
+    out_report = args.report_output or str(video_path.parent / f"{stem}_report.txt")
+
+    print(f"\n=== VisionBrain Pipeline ===")
+    print(f"Video: {video_path}")
+    print(f"Query: {args.query}")
+    print(f"Remote Gemma: http://100.72.41.118:8080")
+    print()
+
+    # Step 1: SAM 3.1 tracking with structured JSON export
+    prompts = args.prompts if args.prompts else [args.query]
+    print(f"[1/3] SAM 3.1 — tracking '{' '.join(prompts)}' in {video_path.name}...")
+    print(f"       (every {args.every} frames, threshold {args.threshold}, resolution {args.resolution})")
+    stats, frame_data = track_video_with_json(
+        str(video_path),
+        prompts,
+        output_path=out_video,
+        json_path=out_json,
+        threshold=args.threshold,
+        every_n_frames=args.every,
+        backbone_every=args.backbone_every,
+        resolution=args.resolution,
+        opacity=args.opacity,
+        contour_thickness=2,
+    )
+    print(f"  → {stats.processed_frames}/{stats.total_frames} frames processed")
+    print(f"  → {stats.unique_objects} unique objects tracked")
+    print(f"  → Annotated video: {out_video}")
+    print(f"  → JSON detections: {out_json}")
+    print()
+
+    # Step 2: Remote Gemma 4 reasoning
+    if not gemma_remote_available():
+        print("WARNING: Gemma 4 server unreachable — detections saved but report not generated.")
+        print(f"  Check: curl http://100.72.41.118:8080/v1/models")
+        print(f"\n=== Pipeline complete (partial) ===")
+        return
+
+    print(f"[2/3] Gemma 4 26B — reasoning about {video_path.name}...")
+    print(f"       Sending {len(frame_data)} frames of structured detections...")
+
+    # Build a compact summary for Gemma
+    total_dets = sum(f["n_detections"] for f in frame_data)
+    all_labels: dict[str, int] = {}
+    all_track_ids: set[int] = set()
+    for frame in frame_data:
+        for det in frame["detections"]:
+            lbl = det["label"]
+            all_labels[lbl] = all_labels.get(lbl, 0) + 1
+            all_track_ids.add(det["track_id"])
+
+    # Build the structured summary Gemma will reason over
+    summary_parts = [
+        f"Video: {video_path.name}",
+        f"Duration: {stats.total_frames/stats.fps:.1f}s ({stats.total_frames} frames at {stats.fps:.1f} fps)",
+        f"Resolution: {frame_data[0]['detections'][0]['bbox_xyxy'][2]:.0f}x? (from first detection)" if frame_data and frame_data[0]['detections'] else f"Resolution: {args.resolution}",
+        f"Tracked object types: {list(all_labels.keys())}",
+        f"Total detections across {len(frame_data)} processed frames: {total_dets}",
+        f"Unique tracked objects: {len(all_track_ids)}",
+        f"User query: {args.query}",
+        "",
+        "Per-frame detection data (centroid x/y normalized 0-1, area as fraction of frame):",
+    ]
+    for frame in frame_data:
+        if frame["detections"]:
+            dets_str = ", ".join(
+                f"id{det['track_id']}({det['label']}:{det['score']:.2f}@({det['centroid_norm']['x']:.2f},{det['centroid_norm']['y']:.2f}))"
+                for det in frame["detections"]
+            )
+            summary_parts.append(f"  Frame {frame['frame_index']} (t={frame['timestamp']:.2f}s): {dets_str}")
+
+    summary_text = "\n".join(summary_parts)
+
+    if args.report:
+        report_resp = gemma_report(
+            summary_text,
+            report_type=args.report_type,
+            max_tokens=args.max_tokens,
+            temperature=0.7,
+        )
+        print(f"  → {report_resp.stats.generation_tokens} tokens in {report_resp.stats.decode_ms/1000:.1f}s")
+        print(f"  → Speed: {report_resp.stats.generation_tps:.1f} tok/s")
+        print()
+        print(f"  {'='*60}")
+        print(f"  FIELD REPORT")
+        print(f"  {'='*60}")
+        print(f"  {report_resp.text}")
+        print(f"  {'='*60}")
+        with open(out_report, "w") as f:
+            f.write(report_resp.text)
+        print(f"\n  Report saved to: {out_report}")
+    else:
+        question = args.question or (
+            f"What are the key findings from this drone footage? "
+            f"Focus on: {args.query}. Identify individual objects, their movement patterns, "
+            f"anomalies, and anything a farmer or rancher should act on."
+        )
+        resp = gemma_ask(question, detections=[], frame_history=frame_data, max_tokens=args.max_tokens)
+        print(f"  → Answer ({resp.stats.generation_tokens} tokens, {resp.stats.decode_ms/1000:.1f}s):")
+        print(f"  {resp.text}")
+        print(f"  Speed: {resp.stats.generation_tps:.1f} tok/s")
+
+    print(f"\n=== Pipeline complete ===")
+    print(f"  Annotated video : {out_video}")
+    print(f"  Detection JSON  : {out_json}")
+    if args.report:
+        print(f"  Field report    : {out_report}")
 
 def cmd_agent(args: argparse.Namespace) -> None:
     """Interactive VLM-powered agent on an image."""
@@ -317,6 +453,26 @@ def main() -> None:
     p.add_argument("--resolution", type=int, default=1008)
     p.add_argument("--opacity", type=float, default=0.6)
 
+    # analyze
+    p = sub.add_parser("analyze", help="Full pipeline: SAM 3.1 track → Gemma 4 reasoning → report")
+    p.add_argument("--video", required=True, help="Input video path")
+    p.add_argument("--query", required=True, help="Natural-language query (e.g. 'cattle in the pasture')")
+    p.add_argument("--prompts", nargs="+", help="SAM 3.1 text prompts to track (default: use --query)")
+    p.add_argument("--output", help="Output video path")
+    p.add_argument("--json-output", help="Output JSON path for per-frame detections")
+    p.add_argument("--report-output", help="Output text report path")
+    p.add_argument("--threshold", type=float, default=0.15)
+    p.add_argument("--every", type=int, default=2, help="Run SAM detection every N frames")
+    p.add_argument("--backbone-every", type=int, default=1, help="Re-run ViT backbone every N detections")
+    p.add_argument("--resolution", type=int, default=1008, help="SAM input resolution (1008 = native)")
+    p.add_argument("--opacity", type=float, default=0.6, help="Mask overlay opacity")
+    p.add_argument("--sample-frames", type=int, default=10, help="Number of frames to sample for Gemma reasoning")
+    p.add_argument("--report", action="store_true", help="Generate a written field report via Gemma 4")
+    p.add_argument("--report-type", choices=["field", "brief", "json"], default="field",
+                   help="Report format (default: field)")
+    p.add_argument("--question", help="Custom question for Gemma (overrides default reasoning)")
+    p.add_argument("--max-tokens", type=int, default=512, help="Max output tokens for Gemma")
+
     # agent
     p = sub.add_parser("agent", help="VLM-powered visual reasoning agent")
     p.add_argument("--image", required=True, help="Input image path")
@@ -339,6 +495,7 @@ def main() -> None:
         "ocr": cmd_ocr,
         "sam3": cmd_sam3_detect,
         "track": cmd_track,
+        "analyze": cmd_analyze,
         "agent": cmd_agent,
     }
     dispatch[args.command](args)
