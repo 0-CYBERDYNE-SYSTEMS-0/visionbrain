@@ -1,0 +1,1135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TERRA·VISION — Ground Control</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M16 2 L30 10 L30 22 L16 30 L2 22 L2 10 Z' fill='%2300ff6a' opacity='.9'/><path d='M16 9 L23 13 L23 19 L16 23 L9 19 L9 13 Z' fill='%23020504'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Chakra+Petch:ital,wght@0,300;0,400;0,600;0,700;1,300&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<style>
+:root{
+  --void:#020504;--base:#060d07;--surf:#0a1609;--card:#0d1a0e;--lift:#112013;
+  --bd:#182a1a;--bda:#2a4a2e;--bdg:#3a6040;
+  --acc:#00ff6a;--accd:#00cc55;--accm:#00993f;
+  --amr:#f5a623;--red:#ff4444;--blu:#40cfff;--prp:#b06aff;
+  --tx:#b0e4ba;--txd:#4d7554;--txm:#243a27;
+  --glow:rgba(0,255,106,.18);--glows:rgba(0,255,106,.07);--glowa:rgba(0,255,106,.04);
+  --font-d:'Orbitron',monospace;
+  --font-u:'Chakra Petch',sans-serif;
+  --font-m:'JetBrains Mono',monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--base);color:var(--tx);font-family:var(--font-u);font-size:13px}
+body::before{content:'';position:fixed;inset:0;
+  background-image:radial-gradient(circle,rgba(0,255,106,.07) 1px,transparent 1px);
+  background-size:26px 26px;pointer-events:none;z-index:0}
+body::after{content:'';position:fixed;inset:0;
+  background:radial-gradient(ellipse 80% 60% at 50% 100%,rgba(0,80,30,.18),transparent);
+  pointer-events:none;z-index:0}
+#app{position:relative;z-index:1;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+/* ═══════════════════ HEADER ═══════════════════ */
+#hdr{height:50px;background:rgba(5,10,6,.96);border-bottom:1px solid var(--bd);
+  display:flex;align-items:center;padding:0 16px;gap:0;flex-shrink:0;
+  backdrop-filter:blur(12px);position:relative}
+#hdr::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,var(--bda),var(--acc),var(--bda),transparent);opacity:.5}
+
+.logo-wrap{display:flex;align-items:center;gap:9px;margin-right:28px;flex-shrink:0}
+.logo-hex{width:26px;height:26px;color:var(--acc);filter:drop-shadow(0 0 6px var(--acc))}
+.logo-text{font-family:var(--font-d);font-size:13px;font-weight:900;letter-spacing:3.5px;
+  color:var(--acc);text-shadow:0 0 18px var(--acc),0 0 40px rgba(0,255,106,.3);
+  position:relative;overflow:hidden;white-space:nowrap}
+.logo-text::after{content:'';position:absolute;top:0;left:-100%;width:50%;height:100%;
+  background:linear-gradient(90deg,transparent,rgba(0,255,106,.5),transparent);
+  animation:logo-scan 9s ease-in-out infinite}
+@keyframes logo-scan{0%,70%,100%{left:-100%}40%{left:140%}}
+
+.logo-sub{font-family:var(--font-m);font-size:8px;letter-spacing:2px;color:var(--txd);
+  margin-left:2px;align-self:flex-end;padding-bottom:1px}
+
+#mode-tabs{display:flex;gap:0;flex:1}
+.tab-btn{font-family:var(--font-u);font-size:10px;font-weight:700;letter-spacing:1.5px;
+  padding:6px 13px;background:none;border:none;color:var(--txd);cursor:pointer;
+  position:relative;transition:color .2s;white-space:nowrap}
+.tab-btn::after{content:'';position:absolute;bottom:-1px;left:13px;right:13px;height:2px;
+  background:var(--acc);transform:scaleX(0);transition:transform .2s;
+  box-shadow:0 0 8px var(--acc)}
+.tab-btn:hover{color:var(--tx)}
+.tab-btn.active{color:var(--acc)}
+.tab-btn.active::after{transform:scaleX(1)}
+
+#conn-status{display:flex;align-items:center;gap:8px;font-size:9px;letter-spacing:1.5px;
+  color:var(--txd);flex-shrink:0;padding-left:16px;border-left:1px solid var(--bd)}
+.conn-dot{width:7px;height:7px;border-radius:50%;background:var(--txm);flex-shrink:0;transition:all .5s}
+.conn-dot.ok  {background:var(--acc);box-shadow:0 0 8px var(--acc);animation:led 2.5s ease-in-out infinite}
+.conn-dot.warn{background:var(--amr);box-shadow:0 0 8px var(--amr)}
+.conn-dot.err {background:var(--red);box-shadow:0 0 8px var(--red)}
+@keyframes led{0%,100%{box-shadow:0 0 5px var(--acc)}50%{box-shadow:0 0 14px var(--acc),0 0 28px var(--glow)}}
+
+/* ═══════════════════ WORKSPACE ═══════════════════ */
+#workspace{flex:1;display:grid;grid-template-columns:246px 1fr 372px;overflow:hidden;min-height:0}
+
+/* ─── LEFT: INTEL PANEL ─── */
+#intel{background:var(--surf);border-right:1px solid var(--bd);overflow-y:auto;overflow-x:hidden}
+#intel::-webkit-scrollbar{width:3px}
+#intel::-webkit-scrollbar-thumb{background:var(--bda);border-radius:2px}
+
+.ph{font-size:8px;font-weight:700;letter-spacing:2.5px;color:var(--txm);
+  padding:9px 13px 6px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:6px}
+.ph::before{content:'';width:12px;height:1px;background:var(--acc);opacity:.4}
+
+.model-card{padding:11px 13px;border-bottom:1px solid var(--bd);transition:background .2s;cursor:default}
+.model-card:hover{background:var(--card)}
+.mc-head{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.mc-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.mc-dot.ok  {background:var(--acc);box-shadow:0 0 6px var(--acc);animation:led 3s ease-in-out infinite}
+.mc-dot.warn{background:var(--amr);box-shadow:0 0 6px var(--amr)}
+.mc-dot.err {background:var(--red);box-shadow:0 0 6px var(--red)}
+.mc-name{font-size:11px;font-weight:700;color:var(--tx);letter-spacing:.3px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+.mc-badge{font-size:7.5px;font-weight:700;letter-spacing:.5px;padding:1px 5px;
+  border-radius:2px;flex-shrink:0}
+.mc-badge.ok  {background:rgba(0,255,106,.1);color:var(--acc)}
+.mc-badge.warn{background:rgba(245,166,35,.1);color:var(--amr)}
+.mc-badge.err {background:rgba(255,68,68,.1);color:var(--red)}
+.mc-id{font-family:var(--font-m);font-size:8.5px;color:var(--txd);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:4px}
+.mc-row{display:flex;gap:8px;align-items:center}
+.mc-gb{font-family:var(--font-m);font-size:9px;color:var(--txd)}
+.mc-note{font-size:8.5px;color:var(--txm);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.intel-row{padding:7px 13px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center}
+.ir-lbl{font-size:9px;color:var(--txd);letter-spacing:.5px}
+.ir-val{font-family:var(--font-m);font-size:10px;color:var(--tx)}
+
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:0}
+.sg-cell{padding:8px 13px;border-bottom:1px solid var(--bd);border-right:1px solid var(--bd)}
+.sg-cell:nth-child(2n){border-right:none}
+.sg-lbl{font-size:8px;letter-spacing:1px;color:var(--txm);margin-bottom:2px}
+.sg-val{font-family:var(--font-d);font-size:14px;font-weight:700;color:var(--acc)}
+.sg-val.dim{color:var(--txd);font-size:11px;font-family:var(--font-m)}
+
+/* ─── CENTER: MAIN ─── */
+#main{display:flex;flex-direction:column;overflow:hidden;background:var(--base)}
+.tab-pane{display:none;flex-direction:column;flex:1;overflow:hidden}
+.tab-pane.active{display:flex}
+
+/* Drop zone */
+.drop-zone{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:14px;border:1px dashed var(--bd);margin:18px;border-radius:3px;cursor:pointer;
+  transition:all .25s;position:relative;overflow:hidden;min-height:0}
+.drop-zone:hover,.drop-zone.drag-over{border-color:var(--bda);background:var(--glows)}
+.drop-zone.has-file{border-color:var(--accd);background:var(--glowa)}
+.dz-icon{font-size:44px;color:var(--bda);line-height:1;transition:all .3s;user-select:none}
+.drop-zone:hover .dz-icon,.drop-zone.drag-over .dz-icon{color:var(--acc);text-shadow:0 0 30px var(--acc)}
+.dz-title{font-family:var(--font-d);font-size:11px;letter-spacing:3.5px;color:var(--txd)}
+.dz-sub{font-family:var(--font-m);font-size:9px;color:var(--txm);letter-spacing:1px}
+.dz-file{font-family:var(--font-m);font-size:10px;color:var(--acc);padding:3px 10px;
+  border:1px solid var(--accd);border-radius:2px;background:rgba(0,255,106,.06);
+  max-width:90%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.btn-browse{font-family:var(--font-u);font-size:9px;font-weight:700;letter-spacing:1.5px;
+  padding:5px 14px;background:none;border:1px solid var(--bda);color:var(--txd);
+  cursor:pointer;border-radius:2px;transition:all .2s}
+.btn-browse:hover{border-color:var(--acc);color:var(--acc);background:var(--glows)}
+
+/* Media zone (center of analyze + track tabs) */
+#media-zone{flex:1;min-height:0;display:flex;flex-direction:column;position:relative}
+.video-wrap{flex:1;min-height:0;position:relative;background:#000;overflow:hidden}
+.video-wrap video{width:100%;height:100%;object-fit:contain;display:block}
+.scanlines{position:absolute;inset:0;
+  background:repeating-linear-gradient(to bottom,transparent,transparent 3px,rgba(0,0,0,.08) 3px,rgba(0,0,0,.08) 4px);
+  pointer-events:none;z-index:1}
+.corner{position:absolute;width:16px;height:16px;z-index:2}
+.corner.tl{top:5px;left:5px;border-top:2px solid var(--acc);border-left:2px solid var(--acc)}
+.corner.tr{top:5px;right:5px;border-top:2px solid var(--acc);border-right:2px solid var(--acc)}
+.corner.bl{bottom:5px;left:5px;border-bottom:2px solid var(--acc);border-left:2px solid var(--acc)}
+.corner.br{bottom:5px;right:5px;border-bottom:2px solid var(--acc);border-right:2px solid var(--acc)}
+#video-result{flex:1;min-height:0;display:flex;flex-direction:column;padding:14px 18px 8px;gap:8px}
+#image-result{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:14px}
+#ri{max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--bd)}
+
+.vid-hud{display:flex;gap:22px;flex-shrink:0;padding:0 2px}
+.hud-item{display:flex;flex-direction:column;gap:1px}
+.hud-lbl{font-size:7.5px;letter-spacing:1.5px;color:var(--txm);font-weight:700}
+.hud-val{font-family:var(--font-d);font-size:14px;font-weight:700;color:var(--acc)}
+.hud-val.dim{color:var(--accd);font-size:12px}
+
+#progress-wrap{position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--bd)}
+#progress-bar{height:100%;background:var(--acc);box-shadow:0 0 6px var(--acc);width:0%;transition:width .4s}
+
+/* ─── PIPELINE ─── */
+#pipeline{display:flex;align-items:center;justify-content:center;
+  padding:10px 36px 13px;gap:0;flex-shrink:0;border-top:1px solid var(--bd);
+  background:linear-gradient(to top,var(--surf),transparent)}
+
+.p-stage{display:flex;flex-direction:column;align-items:center;gap:7px;flex-shrink:0}
+.orb{width:68px;height:68px;border-radius:50%;border:1.5px solid var(--bd);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+  background:var(--surf);transition:all .55s ease;position:relative}
+.orb span{font-family:var(--font-d);font-size:7.5px;font-weight:700;letter-spacing:.8px;
+  color:var(--txm);transition:color .5s}
+.orb small{font-family:var(--font-m);font-size:6.5px;color:var(--txm);transition:color .5s}
+.p-stage.active .orb{border-color:var(--acc);background:rgba(0,255,106,.07);
+  box-shadow:0 0 20px var(--glow),inset 0 0 14px rgba(0,255,106,.08);animation:orb-pulse 2s ease-in-out infinite}
+.p-stage.active .orb span,.p-stage.active .orb small{color:var(--acc)}
+.p-stage.done .orb{border-color:var(--accd);background:rgba(0,255,106,.04)}
+.p-stage.done .orb span,.p-stage.done .orb small{color:var(--accd)}
+.p-stage.skip .orb{opacity:.35}
+@keyframes orb-pulse{0%,100%{box-shadow:0 0 14px var(--glow)}50%{box-shadow:0 0 30px var(--glow),0 0 54px rgba(0,255,106,.1)}}
+
+.p-lbl{font-size:7.5px;letter-spacing:2px;color:var(--txm);font-weight:700;transition:color .5s}
+.p-stage.active .p-lbl{color:var(--acc)}
+.p-stage.done .p-lbl{color:var(--accd)}
+
+.p-line{flex:1;height:1.5px;background:var(--bd);margin-bottom:24px;position:relative;overflow:hidden;max-width:80px;min-width:30px}
+.p-line.fill::after{content:'';position:absolute;left:0;top:0;height:100%;
+  background:var(--acc);box-shadow:0 0 5px var(--acc);animation:fill-line 1.8s linear forwards}
+.p-line.done{background:var(--accd)}
+@keyframes fill-line{from{width:0}to{width:100%}}
+
+/* ─── RIGHT: OPS PANEL ─── */
+#ops{display:flex;flex-direction:column;background:var(--surf);border-left:1px solid var(--bd);overflow:hidden}
+
+#ops-log-wrap{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+#ops-log{flex:1;overflow-y:auto;overflow-x:hidden;padding:6px 0;
+  font-family:var(--font-m);font-size:9.5px;line-height:1.75;min-height:0}
+#ops-log::-webkit-scrollbar{width:3px}
+#ops-log::-webkit-scrollbar-thumb{background:var(--bda)}
+.ll{padding:0 12px;animation:ll-in .15s ease-out;word-break:break-all;white-space:pre-wrap}
+@keyframes ll-in{from{opacity:0;transform:translateX(-3px)}to{opacity:1}}
+.ll.i{color:#4a8050}.ll.h{color:var(--acc);font-weight:500}.ll.p{color:var(--blu)}
+.ll.w{color:var(--amr)}.ll.e{color:var(--red)}.ll.d{color:#7a9fff}
+.ll.s{color:var(--prp)}
+
+/* Results area */
+.result-section{flex-shrink:0;border-top:1px solid var(--bd);max-height:48%;display:flex;flex-direction:column;overflow:hidden}
+.rs-body{overflow-y:auto;flex:1;min-height:0;padding:8px 12px}
+.rs-body::-webkit-scrollbar{width:3px}
+.rs-body::-webkit-scrollbar-thumb{background:var(--bda)}
+.rs-actions{display:flex;gap:6px;padding:5px 10px;border-top:1px solid var(--bd);flex-shrink:0}
+.btn-xs{font-family:var(--font-u);font-size:8.5px;font-weight:700;letter-spacing:1px;
+  padding:3px 9px;background:none;border:1px solid var(--bd);color:var(--txd);
+  cursor:pointer;border-radius:2px;transition:all .15s}
+.btn-xs:hover{border-color:var(--acc);color:var(--acc)}
+
+/* Report content */
+#rc{font-size:10.5px;line-height:1.65;color:var(--tx)}
+#rc h1,#rc h2,#rc h3{font-family:var(--font-u);font-weight:700;letter-spacing:.3px;
+  color:var(--acc);margin:8px 0 4px;font-size:10px}
+#rc h1{font-size:11px}
+#rc p{margin-bottom:5px}
+#rc ul,#rc ol{padding-left:14px;margin-bottom:5px}
+#rc li{margin-bottom:1px}
+#rc strong{color:var(--amr)}
+#rc em{color:var(--blu)}
+#rc table{width:100%;border-collapse:collapse;margin-bottom:6px;font-size:9.5px}
+#rc th{text-align:left;padding:2px 6px;color:var(--acc);border-bottom:1px solid var(--bda);font-size:8.5px}
+#rc td{padding:2px 6px;border-bottom:1px solid var(--bd)}
+#rc code{font-family:var(--font-m);background:var(--card);padding:0 3px;font-size:8.5px;border-radius:2px}
+#rc hr{border:none;border-top:1px solid var(--bd);margin:6px 0}
+#rc blockquote{border-left:2px solid var(--bda);padding-left:8px;color:var(--txd)}
+
+/* Detection cards */
+.det-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding:8px 10px}
+.dc{background:var(--card);border:1px solid var(--bd);border-radius:3px;padding:7px;text-align:center}
+.dc-v{font-family:var(--font-d);font-size:20px;font-weight:700;color:var(--acc);display:block}
+.dc-l{font-size:7.5px;letter-spacing:1px;color:var(--txd);margin-top:1px}
+
+/* ═══════════════════ CONFIG BAR ═══════════════════ */
+#config-bar{height:62px;background:rgba(8,14,9,.97);border-top:1px solid var(--bd);
+  display:flex;align-items:center;padding:0 12px;gap:8px;flex-shrink:0;
+  backdrop-filter:blur(10px);overflow:hidden}
+#config-bar::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,var(--bd),transparent)}
+
+.cfg-pane{display:none;width:100%;align-items:center;gap:8px;flex-wrap:nowrap}
+.cfg-pane.active{display:flex}
+
+.cf{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.cf.n0{flex:0 0 52px}.cf.n1{flex:0 0 70px}.cf.n2{flex:0 0 80px}.cf.n3{flex:0 0 100px}
+.cf label{font-size:7.5px;letter-spacing:1.5px;color:var(--txm);font-weight:700;white-space:nowrap}
+.cf input[type=text],.cf select,.cf input[type=number]{
+  font-family:var(--font-m);font-size:10.5px;background:var(--card);border:1px solid var(--bd);
+  color:var(--tx);padding:3px 7px;border-radius:2px;outline:none;
+  transition:border-color .15s;width:100%;height:24px}
+.cf input[type=text]:focus,.cf select:focus,.cf input[type=number]:focus{border-color:var(--bda)}
+.cf select{cursor:pointer;-webkit-appearance:none}
+
+.range-row{display:flex;align-items:center;gap:5px}
+.cf input[type=range]{flex:1;accent-color:var(--acc);height:3px;cursor:pointer}
+.rv{font-family:var(--font-m);font-size:10px;color:var(--acc);min-width:26px;text-align:right}
+
+.togs{display:flex;flex-direction:column;gap:3px;flex-shrink:0}
+.tog{display:flex;align-items:center;gap:5px;cursor:pointer}
+.tog input{accent-color:var(--acc);cursor:pointer}
+.tog span{font-size:8.5px;font-weight:700;letter-spacing:.8px;color:var(--txd);transition:color .15s}
+.tog:hover span{color:var(--tx)}
+
+.sep{width:1px;height:36px;background:var(--bd);flex-shrink:0;margin:0 2px}
+
+.btn-launch{font-family:var(--font-d);font-size:10px;font-weight:700;letter-spacing:2.5px;
+  padding:0 18px;height:34px;background:rgba(0,255,106,.09);border:1px solid var(--acc);
+  color:var(--acc);cursor:pointer;border-radius:2px;transition:all .2s;
+  text-shadow:0 0 10px var(--acc);flex-shrink:0;white-space:nowrap}
+.btn-launch:hover{background:rgba(0,255,106,.17);box-shadow:0 0 18px var(--glow)}
+.btn-launch:active{transform:scale(.97)}
+.btn-launch:disabled{opacity:.35;cursor:not-allowed;box-shadow:none}
+.btn-launch.running{border-color:var(--amr);color:var(--amr);background:rgba(245,166,35,.08);
+  text-shadow:0 0 10px var(--amr);animation:btn-run 1.5s ease-in-out infinite}
+@keyframes btn-run{0%,100%{box-shadow:0 0 8px rgba(245,166,35,.2)}50%{box-shadow:0 0 22px rgba(245,166,35,.4)}}
+
+/* ═══════════════════ FLASH OVERLAY ═══════════════════ */
+#flash{position:fixed;inset:0;pointer-events:none;opacity:0;z-index:999;
+  display:flex;align-items:center;justify-content:center;
+  background:radial-gradient(ellipse 60% 40% at 50% 50%,rgba(0,255,106,.08),transparent)}
+.flash-txt{font-family:var(--font-d);font-size:26px;font-weight:900;letter-spacing:7px;
+  color:var(--acc);text-shadow:0 0 40px var(--acc),0 0 80px var(--glow);opacity:0}
+
+/* ═══════════════════ SCROLLBARS ═══════════════════ */
+*::-webkit-scrollbar{width:4px;height:4px}
+*::-webkit-scrollbar-track{background:transparent}
+*::-webkit-scrollbar-thumb{background:var(--bda);border-radius:2px}
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- ══════════════════════ FLASH ══════════════════════ -->
+<div id="flash"><div class="flash-txt" id="flash-txt">MISSION COMPLETE</div></div>
+
+<!-- ══════════════════════ HEADER ══════════════════════ -->
+<header id="hdr">
+  <div class="logo-wrap">
+    <svg class="logo-hex" viewBox="0 0 26 30" fill="none">
+      <path d="M13 1 L25 7.5 L25 22.5 L13 29 L1 22.5 L1 7.5 Z" stroke="currentColor" stroke-width="1.5" fill="rgba(0,255,106,0.08)"/>
+      <path d="M13 7 L19 10.5 L19 17.5 L13 21 L7 17.5 L7 10.5 Z" stroke="currentColor" stroke-width="1" fill="rgba(0,255,106,0.12)" opacity=".7"/>
+    </svg>
+    <span class="logo-text">TERRA·VISION</span>
+    <span class="logo-sub">v2 · GCS</span>
+  </div>
+  <nav id="mode-tabs">
+    <button class="tab-btn active" data-tab="analyze">ANALYZE</button>
+    <button class="tab-btn" data-tab="detect">DETECT</button>
+    <button class="tab-btn" data-tab="segment">SEGMENT</button>
+    <button class="tab-btn" data-tab="track">TRACK</button>
+    <button class="tab-btn" data-tab="sam3">SAM-3</button>
+    <button class="tab-btn" data-tab="ocr">OCR</button>
+  </nav>
+  <div id="conn-status">
+    <div class="conn-dot" id="conn-dot"></div>
+    <span id="conn-lbl">CONNECTING</span>
+  </div>
+</header>
+
+<!-- ══════════════════════ WORKSPACE ══════════════════════ -->
+<div id="workspace">
+
+  <!-- ─── LEFT: INTEL ─── -->
+  <aside id="intel">
+    <div class="ph">MODEL INTEL</div>
+    <div id="model-cards">
+      <div class="model-card"><div class="mc-head"><div class="mc-dot warn"></div><div class="mc-name">SAM 3.1</div><div class="mc-badge warn">CHECKING</div></div><div class="mc-id">mlx-community/sam3.1-bf16</div></div>
+      <div class="model-card"><div class="mc-head"><div class="mc-dot warn"></div><div class="mc-name">Falcon Perception</div><div class="mc-badge warn">CHECKING</div></div><div class="mc-id">tiiuae/Falcon-Perception</div></div>
+      <div class="model-card"><div class="mc-head"><div class="mc-dot warn"></div><div class="mc-name">Gemma 4 26B</div><div class="mc-badge warn">CHECKING</div></div><div class="mc-id">mlx-community/gemma-4-26b-a4b-it-4bit</div></div>
+    </div>
+
+    <div class="ph">REMOTE SERVER</div>
+    <div class="intel-row"><span class="ir-lbl">ENDPOINT</span><span class="ir-val" id="srv-ep" style="font-size:8.5px">100.72.41.118:8080</span></div>
+    <div class="intel-row"><span class="ir-lbl">GEMMA STATUS</span>
+      <span id="gemma-remote" style="font-size:9px;font-family:var(--font-m);color:var(--txd)">—</span>
+    </div>
+
+    <div class="ph">LAST MISSION</div>
+    <div class="stat-grid" id="mission-stats">
+      <div class="sg-cell"><div class="sg-lbl">FRAMES</div><div class="sg-val dim" id="st-frames">—</div></div>
+      <div class="sg-cell"><div class="sg-lbl">OBJECTS</div><div class="sg-val dim" id="st-objects">—</div></div>
+      <div class="sg-cell"><div class="sg-lbl">DETECTIONS</div><div class="sg-val dim" id="st-dets">—</div></div>
+      <div class="sg-cell"><div class="sg-lbl">DURATION</div><div class="sg-val dim" id="st-dur">—</div></div>
+    </div>
+
+    <div class="ph">QUICK ACTIONS</div>
+    <div style="padding:8px 12px;display:flex;flex-direction:column;gap:6px">
+      <button class="btn-browse" style="width:100%;text-align:left" onclick="checkStatus()">↻ REFRESH STATUS</button>
+      <button class="btn-browse" style="width:100%;text-align:left" onclick="clearLog()">⌫ CLEAR LOG</button>
+      <button class="btn-browse" style="width:100%;text-align:left" id="btn-dl-video" onclick="downloadResult('video')" disabled>↓ DOWNLOAD VIDEO</button>
+      <button class="btn-browse" style="width:100%;text-align:left" id="btn-dl-json" onclick="downloadResult('json')" disabled>↓ DOWNLOAD JSON</button>
+      <button class="btn-browse" style="width:100%;text-align:left" id="btn-dl-report" onclick="downloadResult('report')" disabled>↓ DOWNLOAD REPORT</button>
+    </div>
+  </aside>
+
+  <!-- ─── CENTER: MAIN ─── -->
+  <main id="main">
+
+    <!-- ■ ANALYZE TAB -->
+    <div class="tab-pane active" id="tab-analyze">
+      <div id="media-zone">
+        <div class="drop-zone" id="dz-analyze" ondragover="dzDragOver(event,'analyze')" ondragleave="dzDragLeave('analyze')" ondrop="dzDrop(event,'analyze')" onclick="dzClick('analyze')">
+          <div class="dz-icon">⬡</div>
+          <div class="dz-title">DROP DRONE FOOTAGE</div>
+          <div class="dz-sub">MP4 · MOV · AVI · WebM</div>
+          <div class="dz-file" id="dz-file-analyze" style="display:none"></div>
+          <button class="btn-browse" onclick="event.stopPropagation();dzClick('analyze')">BROWSE FILES</button>
+        </div>
+        <div id="video-result" style="display:none">
+          <div class="video-wrap" id="vwrap">
+            <div class="corner tl"></div><div class="corner tr"></div>
+            <div class="corner bl"></div><div class="corner br"></div>
+            <video id="rv" controls></video>
+            <div class="scanlines"></div>
+            <div id="progress-wrap"><div id="progress-bar"></div></div>
+          </div>
+          <div class="vid-hud">
+            <div class="hud-item"><div class="hud-lbl">FRAMES</div><div class="hud-val" id="h-frames">—</div></div>
+            <div class="hud-item"><div class="hud-lbl">OBJECTS</div><div class="hud-val" id="h-objects">—</div></div>
+            <div class="hud-item"><div class="hud-lbl">DETECTIONS</div><div class="hud-val" id="h-dets">—</div></div>
+            <div class="hud-item"><div class="hud-lbl">FPS</div><div class="hud-val dim" id="h-fps">—</div></div>
+            <div class="hud-item"><div class="hud-lbl">DURATION</div><div class="hud-val dim" id="h-dur">—</div></div>
+          </div>
+        </div>
+      </div>
+      <div id="pipeline">
+        <div class="p-stage" id="ps-sam">
+          <div class="orb"><span>SAM</span><small>3.1</small></div>
+          <div class="p-lbl">TRACKING</div>
+        </div>
+        <div class="p-line" id="pl-1"></div>
+        <div class="p-stage" id="ps-falcon">
+          <div class="orb"><span>FALCON</span><small>PERCEPTION</small></div>
+          <div class="p-lbl">REFINEMENT</div>
+        </div>
+        <div class="p-line" id="pl-2"></div>
+        <div class="p-stage" id="ps-gemma">
+          <div class="orb"><span>GEMMA</span><small>4 · 26B</small></div>
+          <div class="p-lbl">REASONING</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ■ DETECT TAB -->
+    <div class="tab-pane" id="tab-detect">
+      <div id="image-result-detect" style="display:none;flex:1;min-height:0;padding:14px">
+        <img id="ri-detect" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--bd)">
+      </div>
+      <div class="drop-zone" id="dz-detect" ondragover="dzDragOver(event,'detect')" ondragleave="dzDragLeave('detect')" ondrop="dzDrop(event,'detect')" onclick="dzClick('detect')">
+        <div class="dz-icon">◈</div>
+        <div class="dz-title">DROP IMAGE</div>
+        <div class="dz-sub">PNG · JPG · JPEG · WEBP</div>
+        <div class="dz-file" id="dz-file-detect" style="display:none"></div>
+        <button class="btn-browse" onclick="event.stopPropagation();dzClick('detect')">BROWSE FILES</button>
+      </div>
+    </div>
+
+    <!-- ■ SEGMENT TAB -->
+    <div class="tab-pane" id="tab-segment">
+      <div id="image-result-segment" style="display:none;flex:1;min-height:0;padding:14px">
+        <img id="ri-segment" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--bd)">
+      </div>
+      <div class="drop-zone" id="dz-segment" ondragover="dzDragOver(event,'segment')" ondragleave="dzDragLeave('segment')" ondrop="dzDrop(event,'segment')" onclick="dzClick('segment')">
+        <div class="dz-icon">⬟</div>
+        <div class="dz-title">DROP IMAGE</div>
+        <div class="dz-sub">PNG · JPG · JPEG · WEBP</div>
+        <div class="dz-file" id="dz-file-segment" style="display:none"></div>
+        <button class="btn-browse" onclick="event.stopPropagation();dzClick('segment')">BROWSE FILES</button>
+      </div>
+    </div>
+
+    <!-- ■ TRACK TAB -->
+    <div class="tab-pane" id="tab-track">
+      <div id="video-result-track" style="display:none;flex:1;min-height:0;padding:14px">
+        <div class="video-wrap" style="flex:1;min-height:0">
+          <div class="corner tl"></div><div class="corner tr"></div>
+          <div class="corner bl"></div><div class="corner br"></div>
+          <video id="rv-track" controls style="width:100%;height:100%;object-fit:contain"></video>
+          <div class="scanlines"></div>
+        </div>
+      </div>
+      <div class="drop-zone" id="dz-track" ondragover="dzDragOver(event,'track')" ondragleave="dzDragLeave('track')" ondrop="dzDrop(event,'track')" onclick="dzClick('track')">
+        <div class="dz-icon">▷</div>
+        <div class="dz-title">DROP VIDEO</div>
+        <div class="dz-sub">MP4 · MOV · AVI · WebM</div>
+        <div class="dz-file" id="dz-file-track" style="display:none"></div>
+        <button class="btn-browse" onclick="event.stopPropagation();dzClick('track')">BROWSE FILES</button>
+      </div>
+    </div>
+
+    <!-- ■ SAM-3 TAB -->
+    <div class="tab-pane" id="tab-sam3">
+      <div id="image-result-sam3" style="display:none;flex:1;min-height:0;padding:14px">
+        <img id="ri-sam3" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--bd)">
+      </div>
+      <div class="drop-zone" id="dz-sam3" ondragover="dzDragOver(event,'sam3')" ondragleave="dzDragLeave('sam3')" ondrop="dzDrop(event,'sam3')" onclick="dzClick('sam3')">
+        <div class="dz-icon">⊕</div>
+        <div class="dz-title">DROP IMAGE</div>
+        <div class="dz-sub">PNG · JPG · JPEG · WEBP</div>
+        <div class="dz-file" id="dz-file-sam3" style="display:none"></div>
+        <button class="btn-browse" onclick="event.stopPropagation();dzClick('sam3')">BROWSE FILES</button>
+      </div>
+    </div>
+
+    <!-- ■ OCR TAB -->
+    <div class="tab-pane" id="tab-ocr">
+      <div id="ocr-output" style="display:none;flex:1;min-height:0;padding:14px 18px;overflow-y:auto">
+        <div class="ph" style="padding:0 0 8px 0;border:none">EXTRACTED TEXT</div>
+        <pre id="ocr-text" style="font-family:var(--font-m);font-size:11px;color:var(--tx);white-space:pre-wrap;line-height:1.7"></pre>
+      </div>
+      <div class="drop-zone" id="dz-ocr" ondragover="dzDragOver(event,'ocr')" ondragleave="dzDragLeave('ocr')" ondrop="dzDrop(event,'ocr')" onclick="dzClick('ocr')">
+        <div class="dz-icon">⊞</div>
+        <div class="dz-title">DROP IMAGE FOR OCR</div>
+        <div class="dz-sub">PNG · JPG · JPEG · WEBP</div>
+        <div class="dz-file" id="dz-file-ocr" style="display:none"></div>
+        <button class="btn-browse" onclick="event.stopPropagation();dzClick('ocr')">BROWSE FILES</button>
+      </div>
+    </div>
+
+    <!-- Hidden file inputs -->
+    <input type="file" id="fi-analyze" accept="video/*" hidden onchange="fileChosen('analyze',this)">
+    <input type="file" id="fi-detect"  accept="image/*" hidden onchange="fileChosen('detect',this)">
+    <input type="file" id="fi-segment" accept="image/*" hidden onchange="fileChosen('segment',this)">
+    <input type="file" id="fi-track"   accept="video/*" hidden onchange="fileChosen('track',this)">
+    <input type="file" id="fi-sam3"    accept="image/*" hidden onchange="fileChosen('sam3',this)">
+    <input type="file" id="fi-ocr"     accept="image/*" hidden onchange="fileChosen('ocr',this)">
+
+  </main>
+
+  <!-- ─── RIGHT: OPS ─── -->
+  <aside id="ops">
+    <div class="ph">OPERATIONS LOG</div>
+    <div id="ops-log-wrap">
+      <div id="ops-log"></div>
+    </div>
+
+    <!-- Detection stats -->
+    <div class="result-section" id="det-panel" style="display:none">
+      <div class="ph">DETECTION SUMMARY</div>
+      <div class="det-cards" id="det-cards"></div>
+    </div>
+
+    <!-- Report -->
+    <div class="result-section" id="report-panel" style="display:none">
+      <div class="ph">FIELD REPORT</div>
+      <div class="rs-body"><div id="rc"></div></div>
+      <div class="rs-actions">
+        <button class="btn-xs" onclick="copyReport()">⎘ COPY</button>
+        <button class="btn-xs" onclick="downloadResult('report')">↓ SAVE</button>
+        <button class="btn-xs" id="btn-expand-report" onclick="expandReport()">⛶ EXPAND</button>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- ══════════════════════ CONFIG BAR ══════════════════════ -->
+<div id="config-bar">
+
+  <!-- ANALYZE CONFIG -->
+  <div class="cfg-pane active" id="cfg-analyze">
+    <div class="cf"><label>QUERY</label><input type="text" id="c-query" value="cattle in the pasture"></div>
+    <div class="cf n3"><label>PROMPTS</label><input type="text" id="c-prompts" value="cow cattle animal"></div>
+    <div class="cf n1">
+      <label>THRESHOLD</label>
+      <div class="range-row"><input type="range" id="c-thresh" min="0.01" max="0.5" step="0.01" value="0.05" oninput="document.getElementById('c-thresh-v').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-thresh-v">0.05</span></div>
+    </div>
+    <div class="cf n0"><label>RES</label>
+      <select id="c-res"><option value="512" selected>512</option><option value="756">756</option><option value="1008">1008</option></select>
+    </div>
+    <div class="cf n0"><label>EVERY</label>
+      <select id="c-every"><option value="1">1F</option><option value="2">2F</option><option value="3">3F</option><option value="5" selected>5F</option><option value="10">10F</option></select>
+    </div>
+    <div class="cf n0"><label>REPORT</label>
+      <select id="c-rtype"><option value="field" selected>FIELD</option><option value="brief">BRIEF</option><option value="json">JSON</option></select>
+    </div>
+    <div class="togs">
+      <label class="tog"><input type="checkbox" id="c-report" checked><span>REPORT</span></label>
+      <label class="tog"><input type="checkbox" id="c-falcon"><span>FALCON+</span></label>
+    </div>
+    <div class="sep"></div>
+    <button class="btn-launch" id="btn-launch-analyze" onclick="launchJob('analyze')">▶ LAUNCH</button>
+  </div>
+
+  <!-- DETECT CONFIG -->
+  <div class="cfg-pane" id="cfg-detect">
+    <div class="cf"><label>EXPRESSION QUERY</label><input type="text" id="c-det-query" value="cattle" placeholder="describe what to find…"></div>
+    <div class="cf n1"><label>MAX TOKENS</label><input type="number" id="c-det-tok" value="200" min="50" max="2000" style="height:24px"></div>
+    <div class="sep"></div>
+    <button class="btn-launch" id="btn-launch-detect" onclick="launchJob('detect')">▶ DETECT</button>
+  </div>
+
+  <!-- SEGMENT CONFIG -->
+  <div class="cfg-pane" id="cfg-segment">
+    <div class="cf"><label>EXPRESSION QUERY</label><input type="text" id="c-seg-query" value="cattle" placeholder="describe what to segment…"></div>
+    <div class="cf n1"><label>MAX TOKENS</label><input type="number" id="c-seg-tok" value="2048" min="200" max="4096" style="height:24px"></div>
+    <div class="sep"></div>
+    <button class="btn-launch" id="btn-launch-segment" onclick="launchJob('segment')">▶ SEGMENT</button>
+  </div>
+
+  <!-- TRACK CONFIG -->
+  <div class="cfg-pane" id="cfg-track">
+    <div class="cf"><label>TRACK PROMPTS</label><input type="text" id="c-trk-prompts" value="person" placeholder="cow cattle sheep…"></div>
+    <div class="cf n1">
+      <label>THRESHOLD</label>
+      <div class="range-row"><input type="range" id="c-trk-thresh" min="0.01" max="0.5" step="0.01" value="0.15" oninput="document.getElementById('c-trk-tv').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-trk-tv">0.15</span></div>
+    </div>
+    <div class="cf n0"><label>RES</label>
+      <select id="c-trk-res"><option value="512">512</option><option value="756">756</option><option value="1008" selected>1008</option></select>
+    </div>
+    <div class="cf n0"><label>EVERY</label>
+      <select id="c-trk-every"><option value="1">1F</option><option value="2" selected>2F</option><option value="3">3F</option><option value="5">5F</option></select>
+    </div>
+    <div class="cf n1">
+      <label>OPACITY</label>
+      <div class="range-row"><input type="range" id="c-trk-op" min="0.1" max="1" step="0.05" value="0.6" oninput="document.getElementById('c-trk-ov').textContent=parseFloat(this.value).toFixed(1)"><span class="rv" id="c-trk-ov">0.6</span></div>
+    </div>
+    <div class="sep"></div>
+    <button class="btn-launch" id="btn-launch-track" onclick="launchJob('track')">▶ TRACK</button>
+  </div>
+
+  <!-- SAM3 CONFIG -->
+  <div class="cfg-pane" id="cfg-sam3">
+    <div class="cf"><label>DETECTION PROMPTS</label><input type="text" id="c-sam-prompts" value="person" placeholder="cow sheep fence…"></div>
+    <div class="cf n1">
+      <label>THRESHOLD</label>
+      <div class="range-row"><input type="range" id="c-sam-thresh" min="0.01" max="0.5" step="0.01" value="0.15" oninput="document.getElementById('c-sam-tv').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-sam-tv">0.15</span></div>
+    </div>
+    <div class="cf n0"><label>RES</label>
+      <select id="c-sam-res"><option value="512">512</option><option value="756">756</option><option value="1008" selected>1008</option></select>
+    </div>
+    <div class="cf n1"><label>TASK</label>
+      <select id="c-sam-task"><option value="detect" selected>DETECT</option><option value="segment">SEGMENT</option></select>
+    </div>
+    <div class="sep"></div>
+    <button class="btn-launch" id="btn-launch-sam3" onclick="launchJob('sam3')">▶ SAM-3</button>
+  </div>
+
+  <!-- OCR CONFIG -->
+  <div class="cfg-pane" id="cfg-ocr">
+    <div class="cf"><label>OCR QUESTION</label><input type="text" id="c-ocr-q" value="read all text in the image" placeholder="what text to extract…"></div>
+    <div class="sep"></div>
+    <button class="btn-launch" id="btn-launch-ocr" onclick="launchJob('ocr')">▶ READ TEXT</button>
+  </div>
+
+</div><!-- /config-bar -->
+</div><!-- /app -->
+
+<script>
+// ══════════════════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════════════════
+const S = {
+  tab: 'analyze',
+  files: {},        // tab → {file_id, name, suffix}
+  job: null,        // current job id
+  jobResults: {},   // job_id → results dict
+  lastReport: '',
+  lastJobId: null,
+};
+
+// ══════════════════════════════════════════════════════
+//  INIT
+// ══════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  checkStatus();
+  log('TERRA-VISION Ground Control System ready.', 'h');
+  log('All models initializing — awaiting status check…', 'i');
+  setInterval(checkStatus, 30000);
+});
+
+// ══════════════════════════════════════════════════════
+//  TAB SWITCHING
+// ══════════════════════════════════════════════════════
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
+
+function switchTab(t) {
+  S.tab = t;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === `tab-${t}`));
+  document.querySelectorAll('.cfg-pane').forEach(p => p.classList.toggle('active', p.id === `cfg-${t}`));
+}
+
+// ══════════════════════════════════════════════════════
+//  STATUS
+// ══════════════════════════════════════════════════════
+async function checkStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    renderModels(d.models);
+    const gr = document.getElementById('gemma-remote');
+    if (d.gemma_remote) {
+      gr.textContent = '● ONLINE';
+      gr.style.color = 'var(--acc)';
+    } else {
+      gr.textContent = '○ OFFLINE';
+      gr.style.color = 'var(--red)';
+    }
+    const allReady = d.models.every(m => m.ready);
+    const dot = document.getElementById('conn-dot');
+    const lbl = document.getElementById('conn-lbl');
+    dot.className = 'conn-dot ' + (allReady ? 'ok' : 'warn');
+    lbl.textContent = allReady ? 'ALL SYSTEMS GO' : 'PARTIAL READY';
+  } catch(e) {
+    const dot = document.getElementById('conn-dot');
+    dot.className = 'conn-dot err';
+    document.getElementById('conn-lbl').textContent = 'OFFLINE';
+    log('Cannot reach VisionBrain API server.', 'e');
+  }
+}
+
+function renderModels(models) {
+  const map = {
+    'tiiuae/Falcon-Perception': 'Falcon Perception',
+    'mlx-community/sam3.1-bf16': 'SAM 3.1',
+    'mlx-community/gemma-4-26b-a4b-it-4bit': 'Gemma 4 26B',
+  };
+  const container = document.getElementById('model-cards');
+  container.innerHTML = models.map(m => {
+    const state = m.ready ? 'ok' : m.cached ? 'warn' : 'err';
+    const badge = m.ready ? 'READY' : m.cached ? 'CACHED' : 'MISSING';
+    return `<div class="model-card">
+      <div class="mc-head">
+        <div class="mc-dot ${state}"></div>
+        <div class="mc-name">${map[m.id] || m.name}</div>
+        <div class="mc-badge ${state}">${badge}</div>
+      </div>
+      <div class="mc-id">${m.id}</div>
+      <div class="mc-row">
+        <span class="mc-gb">${m.gb.toFixed(2)} GB</span>
+        <span class="mc-note">${m.note}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════
+//  FILE DROP / UPLOAD
+// ══════════════════════════════════════════════════════
+function dzDragOver(e, tab) {
+  e.preventDefault();
+  document.getElementById(`dz-${tab}`).classList.add('drag-over');
+}
+function dzDragLeave(tab) {
+  document.getElementById(`dz-${tab}`).classList.remove('drag-over');
+}
+function dzDrop(e, tab) {
+  e.preventDefault();
+  dzDragLeave(tab);
+  const f = e.dataTransfer.files[0];
+  if (f) uploadFile(tab, f);
+}
+function dzClick(tab) {
+  document.getElementById(`fi-${tab}`).click();
+}
+function fileChosen(tab, input) {
+  if (input.files[0]) uploadFile(tab, input.files[0]);
+}
+
+async function uploadFile(tab, file) {
+  const dz = document.getElementById(`dz-${tab}`);
+  const fileLabel = document.getElementById(`dz-file-${tab}`);
+  dz.classList.add('has-file');
+  fileLabel.textContent = `⬡  ${file.name}  (${(file.size/1024/1024).toFixed(1)} MB)`;
+  fileLabel.style.display = 'block';
+  log(`Uploading ${file.name}…`, 'i');
+
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    const d = await r.json();
+    S.files[tab] = { file_id: d.file_id, name: d.name, size: d.size };
+    log(`Upload OK · ${d.name} · ${(d.size/1024/1024).toFixed(1)} MB`, 'h');
+  } catch(e) {
+    log(`Upload FAILED: ${e.message}`, 'e');
+    dz.classList.remove('has-file');
+  }
+}
+
+// ══════════════════════════════════════════════════════
+//  JOB LAUNCH
+// ══════════════════════════════════════════════════════
+async function launchJob(tab) {
+  const finfo = S.files[tab];
+  if (!finfo) { log(`No file loaded for ${tab.toUpperCase()} — drop a file first.`, 'w'); return; }
+
+  resetPipeline();
+  hideResults();
+  clearOcrOutput();
+
+  const btn = document.getElementById(`btn-launch-${tab}`);
+  btn.disabled = true;
+  btn.classList.add('running');
+  btn.textContent = '⏳ RUNNING';
+
+  const fd = new FormData();
+  fd.append('file_id', finfo.file_id);
+
+  if (tab === 'analyze') {
+    fd.append('query',        g('c-query').value);
+    fd.append('prompts',      g('c-prompts').value);
+    fd.append('threshold',    g('c-thresh').value);
+    fd.append('resolution',   g('c-res').value);
+    fd.append('every',        g('c-every').value);
+    fd.append('report',       g('c-report').checked ? 'true' : 'false');
+    fd.append('report_type',  g('c-rtype').value);
+    fd.append('falcon_refine',g('c-falcon').checked ? 'true' : 'false');
+    fd.append('falcon_frames','6');
+  } else if (tab === 'detect') {
+    fd.append('query',      g('c-det-query').value);
+    fd.append('max_tokens', g('c-det-tok').value);
+  } else if (tab === 'segment') {
+    fd.append('query',      g('c-seg-query').value);
+    fd.append('max_tokens', g('c-seg-tok').value);
+  } else if (tab === 'track') {
+    fd.append('prompts',   g('c-trk-prompts').value);
+    fd.append('threshold', g('c-trk-thresh').value);
+    fd.append('resolution',g('c-trk-res').value);
+    fd.append('every',     g('c-trk-every').value);
+    fd.append('opacity',   g('c-trk-op').value);
+  } else if (tab === 'sam3') {
+    fd.append('prompts',   g('c-sam-prompts').value);
+    fd.append('threshold', g('c-sam-thresh').value);
+    fd.append('resolution',g('c-sam-res').value);
+    fd.append('task',      g('c-sam-task').value);
+  } else if (tab === 'ocr') {
+    fd.append('question',  g('c-ocr-q').value);
+  }
+
+  log(`Launching ${tab.toUpperCase()} mission…`, 'h');
+
+  try {
+    const r = await fetch(`/api/job/${tab}`, { method: 'POST', body: fd });
+    const d = await r.json();
+    S.job = d.job_id;
+    S.lastJobId = d.job_id;
+    log(`Job ${d.job_id} dispatched.`, 'i');
+    connectSSE(d.job_id, tab, btn);
+  } catch(e) {
+    log(`Launch failed: ${e.message}`, 'e');
+    resetBtn(btn, tab);
+  }
+}
+
+// ══════════════════════════════════════════════════════
+//  SSE STREAMING
+// ══════════════════════════════════════════════════════
+function connectSSE(jid, tab, btn) {
+  const es = new EventSource(`/api/job/${jid}/stream`);
+
+  es.onmessage = (ev) => {
+    const d = JSON.parse(ev.data);
+
+    if (d.type === 'log') {
+      const cls = classifyLine(d.msg);
+      log(d.msg, cls);
+      if (tab === 'analyze') updatePipelineFromLog(d.msg);
+      const m = d.msg.match(/Frame\s+(\d+)\/(\d+)/);
+      if (m) updateProgress(+m[1] / +m[2]);
+    }
+
+    if (d.type === 'done') {
+      es.close();
+      resetBtn(btn, tab);
+      if (d.status === 'done') {
+        onJobDone(jid, tab, d.results);
+      } else {
+        log(`Job ${jid} FAILED.`, 'e');
+      }
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    resetBtn(btn, tab);
+    log('SSE stream error.', 'e');
+  };
+}
+
+// ══════════════════════════════════════════════════════
+//  JOB COMPLETE HANDLER
+// ══════════════════════════════════════════════════════
+async function onJobDone(jid, tab, results) {
+  S.jobResults[jid] = results;
+  log('══════════════════════════════════', 'h');
+  log('MISSION COMPLETE', 'h');
+  log('══════════════════════════════════', 'h');
+
+  triggerFlash();
+  updateProgress(1);
+
+  if (tab === 'analyze' || tab === 'track') {
+    if (results.video) {
+      showVideo(tab, `/api/job/${jid}/file/video`);
+      enableDl('btn-dl-video', true);
+    }
+    if (results.json) {
+      await loadDetectionStats(jid);
+      enableDl('btn-dl-json', true);
+    }
+    if (results.report) {
+      await loadReport(jid);
+      enableDl('btn-dl-report', true);
+    }
+    // Mark pipeline done
+    if (tab === 'analyze') {
+      markStage('ps-sam', 'done');
+      if (g('c-falcon').checked) markStage('ps-falcon', 'done');
+      markStage('ps-gemma', 'done');
+      markLine('pl-1', 'done');
+      markLine('pl-2', 'done');
+    }
+  } else if (tab === 'detect' || tab === 'segment' || tab === 'sam3') {
+    if (results.image) showImage(tab, `/api/job/${jid}/file/image`);
+  } else if (tab === 'ocr') {
+    // Parse OCR from ops log — show last meaningful block
+    const job = await (await fetch(`/api/job/${jid}`)).json();
+    const ocrLines = job.output.filter(l => l.includes('Extracted markup') || l.includes('Region') || l.includes('OCR'));
+    showOcrOutput(job.output.join('\n'));
+  }
+}
+
+// ══════════════════════════════════════════════════════
+//  PIPELINE STAGE CONTROL
+// ══════════════════════════════════════════════════════
+function updatePipelineFromLog(msg) {
+  if (msg.match(/SAM 3\.1|Loading SAM|track|Tracking:|Video:\s+\d/i)) activateStage('ps-sam');
+  if (msg.match(/Falcon Perception|Semantic analysis/i))                 { doneStage('ps-sam'); markLine('pl-1','fill'); activateStage('ps-falcon'); }
+  if (msg.match(/Gemma 4|reasoning about|Gemma 4 26B/i))               { doneStage('ps-falcon'); markLine('pl-2','fill'); activateStage('ps-gemma'); }
+  if (msg.match(/MISSION COMPLETE|Pipeline complete/i))                  { doneStage('ps-gemma'); }
+}
+
+function activateStage(id) { const e=g(id); if(e&&!e.classList.contains('done')){e.className='p-stage active'} }
+function doneStage(id)     { const e=g(id); if(e){e.className='p-stage done'} }
+function markStage(id,s)   { const e=g(id); if(e){e.className=`p-stage ${s}`} }
+function markLine(id,s)    { const e=g(id); if(e){e.className=`p-line ${s}`} }
+
+function resetPipeline() {
+  ['ps-sam','ps-falcon','ps-gemma'].forEach(id=>{const e=g(id);if(e)e.className='p-stage'});
+  ['pl-1','pl-2'].forEach(id=>{const e=g(id);if(e)e.className='p-line'});
+  updateProgress(0);
+}
+
+// ══════════════════════════════════════════════════════
+//  RESULTS DISPLAY
+// ══════════════════════════════════════════════════════
+function showVideo(tab, url) {
+  if (tab === 'analyze') {
+    g('video-result').style.display = 'flex';
+    g('rv').src = url;
+    const dz = g('dz-analyze');
+    if (dz) dz.style.display = 'none';
+  } else if (tab === 'track') {
+    g('video-result-track').style.display = 'flex';
+    g('rv-track').src = url;
+    const dz = g('dz-track');
+    if (dz) dz.style.display = 'none';
+  }
+}
+
+function showImage(tab, url) {
+  const imgEl = g(`ri-${tab}`);
+  const resDiv = g(`image-result-${tab}`);
+  const dz = g(`dz-${tab}`);
+  if (imgEl) { imgEl.src = url; resDiv.style.display = 'flex'; if(dz)dz.style.display='none'; }
+}
+
+async function loadDetectionStats(jid) {
+  try {
+    const d = await (await fetch(`/api/job/${jid}/detections`)).json();
+    const totalDets = d.frames ? d.frames.reduce((a,f)=>a+(f.n_detections||0),0) : 0;
+    const framesWithDets = d.frames ? d.frames.filter(f=>f.n_detections>0).length : 0;
+    const uniqueObjs = new Set();
+    if (d.frames) d.frames.forEach(f=>(f.detections||[]).forEach(det=>uniqueObjs.add(det.track_id)));
+
+    // HUD
+    const setHud = (id, v) => { const e=g(id); if(e) e.textContent = v; };
+    setHud('h-frames',   d.processed_frames ?? '—');
+    setHud('h-objects',  uniqueObjs.size  || '—');
+    setHud('h-dets',     totalDets        || '—');
+    setHud('h-fps',      d.fps?.toFixed(1) ?? '—');
+    setHud('h-dur',      d.fps && d.total_frames ? (d.total_frames/d.fps).toFixed(1)+'s' : '—');
+
+    // Left panel stats
+    g('st-frames').textContent  = d.processed_frames ?? '—';
+    g('st-objects').textContent = uniqueObjs.size || '—';
+    g('st-dets').textContent    = totalDets || '—';
+    g('st-dur').textContent     = d.elapsed_seconds ? d.elapsed_seconds.toFixed(0)+'s' : '—';
+
+    // Det cards in ops panel
+    g('det-cards').innerHTML = `
+      <div class="dc"><span class="dc-v">${uniqueObjs.size}</span><div class="dc-l">OBJECTS</div></div>
+      <div class="dc"><span class="dc-v">${totalDets}</span><div class="dc-l">DETECTIONS</div></div>
+      <div class="dc"><span class="dc-v">${framesWithDets}</span><div class="dc-l">ACTIVE FRAMES</div></div>
+    `;
+    g('det-panel').style.display = 'block';
+  } catch(e) { log('Could not load detection stats.', 'w'); }
+}
+
+async function loadReport(jid) {
+  try {
+    const d = await (await fetch(`/api/job/${jid}/report`)).json();
+    S.lastReport = d.text;
+    g('rc').innerHTML = renderMarkdown(d.text);
+    g('report-panel').style.display = 'flex';
+  } catch(e) { log('Could not load report.', 'w'); }
+}
+
+// Lightweight markdown → HTML
+function renderMarkdown(md) {
+  return md
+    .replace(/^#{3}\s+(.+)$/gm,'<h3>$1</h3>')
+    .replace(/^#{2}\s+(.+)$/gm,'<h2>$1</h2>')
+    .replace(/^#{1}\s+(.+)$/gm,'<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,'<em>$1</em>')
+    .replace(/`(.+?)`/g,'<code>$1</code>')
+    .replace(/^---+$/gm,'<hr>')
+    .replace(/^\|\s*(.+)\s*\|$/gm, row => '<tr><td>' + row.replace(/\|/g,'</td><td>').replace(/^<\/td>/,'').replace(/<td>$/,'') + '</tr>')
+    .replace(/(<tr>.*<\/tr>(\n<tr>.*<\/tr>)*)/gs, t => '<table>' + t + '</table>')
+    .replace(/^\*\s+(.+)$/gm,'<li>$1</li>')
+    .replace(/(<li>.*<\/li>(\n<li>.*<\/li>)*)/gs, l => '<ul>' + l + '</ul>')
+    .replace(/^\d+\.\s+(.+)$/gm,'<li>$1</li>')
+    .replace(/\n\n+/g,'</p><p>')
+    .replace(/^(?!<[htuplr])(.+)/gm,'$1')
+    .replace(/\n/g,'<br>');
+}
+
+function showOcrOutput(text) {
+  g('ocr-text').textContent = text;
+  g('ocr-output').style.display = 'block';
+  const dz = g('dz-ocr');
+  if (dz) dz.style.display = 'none';
+}
+
+function clearOcrOutput() {
+  const od = g('ocr-output');
+  if (od) od.style.display = 'none';
+}
+
+function hideResults() {
+  g('video-result').style.display = 'none';
+  g('image-result-detect').style.display = 'none';
+  g('image-result-segment').style.display = 'none';
+  g('image-result-sam3').style.display = 'none';
+  g('video-result-track').style.display = 'none';
+  g('report-panel').style.display = 'none';
+  g('det-panel').style.display = 'none';
+  // Re-show drop zones
+  ['analyze','detect','segment','track','sam3','ocr'].forEach(t => {
+    const dz = g(`dz-${t}`);
+    if (dz) dz.style.display = 'flex';
+  });
+}
+
+// ══════════════════════════════════════════════════════
+//  PROGRESS BAR
+// ══════════════════════════════════════════════════════
+function updateProgress(frac) {
+  const pb = g('progress-bar');
+  if (pb) pb.style.width = Math.min(frac * 100, 100) + '%';
+}
+
+// ══════════════════════════════════════════════════════
+//  OPS LOG
+// ══════════════════════════════════════════════════════
+function log(msg, type='i') {
+  if (!msg.trim()) return;
+  const el = document.getElementById('ops-log');
+  const div = document.createElement('div');
+  div.className = `ll ${type}`;
+  div.textContent = msg;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+  // Trim if too long
+  while (el.children.length > 800) el.removeChild(el.firstChild);
+}
+
+function classifyLine(line) {
+  if (!line.trim()) return 'i';
+  const l = line.toLowerCase();
+  if (l.includes('error') || l.includes('failed') || l.includes('exception')) return 'e';
+  if (l.includes('warning') || l.includes('warn')) return 'w';
+  if (line.match(/^===|^\[1\/|^\[2\/|^\[3\/|^\[4\//)) return 'h';
+  if (line.match(/Frame\s+\d+\/\d+/)) return 'p';
+  if (line.match(/→|Saved:|Output:|Speed:|fps|tokens?/i)) return 'd';
+  if (line.match(/Falcon|SAM|Gemma|Loading/i)) return 's';
+  return 'i';
+}
+
+function clearLog() {
+  document.getElementById('ops-log').innerHTML = '';
+  log('Log cleared.', 'i');
+}
+
+// ══════════════════════════════════════════════════════
+//  MISSION COMPLETE FLASH
+// ══════════════════════════════════════════════════════
+function triggerFlash() {
+  const fl = g('flash');
+  const txt = g('flash-txt');
+  fl.style.animation = 'none';
+  txt.style.animation = 'none';
+  void fl.offsetWidth;
+  fl.style.animation = 'flash-bg 2.5s ease-out forwards';
+  txt.style.animation = 'flash-txt-anim 2.5s ease-out forwards';
+}
+
+// Inject flash keyframes once
+const ks = document.createElement('style');
+ks.textContent = `
+@keyframes flash-bg { 0%{opacity:0} 15%{opacity:1} 70%{opacity:.6} 100%{opacity:0} }
+@keyframes flash-txt-anim { 0%{opacity:0;transform:scale(.95)} 20%{opacity:1;transform:scale(1)} 70%{opacity:.8} 100%{opacity:0} }
+`;
+document.head.appendChild(ks);
+
+// ══════════════════════════════════════════════════════
+//  DOWNLOAD / COPY
+// ══════════════════════════════════════════════════════
+function downloadResult(kind) {
+  if (!S.lastJobId) return;
+  const url = `/api/job/${S.lastJobId}/file/${kind}`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `visionbrain_${kind}`;
+  a.click();
+}
+
+function copyReport() {
+  if (!S.lastReport) return;
+  navigator.clipboard.writeText(S.lastReport).then(()=>log('Report copied to clipboard.','i'));
+}
+
+function expandReport() {
+  const rc = g('rc');
+  const rp = g('report-panel');
+  if (rp.style.maxHeight === 'none') {
+    rp.style.maxHeight = '48%';
+    g('btn-expand-report').textContent = '⛶ EXPAND';
+  } else {
+    rp.style.maxHeight = 'none';
+    rp.style.flex = '1';
+    g('btn-expand-report').textContent = '⛶ COLLAPSE';
+  }
+}
+
+function enableDl(id, state) {
+  const b = g(id);
+  if (b) b.disabled = !state;
+}
+
+// ══════════════════════════════════════════════════════
+//  HELPERS
+// ══════════════════════════════════════════════════════
+function g(id) { return document.getElementById(id); }
+
+function resetBtn(btn, tab) {
+  const labels = {analyze:'▶ LAUNCH',detect:'▶ DETECT',segment:'▶ SEGMENT',track:'▶ TRACK',sam3:'▶ SAM-3',ocr:'▶ READ TEXT'};
+  btn.disabled = false;
+  btn.classList.remove('running');
+  btn.textContent = labels[tab] || '▶ RUN';
+}
+</script>
+</body>
+</html>

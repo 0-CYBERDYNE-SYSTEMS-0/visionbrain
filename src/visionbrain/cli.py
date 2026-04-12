@@ -548,6 +548,12 @@ def main() -> None:
     p.add_argument("--falcon-frames", type=int, default=6,
                    help="Number of key frames to analyze with Falcon (default 6)")
 
+    # ui
+    p = sub.add_parser("ui", help="Launch the web Ground Control UI (opens browser)")
+    p.add_argument("--port", type=int, default=7860, help="Port (default 7860)")
+    p.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)")
+    p.add_argument("--no-browser", action="store_true", help="Don't open browser automatically")
+
     # agent
     p = sub.add_parser("agent", help="VLM-powered visual reasoning agent")
     p.add_argument("--image", required=True, help="Input image path")
@@ -562,6 +568,17 @@ def main() -> None:
 
     if args.command == "status":
         print_status()
+        return
+
+    if args.command == "ui":
+        try:
+            from .web_app import run as ui_run
+        except ImportError:
+            print("ERROR: fastapi and uvicorn required. Install with:", file=sys.stderr)
+            print("  pip install fastapi 'uvicorn[standard]' python-multipart", file=sys.stderr)
+            sys.exit(1)
+        print(f"Starting VisionBrain Ground Control at http://{args.host}:{args.port}")
+        ui_run(host=args.host, port=args.port, open_browser=not args.no_browser)
         return
 
     dispatch = {
