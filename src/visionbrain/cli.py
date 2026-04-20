@@ -13,28 +13,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
-import re
 import sys
 from pathlib import Path
-from typing import Optional
 
 from PIL import Image
 
 from . import __version__
-from .loader import print_status, falcon_perception_record, sam31_record, gemma4_record
-from .fp_inference import segment, detect, ocr
-from .sam3_inference import (
-    track_video,
-    track_video_with_json,
-    track_realtime,
-    detect_multi,
-    sam31_available,
-    Sam31Detection,
-)
-from .gemma_inference import ask as gemma_ask_local, generate_report as gemma_report_local
-from .remote_gemma_inference import ask as gemma_ask, generate_report as gemma_report, gemma_available as gemma_remote_available
-from .viz import render_som, render_detections
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -43,6 +27,10 @@ from .viz import render_som, render_detections
 
 def cmd_detect(args: argparse.Namespace) -> None:
     """Count and localize objects via bounding boxes (fast)."""
+    from .loader import falcon_perception_record
+    from .fp_inference import detect
+    from .viz import render_detections
+
     img = Image.open(args.image)
     rec = falcon_perception_record()
     if not rec.can_load:
@@ -76,6 +64,10 @@ def cmd_detect(args: argparse.Namespace) -> None:
 
 def cmd_segment(args: argparse.Namespace) -> None:
     """Segment objects with pixel-accurate masks (slower than detect)."""
+    from .loader import falcon_perception_record
+    from .fp_inference import segment
+    from .viz import render_som
+
     img = Image.open(args.image)
     rec = falcon_perception_record()
     if not rec.can_load:
@@ -108,6 +100,9 @@ def cmd_segment(args: argparse.Namespace) -> None:
 
 def cmd_ocr(args: argparse.Namespace) -> None:
     """Read text from an image (ear tags, brand markings, signage)."""
+    from .loader import falcon_perception_record
+    from .fp_inference import ocr
+
     img = Image.open(args.image)
     rec = falcon_perception_record()
     if not rec.can_load:
@@ -146,6 +141,10 @@ def cmd_ocr(args: argparse.Namespace) -> None:
 
 def cmd_sam3_detect(args: argparse.Namespace) -> None:
     """SAM 3.1 multi-prompt detection/segmentation on still images."""
+    from .loader import sam31_record
+    from .sam3_inference import detect_multi, sam31_available
+    from .viz import render_detections
+
     if not sam31_available():
         rec = sam31_record()
         print(f"ERROR: SAM 3.1 not ready — {rec.note}", file=sys.stderr)
@@ -193,6 +192,9 @@ def cmd_sam3_detect(args: argparse.Namespace) -> None:
 
 def cmd_track(args: argparse.Namespace) -> None:
     """Track objects in a video file using SAM 3.1."""
+    from .loader import sam31_record
+    from .sam3_inference import track_video, sam31_available
+
     if not sam31_available():
         rec = sam31_record()
         print(f"ERROR: SAM 3.1 not ready — {rec.note}", file=sys.stderr)
@@ -255,6 +257,11 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     """
     import json
     from pathlib import Path
+
+    from .loader import sam31_record, falcon_perception_record
+    from .sam3_inference import track_video_with_json, sam31_available
+    from .fp_inference import detect
+    from .remote_gemma_inference import generate_report as gemma_report, ask as gemma_ask, gemma_available as gemma_remote_available
 
     video_path = Path(args.video)
     if not video_path.exists():
@@ -425,6 +432,9 @@ def cmd_analyze(args: argparse.Namespace) -> None:
 
 def cmd_agent(args: argparse.Namespace) -> None:
     """Interactive VLM-powered agent on an image."""
+    from .loader import falcon_perception_record
+    from .agent_loop import run_agent, VLMClient
+
     img = Image.open(args.image)
     rec = falcon_perception_record()
     if not rec.can_load:
@@ -439,8 +449,6 @@ def cmd_agent(args: argparse.Namespace) -> None:
     if not args.api_key:
         print("ERROR: --api-key required (or set OPENAI_API_KEY env var)", file=sys.stderr)
         sys.exit(1)
-
-    from .agent_loop import run_agent, VLMClient
 
     client = VLMClient(
         api_key=args.api_key,
@@ -567,6 +575,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "status":
+        from .loader import print_status
         print_status()
         return
 
