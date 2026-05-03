@@ -3,30 +3,51 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TERRA·VISION — Ground Control</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M16 2 L30 10 L30 22 L16 30 L2 22 L2 10 Z' fill='%2300ff6a' opacity='.9'/><path d='M16 9 L23 13 L23 19 L16 23 L9 19 L9 13 Z' fill='%23020504'/></svg>">
+<title>FarmFriend Aerial Intelligence</title>
+<link rel="icon" type="image/svg+xml" href="/static/ff_logo.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Chakra+Petch:ital,wght@0,300;0,400;0,600;0,700;1,300&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
 <style>
 :root{
-  --void:#020504;--base:#060d07;--surf:#0a1609;--card:#0d1a0e;--lift:#112013;
-  --bd:#182a1a;--bda:#2a4a2e;--bdg:#3a6040;
-  --acc:#00ff6a;--accd:#00cc55;--accm:#00993f;
-  --amr:#f5a623;--red:#ff4444;--blu:#40cfff;--prp:#b06aff;
-  --tx:#b0e4ba;--txd:#4d7554;--txm:#243a27;
-  --glow:rgba(0,255,106,.18);--glows:rgba(0,255,106,.07);--glowa:rgba(0,255,106,.04);
+  /* ── Base ── */
+  --void:#020504;--base:#060d0e;--surf:#0a1617;--card:#0d1e20;--lift:#112428;
+  --bd:#1a3032;--bda:#2a484f;--bdg:#3a6070;
+  /* ── Theme palette (amber/blue/red/yellow/green) ── */
+  --amber:#f5a623;--amberd:#cc8800;--ambert:rgba(245,166,35,.18);--amberg:rgba(245,166,35,.07);--ambera:rgba(245,166,35,.04);
+  --blue:#40cfff;--blued:#20a0dd;--bluet:rgba(64,207,255,.18);--blueg:rgba(64,207,255,.07);--bluea:rgba(64,207,255,.04);
+  --red:#ff4444;--redd:#cc2020;--redt:rgba(255,68,68,.18);--redg:rgba(255,68,68,.07);--reda:rgba(255,68,68,.04);
+  --yellow:#ffe040;--yellowd:#ccb000;--yellowt:rgba(255,224,64,.18);--yellowg:rgba(255,224,64,.07);--yellowa:rgba(255,224,64,.04);
+  --green:#5a9ea0;--greend:#4a8490;--greent:rgba(90,158,160,.18);--greeng:rgba(90,158,160,.07);--greena:rgba(90,158,160,.04);
+  /* ── Active / accent ── */
+  --acc:#5a9ea0;--accd:#4a8490;--accm:#3a7078;
+  /* ── Status aliases (legacy compat) ── */
+  --amr:var(--amber);--blu:var(--blue);--prp:#c070ff;
+  /* ── Text ── */
+  --tx:#c5d8da;--txd:#5a7a80;--txm:#2a4045;
+  /* ── Glows (amber base for dark-on-dark readability) ── */
+  --glow:rgba(245,166,35,.22);--glows:rgba(245,166,35,.08);--glowa:rgba(245,166,35,.04);
+  /* ── Fonts ── */
   --font-d:'Orbitron',monospace;
   --font-u:'Chakra Petch',sans-serif;
   --font-m:'JetBrains Mono',monospace;
 }
+
+/* ── Theme classes (apply .theme-amber, .theme-blue, .theme-red, .theme-yellow, .theme-green to <body>) ── */
+body.theme-amber{--acc:var(--amber);--accd:var(--amberd);--accm:var(--ambert);--glow:var(--amberg);--glows:var(--ambera);--glowa:var(--ambera)}
+body.theme-blue{--acc:var(--blue);--accd:var(--blued);--accm:var(--bluet);--glow:var(--blueg);--glows:var(--bluea);--glowa:var(--bluea)}
+body.theme-red{--acc:var(--red);--accd:var(--redd);--accm:var(--redt);--glow:var(--redg);--glows:var(--reda);--glowa:var(--reda)}
+body.theme-yellow{--acc:var(--yellow);--accd:var(--yellowd);--accm:var(--yellowt);--glow:var(--yellowg);--glows:var(--yellowa);--glowa:var(--yellowa)}
+body.theme-green{--acc:var(--green);--accd:var(--greend);--accm:var(--greent);--glow:var(--greeng);--glows:var(--greena);--glowa:var(--greena)}
+/* default theme */
+body{background:var(--base)}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden;background:var(--base);color:var(--tx);font-family:var(--font-u);font-size:13px}
 body::before{content:'';position:fixed;inset:0;
-  background-image:radial-gradient(circle,rgba(0,255,106,.07) 1px,transparent 1px);
+  background-image:radial-gradient(circle,rgba(90,158,160,.07) 1px,transparent 1px);
   background-size:26px 26px;pointer-events:none;z-index:0}
 body::after{content:'';position:fixed;inset:0;
-  background:radial-gradient(ellipse 80% 60% at 50% 100%,rgba(0,80,30,.18),transparent);
+  background:radial-gradient(ellipse 80% 60% at 50% 100%,rgba(30,60,60,.25),transparent);
   pointer-events:none;z-index:0}
 #app{position:relative;z-index:1;display:flex;flex-direction:column;height:100vh;overflow:hidden}
 
@@ -38,17 +59,10 @@ body::after{content:'';position:fixed;inset:0;
   background:linear-gradient(90deg,transparent,var(--bda),var(--acc),var(--bda),transparent);opacity:.5}
 
 .logo-wrap{display:flex;align-items:center;gap:9px;margin-right:28px;flex-shrink:0}
-.logo-hex{width:26px;height:26px;color:var(--acc);filter:drop-shadow(0 0 6px var(--acc))}
-.logo-text{font-family:var(--font-d);font-size:13px;font-weight:900;letter-spacing:3.5px;
-  color:var(--acc);text-shadow:0 0 18px var(--acc),0 0 40px rgba(0,255,106,.3);
+.logo-ico{width:28px;height:28px;color:var(--acc);flex-shrink:0}
+.logo-text{font-family:var(--font-d);font-size:11px;font-weight:900;letter-spacing:2.5px;
+  color:var(--acc);text-shadow:0 0 14px var(--acc),0 0 30px var(--glow);
   position:relative;overflow:hidden;white-space:nowrap}
-.logo-text::after{content:'';position:absolute;top:0;left:-100%;width:50%;height:100%;
-  background:linear-gradient(90deg,transparent,rgba(0,255,106,.5),transparent);
-  animation:logo-scan 9s ease-in-out infinite}
-@keyframes logo-scan{0%,70%,100%{left:-100%}40%{left:140%}}
-
-.logo-sub{font-family:var(--font-m);font-size:8px;letter-spacing:2px;color:var(--txd);
-  margin-left:2px;align-self:flex-end;padding-bottom:1px}
 
 #mode-tabs{display:flex;gap:0;flex:1}
 .tab-btn{font-family:var(--font-u);font-size:10px;font-weight:700;letter-spacing:1.5px;
@@ -68,6 +82,17 @@ body::after{content:'';position:fixed;inset:0;
 .conn-dot.warn{background:var(--amr);box-shadow:0 0 8px var(--amr)}
 .conn-dot.err {background:var(--red);box-shadow:0 0 8px var(--red)}
 @keyframes led{0%,100%{box-shadow:0 0 5px var(--acc)}50%{box-shadow:0 0 14px var(--acc),0 0 28px var(--glow)}}
+
+/* ── Theme switcher ── */
+#theme-switcher{display:flex;align-items:center;gap:5px;padding-left:14px;border-left:1px solid var(--bd);margin-left:4px}
+.theme-dot{width:12px;height:12px;border-radius:50%;cursor:pointer;border:1.5px solid transparent;transition:all .2s;flex-shrink:0}
+.theme-dot:hover{transform:scale(1.25)}
+.theme-dot.active{border-color:var(--tx);box-shadow:0 0 6px var(--acc)}
+.theme-dot[data-theme="amber"]  {background:#f5a623}
+.theme-dot[data-theme="blue"]   {background:#40cfff}
+.theme-dot[data-theme="red"]    {background:#ff4444}
+.theme-dot[data-theme="yellow"] {background:#ffe040}
+.theme-dot[data-theme="green"]  {background:#5a9ea0}
 
 /* ═══════════════════ WORKSPACE ═══════════════════ */
 #workspace{flex:1;display:grid;grid-template-columns:246px 1fr 372px;overflow:hidden;min-height:0}
@@ -303,12 +328,11 @@ body::after{content:'';position:fixed;inset:0;
 <!-- ══════════════════════ HEADER ══════════════════════ -->
 <header id="hdr">
   <div class="logo-wrap">
-    <svg class="logo-hex" viewBox="0 0 26 30" fill="none">
-      <path d="M13 1 L25 7.5 L25 22.5 L13 29 L1 22.5 L1 7.5 Z" stroke="currentColor" stroke-width="1.5" fill="rgba(0,255,106,0.08)"/>
-      <path d="M13 7 L19 10.5 L19 17.5 L13 21 L7 17.5 L7 10.5 Z" stroke="currentColor" stroke-width="1" fill="rgba(0,255,106,0.12)" opacity=".7"/>
-    </svg>
-    <span class="logo-text">TERRA·VISION</span>
-    <span class="logo-sub">v2 · GCS</span>
+    <img class="logo-ico" src="/static/ff_logo.svg" alt="FarmFriend" style="width:28px;height:28px;object-fit:contain;border-radius:4px;flex-shrink:0">
+    <span class="logo-text">FarmFriend</span>
+  </div>
+  <div style="font-family:var(--font-m);font-size:8px;letter-spacing:2px;color:var(--txd);flex-shrink:0;border-left:1px solid var(--bd);padding-left:12px;margin-right:auto">
+    AERIAL INTELLIGENCE
   </div>
   <nav id="mode-tabs">
     <button class="tab-btn active" data-tab="analyze">ANALYZE</button>
@@ -321,6 +345,13 @@ body::after{content:'';position:fixed;inset:0;
   <div id="conn-status">
     <div class="conn-dot" id="conn-dot"></div>
     <span id="conn-lbl">CONNECTING</span>
+  </div>
+  <div id="theme-switcher">
+    <div class="theme-dot active" data-theme="amber" title="Amber"></div>
+    <div class="theme-dot" data-theme="blue" title="Blue"></div>
+    <div class="theme-dot" data-theme="red" title="Red"></div>
+    <div class="theme-dot" data-theme="yellow" title="Yellow"></div>
+    <div class="theme-dot" data-theme="green" title="Green"></div>
   </div>
 </header>
 
@@ -630,9 +661,10 @@ const S = {
 // ══════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
   checkStatus();
-  log('TERRA-VISION Ground Control System ready.', 'h');
+  log('FarmFriend Aerial Intelligence ready.', 'h');
   log('All models initializing — awaiting status check…', 'i');
   setInterval(checkStatus, 30000);
+  initThemeSwitcher();
 });
 
 // ══════════════════════════════════════════════════════
@@ -1129,6 +1161,33 @@ function resetBtn(btn, tab) {
   btn.disabled = false;
   btn.classList.remove('running');
   btn.textContent = labels[tab] || '▶ RUN';
+}
+
+// ══════════════════════════════════════════════════════
+//  THEME SWITCHER
+// ══════════════════════════════════════════════════════
+function initThemeSwitcher() {
+  const saved = localStorage.getItem('vb-theme') || 'amber';
+  setTheme(saved, false);
+  document.querySelectorAll('.theme-dot').forEach(dot => {
+    dot.addEventListener('click', () => {
+      setTheme(dot.dataset.theme, true);
+    });
+  });
+}
+
+function setTheme(name, persist) {
+  // Strip old theme classes
+  document.body.className = document.body.className.replace(/theme-\w+/g, '').trim();
+  // Apply new
+  if (name) {
+    document.body.classList.add('theme-' + name);
+  }
+  // Update active dot
+  document.querySelectorAll('.theme-dot').forEach(dot => {
+    dot.classList.toggle('active', dot.dataset.theme === name);
+  });
+  if (persist) localStorage.setItem('vb-theme', name);
 }
 </script>
 </body>
