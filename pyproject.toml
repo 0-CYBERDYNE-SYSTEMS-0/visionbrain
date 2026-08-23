@@ -5,10 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "visionbrain"
 version = "0.1.0"
-description = "Agricultural vision intelligence — on-device AI for livestock, crops, and drone footage"
+description = "Aerial & camera vision intelligence — on-device AI for drone and CCTV footage"
 readme = "README.md"
 license = {text = "MIT"}
-authors = [{name = "FarmFriend / Cyberdyne Systems"}]
+authors = [{name = "VisionBrain contributors"}]
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=1.24",

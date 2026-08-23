@@ -254,7 +254,7 @@ visionbrain fastscan --video <path> --query <expr>
 | `src/visionbrain/__init__.py` | Export `frame_selector` |
 | `web_app.py` | Handle `--fast` job type with SSE quick_answer events |
 | `SPEC.md` | Add new API surface for fast-path and adaptive |
-| `implementation-notes.md` | This file |
+| `IMPLEMENTATION_NOTES_FAST_PIPELINE.md` | This file |
 
 ---
 

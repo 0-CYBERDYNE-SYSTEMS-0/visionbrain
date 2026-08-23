@@ -88,12 +88,11 @@ must pass with no MLX hardware and no cached weights.
 ## Gotchas
 
 - `supervision_bridge.py` imports `supervision` at module top level, but `supervision` is **not** in `pyproject.toml` dependencies — it must be pre-installed in the environment (it is in `.venv`)
-- `cmd_fastscan` exists twice: the **live** one is in `cli.py` (registered in the `main()` dispatch table); `frame_selector.py` holds a stale duplicate that is never called — change CLI behavior in the `cli.py` copy
+- `visionbrain fastscan` is implemented by `cmd_fastscan()` in `cli.py`; `frame_selector.py` only provides the `score_frames()` scorer
 - `src/visionbrain/__init__.py` currently exports only `__version__` — do not rely on package-level re-exports of inference functions
 - `FAST_PIPELINE_SPEC.md` describes an in-progress feature (fast path + adaptive sampling); check status before assuming its behavior exists
 - Web UI layout: all form controls live in the right-rail **MISSION SETUP** panel (`#mission-setup` in `static/index.html`) — there is no bottom config bar; tab switching toggles `.cfg-pane` elements by ID (`cfg-<tab>`)
 - The annotator palette constant is `SOM_PALETTE` in `viz.py` (renamed from `FARM_PALETTE`)
-- `pyproject.toml` metadata still carries legacy agricultural branding (description "Agricultural vision intelligence … livestock, crops", authors "FarmFriend / Cyberdyne Systems") — the domain-neutral copy rule applies to code/UI strings; package metadata is pending rebrand, so don't propagate wording in either direction
 
 ## Commit & Pull Request Guidelines
 

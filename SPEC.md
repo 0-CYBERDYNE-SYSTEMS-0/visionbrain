@@ -79,7 +79,7 @@ VisionBrain/
 │       ├── loader.py         ← model registry, cache status, availability
 │       ├── fp_inference.py   ← Falcon Perception: segment(), detect(), ocr()
 │       ├── sam3_inference.py ← SAM 3.1: detect_multi(), track_video(), track_video_with_json()
-│       ├── frame_selector.py  ← Fast Falcon scorer: score_frames(), cmd_fastscan()
+│       ├── frame_selector.py  ← Fast Falcon scorer: score_frames()
 │       ├── gemma_inference.py ← Gemma 4: ask(), generate_report(), gemma_available(), available_backend()
 │       ├── prompt_router.py   ← Query routing: SAM targets + semantic question
 │       ├── viz.py            ← Set-of-Marks rendering, crop extraction, relations
@@ -150,7 +150,8 @@ VisionBrain/
 
 **Public API:**
 - `score_frames(video_path, query, *, sample_every_n_seconds, max_frames, resolution, min_relevance) -> FrameScores`
-- `cmd_fastscan(args) -> None`
+
+(The `visionbrain fastscan` CLI wrapper is `cmd_fastscan()` in `cli.py`, not in this module.)
 
 **FrameScores fields:** `video_path`, `total_frames`, `fps`, `duration_s`, `frames_scored`, `is_relevant`, `quick_answer`, `regions`, `frame_scores`
 
