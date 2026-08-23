@@ -5,7 +5,7 @@
 [![CI](https://github.com/0-CYBERDYNE-SYSTEMS-0/visionbrain/workflows/CI/badge.svg)](https://github.com/0-CYBERDYNE-SYSTEMS-0/visionbrain/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Agricultural vision AI on Apple Silicon — powered by Falcon Perception and SAM 3.1.
+Aerial & camera vision AI on Apple Silicon — powered by Falcon Perception and SAM 3.1.
 
 > Built to run locally. Reads weights from your Hugging Face cache. Uses MLX on Apple Silicon.
 
@@ -64,13 +64,13 @@ The VisionBrain Python environment must be the same one where MLX is installed (
 ### Detect objects (fast — bounding boxes only)
 
 ```bash
-visionbrain detect --image photo.jpg --query "cow"
-visionbrain detect --image drone.jpg --query "sheep" --max-tokens 200
+visionbrain detect --image photo.jpg --query "person"
+visionbrain detect --image drone.jpg --query "vehicle" --max-tokens 200
 ```
 
 Output:
 ```
-Detected 12 'cow' objects
+Detected 12 'person' objects
   Preprocess: 7ms | Generation: 3708ms | Total: 3715ms
   Prefill tokens: 1416 | Decoded: 27 | Speed: 7.3 tok/s
   [1] score=1.000  cx=0.137 cy=0.718  h=0.488 w=0.274
@@ -81,8 +81,8 @@ Detected 12 'cow' objects
 ### Segment objects (pixel-accurate masks)
 
 ```bash
-visionbrain segment --image photo.jpg --query "cow" --output som.jpg
-visionbrain segment --image photo.jpg --query "lame sheep" --output som.jpg
+visionbrain segment --image photo.jpg --query "person" --output som.jpg
+visionbrain segment --image photo.jpg --query "damaged roof" --output som.jpg
 ```
 
 Saves a **Set-of-Marks** image with colored, numbered masks.
@@ -97,7 +97,7 @@ visionbrain detect --image crowd.jpg --query "person" --max-tokens 200
 ### Read text from an image (OCR)
 
 ```bash
-visionbrain ocr --image ear_tag.jpg
+visionbrain ocr --image sign.jpg
 visionbrain ocr --image sign.jpg --question "read the brand name"
 ```
 
@@ -105,8 +105,8 @@ visionbrain ocr --image sign.jpg --question "read the brand name"
 
 ```bash
 visionbrain sam3 \
-  --image farm.jpg \
-  --prompts cow sheep fence_post water_trough \
+  --image site.jpg \
+  --prompts person car truck building \
   --task detect
 ```
 
@@ -114,8 +114,8 @@ visionbrain sam3 \
 
 ```bash
 visionbrain track \
-  --video pasture_cam.mp4 \
-  --prompts cow horse \
+  --video drone_clip.mp4 \
+  --prompts person car \
   --output tracked.mp4
 ```
 
@@ -148,10 +148,12 @@ visionbrain/
 
 ## Design System
 
-The FarmFriend VisionBrain visual language, UI kit, preview screens, SVG assets,
+The VisionBrain visual language, UI kit, preview screens, SVG assets,
 and handoff notes live in [`design-system/`](design-system/). Start with
 [`design-system/README.md`](design-system/README.md) for tokens, components, and
-implementation guidance.
+implementation guidance. (Note: some design-system docs still carry legacy
+"FarmFriend" branding; the product identity is VisionBrain — aerial/camera
+vision, domain-neutral.)
 
 **Key design decisions:**
 

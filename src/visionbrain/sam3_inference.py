@@ -122,7 +122,7 @@ def detect_multi(
 
     Args:
         image: PIL Image
-        prompts: list of text prompts, e.g. ["cow", "sheep", "fence"]
+        prompts: list of text prompts, e.g. ["person", "car", "truck"]
         threshold: confidence threshold (lower = more detections)
         resolution: input resolution (1008 = native)
         task: "detect" (bboxes only) or "segment" (with masks)
@@ -191,7 +191,7 @@ def track_video(
 
     Args:
         video_path: path to video file
-        prompts: text prompts to track, e.g. ["cow", "horse"]
+        prompts: text prompts to track, e.g. ["person", "car"]
         output_path: output video path (auto-generated if None)
         model_path: HuggingFace repo ID for SAM 3.1 weights
         threshold: detection confidence
@@ -437,7 +437,7 @@ def track_video_with_json(
 
     Args:
         video_path: input video path
-        prompts: text prompts to track, e.g. ["cow", "sheep", "fence"]
+        prompts: text prompts to track, e.g. ["person", "car", "truck"]
         output_path: annotated video output (auto-generated if None)
         json_path: JSON detections output (auto-generated if None)
         model_path: HuggingFace repo ID for SAM 3.1 weights

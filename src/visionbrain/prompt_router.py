@@ -1,7 +1,7 @@
 """Prompt router — splits a user query into concrete SAM targets and semantic reasoning questions.
 
 VisionBrain uses two types of AI models with different capabilities:
-- SAM 3.1: handles concrete, segmentable objects (cow, sheep, fence, roof, building).
+- SAM 3.1: handles concrete, segmentable objects (person, car, roof, building).
   It cannot reason about abstract concepts like "damage", "opportunity", or "condition".
 - Falcon Perception + Gemma 4: reason about semantics — what the detections mean,
   whether something is damaged, what action to take.
@@ -11,15 +11,15 @@ This module routes a user query to the appropriate model(s) by splitting it into
   - semantic_query: the abstract question Falcon/Gemma should answer
 
 Example:
-    route("cattle with lameness in the south field")
+    route("trucks blocking the north access road")
     -> PromptResult(
-        segment_targets=["cattle"],
-        semantic_query="lameness in the south field"
+        segment_targets=["truck"],
+        semantic_query="blocking the north access road"
     )
-    route("sheep showing signs of distress near the water trough")
+    route("person acting suspiciously near the gate")
     -> PromptResult(
-        segment_targets=["sheep"],
-        semantic_query="signs of distress near the water trough"
+        segment_targets=["person"],
+        semantic_query="acting suspiciously near the gate"
     )
 """
 
@@ -35,7 +35,13 @@ from dataclasses import dataclass
 # ──────────────────────────────────────────────────────────────────────────────
 
 CONCRETE_NOUNS: set[str] = {
-    # Livestock
+    # People
+    "person", "people", "pedestrian", "worker", "crowd", "child", "adult",
+    # Vehicles & transport
+    "car", "truck", "pickup", "van", "bus", "suv", "motorcycle", "bicycle",
+    "bike", "trailer", "tractor", "vehicle", "boat", "ship", "train",
+    "aircraft", "airplane", "helicopter", "drone",
+    # Animals (livestock and wildlife)
     "cow", "cattle", "bull", "steer", "heifer", "calf", "calves",
     "sheep", "lamb", "ewe", "ram",
     "goat", "kid", "nanny", "billy",
@@ -43,23 +49,21 @@ CONCRETE_NOUNS: set[str] = {
     "pig", "sow", "boar", "piglet", "hog",
     "chicken", "hen", "rooster", "poultry", "duck", "goose", "turkey",
     "llama", "alpaca", "donkey", "mule",
-    # Farm infrastructure
+    "dog", "cat", "bird", "deer", "elk", "bear", "animal",
+    # Structures & infrastructure
     "fence", "post", "rail", "gate", "barn", "shed", "structure",
-    "trough", "waterer", "feeder",
-    "tank", "pond", "cistern",
-    "corral", "pen", "run", "enclosure", "paddock", "pasture",
-    "building", "house", "silo", "tractor", "vehicle", "trailer",
+    "building", "house", "silo", "roof", "shingles", "wall", "road",
+    "bridge", "tower", "pole", "panel", "sign", "barrier", "container",
+    "tank", "pond", "cistern", "corral", "pen", "enclosure",
     "hay", "bale", "stack",
-    "roof", "shingles", "wall",
-    # Vegetation
+    # Vegetation & terrain
     "crop", "row", "plant", "tree", "bush", "hedge",
-    "grass", "forage", "weed", "brush", "scrub",
-    # Water / terrain
+    "grass", "weed", "brush", "scrub", "rock", "boulder",
     "stream", "creek", "river", "drainage", "ditch", "lake",
     "mud", "puddle", "flood", "erosion",
-    # Equipment
-    "feeder", "bunk", "mineral block", "salt lick",
-    "camera", "sensor", "drone",
+    # Equipment & objects
+    "feeder", "bunk", "equipment", "machine", "dumpster", "pile",
+    "camera", "sensor", "solar panel",
 }
 
 # Abstract/behavioral terms that SAM cannot segment — these are for Falcon/Gemma
@@ -84,10 +88,13 @@ ABSTRACT_TERMS: set[str] = {
     "grouped", "isolated", "alone", "separated",
     "grazing", "resting", "running", "fighting",
     "eating", "drinking",
-    # Agricultural concerns
-    "overgrazed", "eroded", "flooded", "waterlogged",
+    # Activity & behavior
+    "parked", "moving", "stopped", "queued",
+    "gathered", "scattered", "loitering", "wandering",
+    # Site / environmental concerns
+    "overgrown", "eroded", "flooded", "waterlogged",
     "bare patch", "bare ground", "mud hole",
-    "parasite", "infestation", "pest",
+    "litter", "debris", "spill",
 }
 
 # Multi-word compounds — match as a unit for SAM targeting.
@@ -98,6 +105,7 @@ COMPOUND_MAP: list[tuple[str, set[str]]] = [
     ("pasture", {"bare pasture", "overgrazed pasture"}),
     ("bare ground", {"bare patch", "bare ground", "bare spot", "bare area"}),
     ("water", {"standing water", "flooded area", "water puddle"}),
+    ("vehicle", {"parked car", "parked truck", "moving vehicle", "stalled vehicle"}),
 ]
 
 
@@ -157,7 +165,7 @@ def route(query: str) -> PromptResult:
 
     Args:
         query: natural-language query, e.g.
-               "cattle showing signs of lameness in the south field"
+               "person acting suspiciously near the gate"
 
     Returns:
         PromptResult with concrete SAM targets and the semantic reasoning question.
@@ -211,7 +219,7 @@ def route(query: str) -> PromptResult:
         for noun in CONCRETE_NOUNS:
             if wl == noun or wl == noun + "s" or wl == noun + "es":
                 # Don't add "field" as a SAM target in most contexts
-                # (it's a location, not a segmentable object in agriculture queries)
+                # (it's usually a location, not a segmentable object in queries)
                 if noun not in ("field",):
                     found_concrete.add(noun)
                 break
@@ -274,8 +282,8 @@ def route(query: str) -> PromptResult:
 def route_fallback(query: str) -> list[str]:
     """Return a default list of SAM prompts if route() produces no segment_targets.
 
-    Used when the user query is purely abstract (e.g. "anomalies in the field")
-    and no concrete objects can be extracted. Falls back to common agricultural
+    Used when the user query is purely abstract (e.g. "anomalies on the site")
+    and no concrete objects can be extracted. Falls back to common general-purpose
     objects that cover the most ground.
     """
-    return ["cattle", "sheep", "fence", "building"]
+    return ["person", "vehicle", "building", "animal"]

@@ -289,7 +289,7 @@ def segment(
 
     Args:
         image: PIL Image
-        expression: natural-language expression e.g. "cow", "lame sheep"
+        expression: natural-language expression e.g. "person", "red truck"
         max_new_tokens: token budget for generation (more = slower but thorough)
         min_dimension: shortest side of image fed to model
         max_dimension: longest side of model input
@@ -441,7 +441,7 @@ def ocr(
     min_dimension: int = 256,
     max_dimension: int = 1024,
 ) -> tuple[list[DetectionResult], str, InferenceStats]:
-    """Read text from an image (ear tags, brand markings, signage).
+    """Read text from an image (signage, labels, markings).
 
     Returns (detections, extracted_text, stats).
     The detections point to text regions; extracted_text is the full decoded string.

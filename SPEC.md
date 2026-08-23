@@ -1,6 +1,6 @@
 # VisionBrain — Technical Specification
 
-> Agricultural vision AI on Apple Silicon. SAM 3.1 runs locally; Gemma 4 e2b runs via Ollama on localhost.
+> Aerial & camera vision AI on Apple Silicon. SAM 3.1 runs locally; Gemma 4 e2b runs via Ollama on localhost.
 
 ---
 
@@ -28,7 +28,7 @@ THIS MAC MINI (100.72.41.118, Mac Mini M4 16GB)
 
 ## Overview
 
-VisionBrain is a Python library and CLI providing farmer-friendly access to three state-of-the-art vision models, running entirely locally on Apple Silicon:
+VisionBrain is a Python library and CLI providing operator-friendly access to three state-of-the-art vision models, running entirely locally on Apple Silicon:
 
 - **Falcon Perception** (tiiuae/Falcon-Perception) — 3B-param VLM for expression-based segmentation, detection, and OCR
 - **SAM 3.1** (mlx-community/sam3.1-bf16) — Meta's Segment Anything Model 3.1, MLX-community BF16 variant for video tracking and multi-prompt segmentation
@@ -231,16 +231,16 @@ VisionBrain/
 **Output prioritization:** JSON timeline and annotated stills are the primary outputs (always produced). Annotated MP4 video is opt-in via `--include-video` (disabled by default).
 
 ```bash
-visionbrain analyze --video drone.mp4 --query "cattle with lameness in the south field" --report
+visionbrain analyze --video drone.mp4 --query "vehicles blocking the north access road" --report
 
 # With annotated video (opt-in)
-visionbrain analyze --video drone.mp4 --query "cattle" --include-video --report
+visionbrain analyze --video drone.mp4 --query "person" --include-video --report
 
 # Fast-path: get quick answer in <60s, then continue full analysis
-visionbrain analyze --video drone.mp4 --query "cattle" --fast --report
+visionbrain analyze --video drone.mp4 --query "person" --fast --report
 
 # Adaptive: motion skip + mask propagation for long videos
-visionbrain analyze --video drone.mp4 --query "cattle" --adaptive --propagate 5 --every 8
+visionbrain analyze --video drone.mp4 --query "person" --adaptive --propagate 5 --every 8
 ```
 
 ```bash
@@ -286,7 +286,7 @@ visionbrain analyze --video drone.mp4 --query "cattle" --adaptive --propagate 5 
 - `PromptResult` dataclass: `segment_targets: list[str]`, `semantic_query: str`, `original_query: str`, `routed_from: str`
 
 **Routing logic:**
-- Concrete nouns (livestock, infrastructure, terrain) → SAM segment targets
+- Concrete nouns (people, vehicles, structures, animals, terrain) → SAM segment targets
 - Abstract terms (damage, injury, condition, anomaly) → semantic query for Falcon/Gemma
 - Multi-word compounds ("fence down", "water trough") → single SAM target
 - Pure abstract queries (no concrete nouns) → empty segment_targets, full query goes to semantic layer
@@ -297,7 +297,7 @@ visionbrain analyze --video drone.mp4 --query "cattle" --adaptive --propagate 5 
 
 ```bash
 # Fast Falcon-only scan: sub-60s relevance answer
-visionbrain fastscan --video drone.mp4 --query "cattle"
+visionbrain fastscan --video drone.mp4 --query "person"
 
 # Options
 --video             Input video (required)
@@ -308,6 +308,25 @@ visionbrain fastscan --video drone.mp4 --query "cattle"
 --min-relevance     Minimum relevance to count as a region (default 0.2)
 --output            Write structured JSON result to this path
 ```
+
+### `web_app.py` — Ground Control UI
+
+FastAPI app serving the single-page Ground Control dashboard (`static/index.html`) on port 7860. Launch with `visionbrain ui`.
+
+**API surface:**
+- `GET /api/status` — model registry + cache status; `GET /api/healthz` — Gemma backend health
+- `POST /api/upload` — upload media, returns `file_id`
+- `POST /api/job/{kind}` — start a job (`analyze`, `fastscan`, `detect`, `segment`, `ocr`, `track`, `sam3`); each spawns the CLI as a subprocess and returns `{job_id}`
+- `GET /api/job/{jid}` — job state + streamed output; `GET /api/job/{jid}/stream` — SSE stream (phase, heartbeat, progress)
+- `GET /api/job/{jid}/detections|report|fast|file/{kind}` — result artifacts
+
+**UI layout:**
+- Header: logo, mode tabs (analyze / detect / segment / track / sam-3 / ocr), connection status
+- Left rail: MODEL INTEL, Ollama server status, LAST MISSION stats, quick actions/downloads
+- Center: media drop zone → mission progress → annotated video/image results
+- Right rail (top-to-bottom): **MISSION SETUP** (all form controls for the active tab, vertical, scrollable) → OPERATIONS LOG → result panels (detection summary, fastscan quick answer, field report)
+
+Controls live in the right-rail MISSION SETUP panel — there is deliberately no bottom config bar.
 
 ---
 

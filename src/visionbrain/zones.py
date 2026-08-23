@@ -1,9 +1,9 @@
 """Zone analytics — count objects crossing lines or inside polygons.
 
-Built on Supervision's LineZone and PolygonZone for agricultural use cases:
-- Cattle crossing a fence line or gate
-- Animals entering/exiting a feeding area
-- Vehicle counting at ranch entrances
+Built on Supervision's LineZone and PolygonZone for site-monitoring use cases:
+- People or vehicles crossing a line or gate
+- Objects entering/exiting a defined area
+- Vehicle counting at site entrances
 """
 
 from __future__ import annotations
@@ -161,12 +161,12 @@ class ZoneManager:
 
     Example:
         zm = ZoneManager()
-        zm.add_line("gate", (100, 200), (500, 200))
-        zm.add_polygon("pasture", [(0,0), (640,0), (640,480), (0,480)])
+        zm.add_line("entrance", (100, 200), (500, 200))
+        zm.add_polygon("yard", [(0,0), (640,0), (640,480), (0,480)])
 
         for frame_dets in video:
             results = zm.update_all(frame_dets)
-            print(results["gate"]["in"], results["pasture"]["current"])
+            print(results["entrance"]["in"], results["yard"]["current"])
     """
 
     lines: dict[str, LineZoneCounter] = field(default_factory=dict)

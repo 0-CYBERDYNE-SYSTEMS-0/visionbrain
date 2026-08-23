@@ -56,7 +56,7 @@ def _load_system_prompt() -> str:
     else:
         # Fallback minimal prompt
         _SYS_PROMPT_CACHE = (
-            "You are a visual reasoning assistant for agricultural images. "
+            "You are a visual reasoning assistant for camera and drone imagery. "
             "You have access to a segmentation model (Falcon Perception) that can "
             "detect and segment objects. Use the tools below to answer the user's question. "
             "When you are done, call answer() with your response."
@@ -149,7 +149,7 @@ AGENT_TOOLS = [
             "description": (
                 "Segment objects in the image matching a natural-language expression. "
                 "Returns colored masks with numbered labels. "
-                "Use for: 'cow', 'sheep', 'injured animal', 'fence post', 'crop row', etc."
+                "Use for: 'person', 'vehicle', 'injured animal', 'roof', 'sign', etc."
             ),
             "parameters": {
                 "type": "object",
@@ -158,7 +158,7 @@ AGENT_TOOLS = [
                         "type": "string",
                         "description": (
                             "Natural-language expression to segment. "
-                            "Be specific: 'lame cow' vs 'cow', 'wheat row' vs 'crop'."
+                            "Be specific: 'red pickup truck' vs 'truck', 'damaged roof' vs 'roof'."
                         ),
                     }
                 },

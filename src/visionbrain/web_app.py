@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-app = FastAPI(title="FarmFriend Aerial Intelligence", docs_url=None, redoc_url=None)
+app = FastAPI(title="VisionBrain — Aerial Ground Control", docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.state.started_at = time.time()
 
@@ -150,8 +150,8 @@ def _find_upload(fid: str) -> Path:
 @app.post("/api/job/analyze")
 async def job_analyze(
     file_id:        str   = Form(...),
-    query:          str   = Form("cattle in the pasture"),
-    prompts:        str   = Form("cow cattle animal"),
+    query:          str   = Form("people and vehicles"),
+    prompts:        str   = Form("person vehicle animal"),
     threshold:      float = Form(0.05),
     resolution:     int   = Form(512),
     every:          int   = Form(5),
@@ -228,7 +228,7 @@ async def job_analyze(
 @app.post("/api/job/fastscan")
 async def job_fastscan(
     file_id:       str   = Form(...),
-    query:         str   = Form("cattle"),
+    query:         str   = Form("person"),
     every:         float = Form(5.0),
     max_frames:    int   = Form(60),
     resolution:    int   = Form(360),
@@ -256,7 +256,7 @@ async def job_fastscan(
 @app.post("/api/job/detect")
 async def job_detect(
     file_id:    str = Form(...),
-    query:      str = Form("cattle"),
+    query:      str = Form("person"),
     max_tokens: int = Form(200),
 ):
     src = _find_upload(file_id)
@@ -274,7 +274,7 @@ async def job_detect(
 @app.post("/api/job/segment")
 async def job_segment(
     file_id:    str = Form(...),
-    query:      str = Form("cattle"),
+    query:      str = Form("person"),
     max_tokens: int = Form(2048),
 ):
     src = _find_upload(file_id)

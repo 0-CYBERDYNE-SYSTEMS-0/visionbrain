@@ -71,7 +71,7 @@ def score_frames(
         FrameScores with:
         - scores: list of (frame_index, timestamp, relevance_score)
         - regions: list of (start_time, end_time) high-interest windows
-        - quick_answer: str — "Yes, cattle found at 0:12-0:45 and 1:30-2:10"
+        - quick_answer: str — "Yes, persons found at 0:12-0:45 and 1:30-2:10"
         - is_relevant: bool — True if query found anywhere
     """
 ```
@@ -88,7 +88,7 @@ def score_frames(
 ### CLI Integration
 
 ```
-visionbrain fastscan --video <path> --query "cattle"
+visionbrain fastscan --video <path> --query "person"
 ```
 
 ---
@@ -109,7 +109,7 @@ visionbrain fastscan --video <path> --query "cattle"
 
 With `--fast`, the job emits structured events:
 ```
-data: {"type":"quick_answer","text":"Cattle detected 0:12-0:45 and 1:30-2:10","regions":[...]}
+data: {"type":"quick_answer","text":"Persons detected 0:12-0:45 and 1:30-2:10","regions":[...]}
 data: {"type":"done","status":"partial","results":{"quick_answer":"..."}}
 ```
 
@@ -262,16 +262,16 @@ visionbrain fastscan --video <path> --query <expr>
 
 ```bash
 # Fast scan only
-.venv/bin/python -m visionbrain fastscan --video test.mp4 --query "cattle"
+.venv/bin/python -m visionbrain fastscan --video test.mp4 --query "person"
 
 # Adaptive full pipeline
-.venv/bin/python -m visionbrain analyze --video test.mp4 --query "cattle" \
+.venv/bin/python -m visionbrain analyze --video test.mp4 --query "person" \
   --fast --adaptive --propagate 5 --motion-threshold 0.03
 
 # Compare timing
-time .venv/bin/python -m visionbrain analyze --video test.mp4 --query "cattle" \
+time .venv/bin/python -m visionbrain analyze --video test.mp4 --query "person" \
   --every 2 --backbone-every 1 --resolution 1008
 
-time .venv/bin/python -m visionbrain analyze --video test.mp4 --query "cattle" \
+time .venv/bin/python -m visionbrain analyze --video test.mp4 --query "person" \
   --adaptive --propagate 5 --motion-threshold 0.03 --every 5
 ```

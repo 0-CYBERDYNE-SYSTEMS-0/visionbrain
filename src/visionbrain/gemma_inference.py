@@ -13,7 +13,7 @@ Usage:
     from visionbrain.gemma_inference import available_backend, ask, generate_report, gemma_available
     backend = available_backend()  # 'ollama' | 'remote' | 'local' | None
     if gemma_available():
-        resp = ask("Which cattle are isolated from the herd?", detections=frame_data)
+        resp = ask("Which vehicles are parked in restricted areas?", detections=frame_data)
         report = generate_report(summary_text, report_type="field")
 """
 
@@ -46,16 +46,16 @@ OLLAMA_STOP_TOKENS = ["<end_of_turn>", "<eos>"]
 
 # Shared system prompt
 SYSTEM_PROMPT = (
-    "You are an agricultural intelligence assistant helping farmers and ranchers "
-    "analyze drone and camera footage. You have access to structured object detection "
+    "You are a visual intelligence assistant helping operators analyze drone and camera "
+    "footage. You have access to structured object detection "
     "data from vision AI models: bounding boxes with confidence scores, pixel-level "
     "segmentation masks with area fractions, object tracks across video frames "
-    "(track IDs, centroid positions), and class labels (e.g. 'cow', 'sheep', 'fence', "
-    "'crop row'). "
-    "Be specific, practical, and actionable. Focus on: animal health and behavior "
-    "(injuries, isolation, unusual movement), infrastructure (fence damage, water "
-    "trough availability), crop stress indicators, and anomalies requiring human "
-    "attention. Keep reports concise but detailed enough to act on in the field."
+    "(track IDs, centroid positions), and class labels (e.g. 'person', 'vehicle', 'building', "
+    "'animal'). "
+    "Be specific, practical, and actionable. Focus on: activity and behavior patterns "
+    "(unusual movement, loitering, isolation), site and infrastructure conditions "
+    "(damage, obstruction, wear), terrain and environmental indicators, and anomalies requiring human "
+    "attention. Keep reports concise but detailed enough to act on."
 )
 
 
@@ -360,13 +360,13 @@ def _ollama_generate_report(
     """Generate field report via Ollama."""
     styles = {
         "field": (
-            "Write a detailed field report a rancher or farmer can act on. "
-            "Include: overview, key findings, animals/areas of concern with severity, "
+            "Write a detailed field report an operator can act on. "
+            "Include: overview, key findings, objects/areas of concern with severity, "
             "and recommended actions. Be specific about locations, counts, and urgency."
         ),
         "brief": (
             "Write a one-paragraph summary suitable for a text message or phone call "
-            "to the farm manager. Include the most critical finding."
+            "to the site manager. Include the most critical finding."
         ),
         "json": (
             "Write a structured JSON report with fields: overview (string), "
@@ -501,13 +501,13 @@ def _remote_generate_report(
     """Generate field report via remote Gemma 4."""
     styles = {
         "field": (
-            "Write a detailed field report a rancher or farmer can act on. "
-            "Include: overview, key findings, animals/areas of concern with severity, "
+            "Write a detailed field report an operator can act on. "
+            "Include: overview, key findings, objects/areas of concern with severity, "
             "and recommended actions. Be specific about locations, counts, and urgency."
         ),
         "brief": (
             "Write a one-paragraph summary suitable for a text message or phone call "
-            "to the farm manager. Include the most critical finding."
+            "to the site manager. Include the most critical finding."
         ),
         "json": (
             "Write a structured JSON report with fields: overview (string), "
@@ -635,13 +635,13 @@ def _local_generate_report(
 
     styles = {
         "field": (
-            "Write a detailed field report a rancher or farmer can act on. "
-            "Include: overview, key findings, animals/areas of concern with severity, "
+            "Write a detailed field report an operator can act on. "
+            "Include: overview, key findings, objects/areas of concern with severity, "
             "and recommended actions. Be specific about locations, counts, and urgency."
         ),
         "brief": (
             "Write a one-paragraph summary suitable for a text message or phone call "
-            "to the farm manager. Include the most critical finding."
+            "to the site manager. Include the most critical finding."
         ),
         "json": (
             "Write a structured JSON report with fields: overview (string), "

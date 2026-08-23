@@ -110,7 +110,7 @@ def score_frames(
 
     Args:
         video_path: Path to the video file.
-        query: Natural-language query, e.g. "cattle in the pasture".
+        query: Natural-language query, e.g. "vehicles near the gate".
         sample_every_n_seconds: Sample one frame every N seconds (default 5).
         max_frames: Maximum number of frames to score (default 60).
         resolution: Resolution to run Falcon at (default 360 — lower = faster).

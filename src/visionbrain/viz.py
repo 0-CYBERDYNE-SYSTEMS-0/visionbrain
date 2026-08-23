@@ -30,7 +30,7 @@ def _get_font(size: int = 14) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Colors (farmer-friendly, high contrast)
+# Colors (high contrast)
 # ──────────────────────────────────────────────────────────────────────────────
 
 MASK_COLORS = [
@@ -44,8 +44,8 @@ MASK_COLORS = [
     (200, 200, 80),  # lime
 ]
 
-# Farm-friendly palette for Supervision annotators
-FARM_PALETTE = [
+# Palette for Supervision annotators
+SOM_PALETTE = [
     (255, 80, 80),    # red
     (80, 200, 120),   # green
     (80, 120, 255),   # blue
@@ -223,7 +223,7 @@ def render_supervision(
         ])
     else:
         palette = sv.ColorPalette([
-            sv.Color(r=c[0], g=c[1], b=c[2]) for c in FARM_PALETTE
+            sv.Color(r=c[0], g=c[1], b=c[2]) for c in SOM_PALETTE
         ])
 
     # Apply annotators

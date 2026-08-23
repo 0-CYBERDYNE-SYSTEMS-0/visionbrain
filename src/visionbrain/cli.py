@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VisionBrain CLI — farmer-friendly interface to agricultural vision AI.
+"""VisionBrain CLI — operator-friendly interface to vision AI on Apple Silicon.
 
 Usage:
     visionbrain detect  --image <path> --query <expression>
@@ -99,7 +99,7 @@ def cmd_segment(args: argparse.Namespace) -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def cmd_ocr(args: argparse.Namespace) -> None:
-    """Read text from an image (ear tags, brand markings, signage)."""
+    """Read text from an image (signage, labels, markings)."""
     from .loader import falcon_perception_record
     from .fp_inference import ocr
 
@@ -596,7 +596,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         question = args.question or (
             f"What are the key findings from this drone footage? "
             f"Focus on: {semantic_question}. Identify individual objects, their movement patterns, "
-            f"anomalies, and anything a farmer or rancher should act on."
+            f"anomalies, and anything the operator should act on."
         )
         resp = gemma_ask(question, detections=[], frame_history=frame_data, max_tokens=args.max_tokens)
         print(f"  → Answer ({resp.stats.generation_tokens} tokens, {resp.stats.decode_ms/1000:.1f}s):")
@@ -713,7 +713,7 @@ def cmd_fastscan(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="VisionBrain — Agricultural vision AI on Apple Silicon",
+        description="VisionBrain — Vision AI on Apple Silicon",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -728,7 +728,7 @@ def main() -> None:
     # detect
     p = sub.add_parser("detect", help="Detect objects with bounding boxes (fast)")
     p.add_argument("--image", required=True, help="Input image path")
-    p.add_argument("--query", required=True, help="Natural-language expression, e.g. 'cow'")
+    p.add_argument("--query", required=True, help="Natural-language expression, e.g. 'person'")
     p.add_argument("--max-tokens", type=int, default=200, help="Token budget (default 200)")
     p.add_argument("--output", help="Save annotated image to this path")
 
@@ -748,7 +748,7 @@ def main() -> None:
     # sam3
     p = sub.add_parser("sam3", help="SAM 3.1 multi-prompt detection (requires SAM 3.1 weights)")
     p.add_argument("--image", required=True, help="Input image path")
-    p.add_argument("--prompts", required=True, nargs="+", help="Text prompts, e.g. cow sheep fence")
+    p.add_argument("--prompts", required=True, nargs="+", help="Text prompts, e.g. person car bicycle")
     p.add_argument("--task", choices=["detect", "segment"], default="detect")
     p.add_argument("--threshold", type=float, default=0.15)
     p.add_argument("--resolution", type=int, default=1008)
@@ -768,7 +768,7 @@ def main() -> None:
     # analyze
     p = sub.add_parser("analyze", help="Full pipeline: SAM 3.1 track → Gemma 4 reasoning → report")
     p.add_argument("--video", required=True, help="Input video path")
-    p.add_argument("--query", required=True, help="Natural-language query (e.g. 'cattle in the pasture')")
+    p.add_argument("--query", required=True, help="Natural-language query (e.g. 'vehicles near the gate')")
     p.add_argument("--prompts", nargs="+", help="SAM 3.1 text prompts to track (default: use --query)")
     p.add_argument("--output", help="Output video path (requires --include-video, defaults to disabled)")
     p.add_argument("--include-video", action="store_true",
@@ -819,7 +819,7 @@ def main() -> None:
     # fastscan
     p = sub.add_parser("fastscan", help="Fast Falcon-only scan: quick relevance answer in seconds")
     p.add_argument("--video", required=True, help="Input video path")
-    p.add_argument("--query", required=True, help="Natural-language query (e.g. 'cattle')")
+    p.add_argument("--query", required=True, help="Natural-language query (e.g. 'person')")
     p.add_argument("--every", type=float, default=5.0,
                    help="Sample one frame every N seconds (default 5)")
     p.add_argument("--max-frames", type=int, default=60,
