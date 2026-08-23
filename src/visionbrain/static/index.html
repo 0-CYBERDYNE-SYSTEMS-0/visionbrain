@@ -291,6 +291,51 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
 ::selection{background:var(--accent-low);color:var(--ink-1)}
 :focus-visible{outline:1px solid var(--accent);outline-offset:2px}
 </style>
+
+<!-- ══════════════════════════════════════════════════════════════
+     PROTOTYPE (throwaway) — mission-setup layout variants A/B/C.
+     Question: where should the per-mission query fields + launch live?
+     Switchable via ?variant=a|b|c on this same route. Default load
+     (no param) is the production layout, byte-for-byte untouched.
+     ══════════════════════════════════════════════════════════════ -->
+<style id="proto-style">
+/* ── A · command bar: query + launch move to top of center column ── */
+#proto-cmdbar{display:none;gap:10px;align-items:center;padding:12px 16px;background:var(--surface-2);border-bottom:1px solid var(--rule);flex-shrink:0}
+body.proto-a #proto-cmdbar{display:flex}
+body.proto-a #proto-cmdbar .cf{flex:1;flex-direction:row;align-items:center;gap:12px;margin:0}
+body.proto-a #proto-cmdbar .cf label{font-size:9px}
+body.proto-a #proto-cmdbar .cf input[type=text]{height:32px;font-size:12.5px;padding:4px 10px}
+body.proto-a #proto-cmdbar .btn-launch{width:auto;min-width:132px;height:32px;margin-left:auto}
+
+/* ── B · rail priority: setup owns the rail, log demoted, sticky launch ── */
+body.proto-b #mission-setup{max-height:none;flex:1 1 auto}
+body.proto-b #ops-log-wrap{flex:0 0 148px}
+body.proto-b .result-section{max-height:34%}
+body.proto-b #setup-panes .btn-launch{position:sticky;bottom:0;z-index:2;background:var(--surface-2)}
+
+/* ── C · bottom console: full-width query strip, advanced drawer ── */
+#proto-console{display:none;position:fixed;left:0;right:0;bottom:0;height:58px;z-index:50;background:var(--surface-3);border-top:1px solid var(--accent);align-items:center;gap:12px;padding:0 16px}
+body.proto-c #proto-console{display:flex}
+body.proto-c #app{padding-bottom:58px}
+#proto-console .cf{flex:1;flex-direction:row;align-items:center;gap:12px;margin:0}
+#proto-console .cf label{font-size:9px}
+#proto-console .cf input[type=text]{height:34px;font-size:13px;padding:4px 10px}
+#proto-console .btn-launch{width:auto;min-width:132px;height:34px;margin:0}
+.btn-proto-adv{font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;height:28px;padding:0 12px;background:transparent;border:1px solid var(--rule-strong);color:var(--ink-2);cursor:pointer;border-radius:2px}
+.btn-proto-adv:hover{border-color:var(--accent);color:var(--accent)}
+body.proto-c #mission-setup{display:none;position:fixed;right:14px;bottom:70px;width:376px;max-height:min(62vh,540px);z-index:49;border:1px solid var(--rule-strong);background:var(--surface-2)}
+body.proto-c #mission-setup.proto-open{display:flex}
+body.proto-c #mission-setup .ph{cursor:pointer}
+body.proto-c #mission-setup .ph:hover{color:var(--accent)}
+
+/* ── floating switcher (all variants; obviously not part of the design) ── */
+#proto-switch{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:200;display:none;align-items:center;gap:12px;background:#f2eddf;color:#17190f;border:1px solid #17190f;border-radius:999px;padding:7px 14px;font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:.06em;box-shadow:0 2px 10px rgba(0,0,0,.5);user-select:none}
+body.proto-a #proto-switch,body.proto-b #proto-switch,body.proto-c #proto-switch{display:flex}
+body.proto-c #proto-switch{bottom:72px}
+#proto-switch span{min-width:170px;text-align:center}
+#proto-switch b{cursor:pointer;padding:2px 8px;font-size:13px;line-height:1}
+#proto-switch b:hover{background:#17190f;color:#f2eddf;border-radius:999px}
+</style>
 </head>
 <body>
 <div id="app">
@@ -1457,6 +1502,70 @@ function stopMissionTicker() {
   S.mission.timerId = null;
   S.mission.running = false;
 }
+</script>
+
+<!-- ═══ PROTOTYPE (throwaway) — variant wiring + floating switcher. Remove with #proto-style. ═══ -->
+<div id="proto-cmdbar" aria-hidden="true"></div>
+
+<div id="proto-console">
+  <span style="font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:.18em;color:var(--ink-4)">MISSION</span>
+  <!-- query .cf + launch button are moved here at runtime in variant C -->
+  <button class="btn-proto-adv" id="proto-adv">⚙ advanced</button>
+</div>
+
+<div id="proto-switch"><b id="proto-prev">◀</b><span id="proto-lbl"></span><b id="proto-next">▶</b></div>
+
+<script>
+/* ═══ PROTOTYPE (throwaway) ═══ */
+(function () {
+  var qp = new URLSearchParams(location.search);
+  var v = (qp.get('variant') || '').toLowerCase();
+  if (['a', 'b', 'c'].indexOf(v) === -1) return;   // no param → production layout, untouched
+  document.body.classList.add('proto-' + v);
+
+  var NAMES = { a: 'A — command bar', b: 'B — rail priority', c: 'C — bottom console' };
+  var lbl = document.getElementById('proto-lbl');
+  lbl.textContent = NAMES[v];
+
+  function cycle(d) {
+    var order = ['a', 'b', 'c'];
+    var next = order[(order.indexOf(v) + d + order.length) % order.length];
+    qp.set('variant', next);
+    location.replace(location.pathname + '?' + qp.toString());
+  }
+  document.getElementById('proto-prev').onclick = function () { cycle(-1); };
+  document.getElementById('proto-next').onclick = function () { cycle(1); };
+  document.addEventListener('keydown', function (e) {
+    var t = document.activeElement;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+    if (e.key === 'ArrowRight') cycle(1);
+    else if (e.key === 'ArrowLeft') cycle(-1);
+  });
+
+  var queryRow  = document.querySelector('#cfg-analyze .cf');      // the QUERY field row
+  var launchBtn = document.getElementById('btn-launch-analyze');
+
+  if (v === 'a') {
+    var main = document.getElementById('main');
+    var bar = document.getElementById('proto-cmdbar');   // static div sits outside #app — move it in
+    main.insertBefore(bar, main.firstChild);
+    bar.appendChild(queryRow);
+    bar.appendChild(launchBtn);
+  }
+
+  if (v === 'c') {
+    var con = document.getElementById('proto-console');
+    var adv = document.getElementById('proto-adv');
+    con.insertBefore(queryRow, adv);
+    con.insertBefore(launchBtn, adv);
+    document.getElementById('mission-setup').classList.add('proto-drawer');
+    var setup = document.getElementById('mission-setup');
+    adv.onclick = function () { setup.classList.toggle('proto-open'); };
+    setup.querySelector('.ph').title = 'click to close';
+    setup.querySelector('.ph').onclick = function () { setup.classList.remove('proto-open'); };
+    setup.classList.add('proto-open');   // open on first load so the drawer is discoverable
+  }
+})();
 </script>
 </body>
 </html>

@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VisionBrain — Workspace Cleanup Explainer</title>
+<style>
+  :root{
+    --bg:#0d0f0c; --panel:#14170f; --panel2:#191d13; --rule:#2a2e21;
+    --ink:#e8e6df; --dim:#9a988c; --faint:#6b6a60;
+    --gold:#d4b572; --red:#e06c5a; --amber:#d9a441; --green:#7fb069; --blue:#6c9bd1;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--mono);font-size:13.5px;line-height:1.65;
+       background-image:radial-gradient(circle,rgba(212,181,114,.04) 1px,transparent 1px);
+       background-size:26px 26px;padding:34px 20px 80px}
+  .wrap{max-width:960px;margin:0 auto}
+  header h1{font-size:21px;letter-spacing:.04em}
+  header h1 em{color:var(--gold);font-style:normal}
+  header p{color:var(--dim);margin-top:6px;font-size:12px}
+  .badge-date{display:inline-block;margin-top:10px;border:1px solid var(--rule);border-radius:3px;
+              padding:3px 10px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
+  h2{font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:var(--gold);
+     margin:42px 0 14px;border-bottom:1px solid var(--rule);padding-bottom:8px}
+
+  /* snapshot cards */
+  .snap{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+  .card{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:14px 16px}
+  .card .k{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint)}
+  .card .v{font-size:17px;margin-top:6px}
+  .card .n{font-size:11px;color:var(--dim);margin-top:4px}
+  .ok{color:var(--green)} .warn{color:var(--amber)} .bad{color:var(--red)}
+
+  /* cleanup items */
+  .item{background:var(--panel);border:1px solid var(--rule);border-left:3px solid var(--dim);
+        border-radius:6px;padding:16px 18px;margin-bottom:14px}
+  .item.p1{border-left-color:var(--red)} .item.p2{border-left-color:var(--amber)}
+  .item.p3{border-left-color:var(--amber)} .item.p4{border-left-color:var(--blue)}
+  .item.p5{border-left-color:var(--gold)} .item.p6{border-left-color:var(--faint)}
+  .item-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .pri{font-size:10px;font-weight:700;letter-spacing:.14em;border-radius:3px;padding:2px 8px}
+  .pri.p1{background:rgba(224,108,90,.15);color:var(--red)}
+  .pri.p2,.pri.p3{background:rgba(217,164,65,.15);color:var(--amber)}
+  .pri.p4{background:rgba(108,155,209,.15);color:var(--blue)}
+  .pri.p5{background:rgba(212,181,114,.15);color:var(--gold)}
+  .pri.p6{background:rgba(107,106,96,.15);color:var(--dim)}
+  .item-head h3{font-size:14px;font-weight:600}
+  .item p{color:var(--dim);margin-top:8px;font-size:12.5px}
+  .item p b{color:var(--ink)}
+  code.i{background:var(--panel2);border:1px solid var(--rule);border-radius:3px;
+         padding:1px 6px;font-size:12px;color:var(--gold)}
+  pre{background:#101309;border:1px solid var(--rule);border-radius:5px;padding:12px 14px;
+      margin-top:10px;overflow-x:auto;font-size:12px;line-height:1.7;color:#cfcdc2}
+  pre .c{color:var(--faint)} pre .p{color:var(--gold)}
+  .danger{background:rgba(224,108,90,.08);border:1px solid rgba(224,108,90,.35);border-radius:5px;
+          padding:10px 14px;margin-top:10px;font-size:12px;color:var(--red)}
+
+  /* footer strips */
+  .strip{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:16px 18px;margin-bottom:14px}
+  .strip h3{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink);margin-bottom:8px}
+  .strip ul{list-style:none}
+  .strip li{padding:3px 0 3px 18px;position:relative;color:var(--dim);font-size:12.5px}
+  .strip li::before{content:'▸';position:absolute;left:0;color:var(--gold)}
+  .order{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+  .step{background:var(--panel2);border:1px solid var(--rule);border-radius:4px;padding:6px 12px;font-size:12px}
+  .step b{color:var(--gold)}
+  .arrow{color:var(--faint);align-self:center}
+  footer{margin-top:46px;color:var(--faint);font-size:11px;border-top:1px solid var(--rule);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>VisionBrain <em>/</em> Workspace Cleanup Explainer</h1>
+  <p>What needs tidying, why it matters, and the exact commands — every fact below was verified against the live repo.</p>
+  <span class="badge-date">Audit · <script>document.write(new Date().toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}))</script></span>
+</header>
+
+<h2>Snapshot</h2>
+<div class="snap">
+  <div class="card">
+    <div class="k">Git working tree</div>
+    <div class="v warn">17 modified</div>
+    <div class="n">+319 / −251 lines · 0 untracked files</div>
+  </div>
+  <div class="card">
+    <div class="k">Test suite</div>
+    <div class="v ok">GREEN</div>
+    <div class="n">19 passed, 3 skipped (.venv, Python 3.14)</div>
+  </div>
+  <div class="card">
+    <div class="k">Cache junk on disk</div>
+    <div class="v">~cosmetic</div>
+    <div class="n">.DS_Store ×3 · __pycache__ ×2 · .pytest_cache — all gitignored</div>
+  </div>
+  <div class="card">
+    <div class="k">Virtualenv</div>
+    <div class="v ok">997 MB — KEEP</div>
+    <div class="n">mlx + mlx_vlm + supervision live here</div>
+  </div>
+</div>
+
+<h2>Cleanup items, in priority order</h2>
+
+<div class="item p1">
+  <div class="item-head"><span class="pri p1">P1</span><h3>Land the 17 uncommitted modified files</h3></div>
+  <p>This <b>is</b> the cleanup. The tree holds the post-branding-merge work: doc refreshes
+  (<code class="i">AGENTS.md</code>, <code class="i">SPEC.md</code>, <code class="i">README.md</code>,
+  <code class="i">FAST_PIPELINE_SPEC.md</code>), a 255-line <code class="i">static/index.html</code> rework,
+  and edits across nearly every inference module. Nothing is untracked, so one review-and-commit closes it out.</p>
+  <pre><span class="c"># review, verify, land</span>
+<span class="p">git</span> diff --stat
+<span class="p">.venv/bin/python</span> -m pytest tests/ -q      <span class="c"># expect: 19 passed, 3 skipped</span>
+<span class="p">git</span> add -A
+<span class="p">git</span> commit -m <span class="p">"Refresh docs, UI, and inference modules after branding merge"</span></pre>
+  <p>Tip: do P2–P4 first so those fixes ride along in the same clean commit.</p>
+</div>
+
+<div class="item p2">
+  <div class="item-head"><span class="pri p2">P2</span><h3>Delete the dead <code style="all:unset;font-weight:600;">cmd_fastscan</code> duplicate in frame_selector.py</h3></div>
+  <p>The CLI dispatch table calls the <code class="i">cli.py:667</code> definition. The copy at
+  <code class="i">frame_selector.py:385</code> is <b>never invoked</b> — classic trap for future edits landing
+  in the wrong function. Remove ~lines 380–427 (keep <code class="i">score_frames()</code>; that part is used).</p>
+</div>
+
+<div class="item p3">
+  <div class="item-head"><span class="pri p3">P3</span><h3>Resolve the implementation-notes filename collision</h3></div>
+  <p><code class="i">IMPLEMENTATION_NOTES.md</code> (Tier 2 run-state feedback, 2 KB) and
+  <code class="i">implementation-notes.md</code> (Options A+B pipeline, 8.8 KB) differ <b>only by letter case</b>.
+  Git tracks both, but default macOS/Windows filesystems are case-insensitive — cloning there makes them
+  collide and clobber each other. Rename the lowercase one, e.g.
+  <code class="i">IMPLEMENTATION_NOTES_FAST_PIPELINE.md</code>, or fold its content into
+  <code class="i">FAST_PIPELINE_SPEC.md</code>. AGENTS.md references the glob
+  <code class="i">IMPLEMENTATION_NOTES*.md</code>, so any kept name stays valid.</p>
+  <pre><span class="p">git</span> mv implementation-notes.md IMPLEMENTATION_NOTES_FAST_PIPELINE.md</pre>
+</div>
+
+<div class="item p4">
+  <div class="item-head"><span class="pri p4">P4</span><h3>Finish the rebrand inside pyproject.toml</h3></div>
+  <p>Description still reads <b>"Agricultural vision intelligence … livestock, crops"</b> and authors say
+  <b>"FarmFriend / Cyberdyne Systems"</b> — legacy wording the domain-neutral-copy rule bans everywhere else.
+  One-line fix each:</p>
+  <pre>description = <span class="p">"Aerial &amp; camera vision intelligence — on-device AI for drone and CCTV footage"</span>
+authors = [{name = <span class="p">"VisionBrain contributors"</span>}]</pre>
+</div>
+
+<div class="item p5">
+  <div class="item-head"><span class="pri p5">P5</span><h3>Sweep cache junk (optional — already gitignored)</h3></div>
+  <p>Pure disk hygiene; none of it is tracked by git.</p>
+  <pre><span class="p">find</span> . -name <span class="p">'.DS_Store'</span> -not -path './.venv/*' -delete
+<span class="p">find</span> . -type d -name <span class="p">'__pycache__'</span> -not -path './.venv/*' -exec rm -rf {} +
+<span class="p">rm</span> -rf .pytest_cache</pre>
+  <div class="danger">⚠ &nbsp;Do <b>NOT</b> run a blanket <b>git clean -xdX</b> or <b>-xdf</b> here —
+  <code class="i">.venv/</code> (997 MB of mlx/mlx_vlm/supervision) is gitignored too and would be vaporized.</div>
+</div>
+
+<div class="item p6">
+  <div class="item-head"><span class="pri p6">P6</span><h3>Delete this page when done</h3></div>
+  <p><code class="i">workspace-cleanup.html</code> is a throwaway deliverable sitting untracked in the repo root.
+  Remove it once the checklist above is done — otherwise it becomes the next cleanup item.</p>
+</div>
+
+<h2>Recommended order</h2>
+<div class="strip">
+  <div class="order">
+    <span class="step"><b>P5</b> junk sweep</span><span class="arrow">→</span>
+    <span class="step"><b>P2</b> drop dead fastscan</span><span class="arrow">→</span>
+    <span class="step"><b>P3</b> rename notes file</span><span class="arrow">→</span>
+    <span class="step"><b>P4</b> rebrand pyproject</span><span class="arrow">→</span>
+    <span class="step"><b>P1</b> run tests + commit all</span><span class="arrow">→</span>
+    <span class="step"><b>P6</b> delete this page</span>
+  </div>
+</div>
+
+<h2>Leave alone</h2>
+<div class="strip">
+  <ul>
+    <li><b>.venv/</b> — 997 MB MLX toolchain; deleting costs a full reinstall.</li>
+    <li><b>design-system/</b> — canonical UI tokens; entry point design-system/README.md.</li>
+    <li><b>assets/samples/</b> — one 40 KB sample image; harmless.</li>
+    <li><b>.github/workflows/ci.yml</b> — CI matrix verified correct (Ubuntu × 3.12/3.13).</li>
+    <li><b>Upstream Falcon-Perception repo</b> — read-only per project policy; never write back.</li>
+  </ul>
+</div>
+
+<footer>
+  Generated by ox-alpha during the /init audit session · facts verified: git status, pytest run,
+  grep/wc over source, CI config, and static/index.html layout inspection.
+</footer>
+
+</div>
+</body>
+</html>
