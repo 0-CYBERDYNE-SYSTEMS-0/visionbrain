@@ -9,7 +9,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400&family=Spectral:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&display=swap" rel="stylesheet">
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400&family=Spectral:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&display=swap');
 
 :root{
   /* Canvas + surfaces */
@@ -44,14 +43,6 @@
   --app-pad-right:max(var(--safe-right),var(--app-gutter-x));
   --app-pad-bottom:max(var(--safe-bottom),var(--app-gutter-y));
   --app-pad-left:max(var(--safe-left),var(--app-gutter-x));
-  /* Backward-compat aliases: legacy visionbrain var names mapped to the new system */
-  --void:var(--canvas);--base:var(--canvas);--surf:var(--surface-2);--card:var(--surface-3);--lift:var(--surface-4);
-  --bd:var(--rule);--bda:var(--rule-strong);--bdg:var(--ink-4);
-  --acc:var(--accent);--accd:var(--accent-deep);--accm:var(--accent-low);
-  --amr:var(--warn);--red:var(--err);--blu:var(--info);--prp:var(--accent-deep);
-  --tx:var(--ink-1);--txd:var(--ink-3);--txm:var(--ink-4);
-  --glow:transparent;--glows:transparent;--glowa:transparent;
-  --font-d:var(--font-mono);--font-u:var(--font-mono);--font-m:var(--font-mono);
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden;background:var(--canvas);color:var(--ink-1);font-family:var(--font-mono);font-size:13px;-webkit-font-smoothing:antialiased;font-feature-settings:'ss01','ss02','cv02','cv03','zero';text-rendering:optimizeLegibility}
@@ -151,7 +142,6 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
 #media-zone{flex:1;min-height:0;display:flex;flex-direction:column;position:relative}
 .video-wrap{flex:1;min-height:0;position:relative;background:var(--surface-2);overflow:hidden}
 .video-wrap video{width:100%;height:100%;object-fit:contain;display:block}
-.scanlines{display:none}
 .corner{position:absolute;width:16px;height:16px;z-index:2}
 .corner.tl{top:6px;left:6px;border-top:1.5px solid var(--accent);border-left:1.5px solid var(--accent)}
 .corner.tr{top:6px;right:6px;border-top:1.5px solid var(--accent);border-right:1.5px solid var(--accent)}
@@ -159,7 +149,6 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
 .corner.br{bottom:6px;right:6px;border-bottom:1.5px solid var(--accent);border-right:1.5px solid var(--accent)}
 #video-result{flex:1;min-height:0;display:flex;flex-direction:column;padding:16px 20px 10px;gap:10px}
 #image-result{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:14px}
-#ri{max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--rule)}
 
 .vid-hud{display:flex;gap:26px;flex-shrink:0;padding:0 4px}
 .hud-item{display:flex;flex-direction:column;gap:1px}
@@ -173,7 +162,7 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
 .mr-head{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid var(--rule);padding-bottom:14px}
 .mr-title{font-family:var(--font-mono);font-size:12px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--accent)}
 .mr-file{font-family:var(--font-mono);font-size:10px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60%}
-.mr-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--rule)}
+.mr-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--rule)}
 .mr-cell{background:var(--surface-3);padding:12px}
 .mr-lbl{font-family:var(--font-mono);font-size:8px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-4);margin-bottom:5px}
 .mr-val{font-family:var(--font-mono);font-size:15px;color:var(--ink-1);font-variant-numeric:tabular-nums;min-height:18px}
@@ -279,9 +268,6 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
 .btn-launch:disabled{opacity:.4;cursor:not-allowed}
 .btn-launch.running{border-color:var(--warn);color:var(--warn);background:rgba(200,151,102,.06);cursor:wait}
 
-/* ════════ FLASH (retired - calm motion) ════════ */
-#flash{display:none!important}
-
 /* ════════ SCROLLBARS ════════ */
 *::-webkit-scrollbar{width:6px;height:6px}
 *::-webkit-scrollbar-track{background:transparent}
@@ -292,56 +278,9 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
 :focus-visible{outline:1px solid var(--accent);outline-offset:2px}
 </style>
 
-<!-- ══════════════════════════════════════════════════════════════
-     PROTOTYPE (throwaway) — mission-setup layout variants A/B/C.
-     Question: where should the per-mission query fields + launch live?
-     Switchable via ?variant=a|b|c on this same route. Default load
-     (no param) is the production layout, byte-for-byte untouched.
-     ══════════════════════════════════════════════════════════════ -->
-<style id="proto-style">
-/* ── A · command bar: query + launch move to top of center column ── */
-#proto-cmdbar{display:none;gap:10px;align-items:center;padding:12px 16px;background:var(--surface-2);border-bottom:1px solid var(--rule);flex-shrink:0}
-body.proto-a #proto-cmdbar{display:flex}
-body.proto-a #proto-cmdbar .cf{flex:1;flex-direction:row;align-items:center;gap:12px;margin:0}
-body.proto-a #proto-cmdbar .cf label{font-size:9px}
-body.proto-a #proto-cmdbar .cf input[type=text]{height:32px;font-size:12.5px;padding:4px 10px}
-body.proto-a #proto-cmdbar .btn-launch{width:auto;min-width:132px;height:32px;margin-left:auto}
-
-/* ── B · rail priority: setup owns the rail, log demoted, sticky launch ── */
-body.proto-b #mission-setup{max-height:none;flex:1 1 auto}
-body.proto-b #ops-log-wrap{flex:0 0 148px}
-body.proto-b .result-section{max-height:34%}
-body.proto-b #setup-panes .btn-launch{position:sticky;bottom:0;z-index:2;background:var(--surface-2)}
-
-/* ── C · bottom console: full-width query strip, advanced drawer ── */
-#proto-console{display:none;position:fixed;left:0;right:0;bottom:0;height:58px;z-index:50;background:var(--surface-3);border-top:1px solid var(--accent);align-items:center;gap:12px;padding:0 16px}
-body.proto-c #proto-console{display:flex}
-body.proto-c #app{padding-bottom:58px}
-#proto-console .cf{flex:1;flex-direction:row;align-items:center;gap:12px;margin:0}
-#proto-console .cf label{font-size:9px}
-#proto-console .cf input[type=text]{height:34px;font-size:13px;padding:4px 10px}
-#proto-console .btn-launch{width:auto;min-width:132px;height:34px;margin:0}
-.btn-proto-adv{font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;height:28px;padding:0 12px;background:transparent;border:1px solid var(--rule-strong);color:var(--ink-2);cursor:pointer;border-radius:2px}
-.btn-proto-adv:hover{border-color:var(--accent);color:var(--accent)}
-body.proto-c #mission-setup{display:none;position:fixed;right:14px;bottom:70px;width:376px;max-height:min(62vh,540px);z-index:49;border:1px solid var(--rule-strong);background:var(--surface-2)}
-body.proto-c #mission-setup.proto-open{display:flex}
-body.proto-c #mission-setup .ph{cursor:pointer}
-body.proto-c #mission-setup .ph:hover{color:var(--accent)}
-
-/* ── floating switcher (all variants; obviously not part of the design) ── */
-#proto-switch{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:200;display:none;align-items:center;gap:12px;background:#f2eddf;color:#17190f;border:1px solid #17190f;border-radius:999px;padding:7px 14px;font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:.06em;box-shadow:0 2px 10px rgba(0,0,0,.5);user-select:none}
-body.proto-a #proto-switch,body.proto-b #proto-switch,body.proto-c #proto-switch{display:flex}
-body.proto-c #proto-switch{bottom:72px}
-#proto-switch span{min-width:170px;text-align:center}
-#proto-switch b{cursor:pointer;padding:2px 8px;font-size:13px;line-height:1}
-#proto-switch b:hover{background:#17190f;color:#f2eddf;border-radius:999px}
-</style>
 </head>
 <body>
 <div id="app">
-
-<!-- ══════════════════════ FLASH ══════════════════════ -->
-<div id="flash" aria-hidden="true"></div>
 
 <!-- ══════════════════════ HEADER ══════════════════════ -->
 <header id="hdr">
@@ -424,7 +363,6 @@ body.proto-c #proto-switch{bottom:72px}
           <div class="mr-grid">
             <div class="mr-cell"><div class="mr-lbl">PHASE</div><div class="mr-val" id="mr-phase">starting</div></div>
             <div class="mr-cell"><div class="mr-lbl">ELAPSED</div><div class="mr-val" id="mr-elapsed">0s</div></div>
-            <div class="mr-cell"><div class="mr-lbl">HEARTBEAT</div><div class="mr-val" id="mr-hb">fresh</div></div>
             <div class="mr-cell"><div class="mr-lbl">PROGRESS</div><div class="mr-val" id="mr-prog">0%</div></div>
           </div>
           <div class="mr-log" id="mr-latest">Waiting for subprocess output…</div>
@@ -435,7 +373,6 @@ body.proto-c #proto-switch{bottom:72px}
             <div class="corner tl"></div><div class="corner tr"></div>
             <div class="corner bl"></div><div class="corner br"></div>
             <video id="rv" controls></video>
-            <div class="scanlines"></div>
             <div id="progress-wrap"><div id="progress-bar"></div></div>
           </div>
           <div class="vid-hud">
@@ -468,7 +405,7 @@ body.proto-c #proto-switch{bottom:72px}
     <!-- ■ DETECT TAB -->
     <div class="tab-pane" id="tab-detect">
       <div id="image-result-detect" style="display:none;flex:1;min-height:0;padding:14px">
-        <img id="ri-detect" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--bd)">
+        <img id="ri-detect" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--rule)">
       </div>
       <div class="drop-zone" id="dz-detect" ondragover="dzDragOver(event,'detect')" ondragleave="dzDragLeave('detect')" ondrop="dzDrop(event,'detect')" onclick="dzClick('detect')">
         <div class="dz-icon">◈</div>
@@ -482,7 +419,7 @@ body.proto-c #proto-switch{bottom:72px}
     <!-- ■ SEGMENT TAB -->
     <div class="tab-pane" id="tab-segment">
       <div id="image-result-segment" style="display:none;flex:1;min-height:0;padding:14px">
-        <img id="ri-segment" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--bd)">
+        <img id="ri-segment" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--rule)">
       </div>
       <div class="drop-zone" id="dz-segment" ondragover="dzDragOver(event,'segment')" ondragleave="dzDragLeave('segment')" ondrop="dzDrop(event,'segment')" onclick="dzClick('segment')">
         <div class="dz-icon">⬟</div>
@@ -500,7 +437,6 @@ body.proto-c #proto-switch{bottom:72px}
           <div class="corner tl"></div><div class="corner tr"></div>
           <div class="corner bl"></div><div class="corner br"></div>
           <video id="rv-track" controls style="width:100%;height:100%;object-fit:contain"></video>
-          <div class="scanlines"></div>
         </div>
       </div>
       <div class="drop-zone" id="dz-track" ondragover="dzDragOver(event,'track')" ondragleave="dzDragLeave('track')" ondrop="dzDrop(event,'track')" onclick="dzClick('track')">
@@ -515,7 +451,7 @@ body.proto-c #proto-switch{bottom:72px}
     <!-- ■ SAM-3 TAB -->
     <div class="tab-pane" id="tab-sam3">
       <div id="image-result-sam3" style="display:none;flex:1;min-height:0;padding:14px">
-        <img id="ri-sam3" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--bd)">
+        <img id="ri-sam3" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--rule)">
       </div>
       <div class="drop-zone" id="dz-sam3" ondragover="dzDragOver(event,'sam3')" ondragleave="dzDragLeave('sam3')" ondrop="dzDrop(event,'sam3')" onclick="dzClick('sam3')">
         <div class="dz-icon">⊕</div>
@@ -530,7 +466,7 @@ body.proto-c #proto-switch{bottom:72px}
     <div class="tab-pane" id="tab-ocr">
       <div id="ocr-output" style="display:none;flex:1;min-height:0;padding:14px 18px;overflow-y:auto">
         <div class="ph" style="padding:0 0 8px 0;border:none">EXTRACTED TEXT</div>
-        <pre id="ocr-text" style="font-family:var(--font-m);font-size:11px;color:var(--tx);white-space:pre-wrap;line-height:1.7"></pre>
+        <pre id="ocr-text" style="font-family:var(--font-mono);font-size:11px;color:var(--ink-1);white-space:pre-wrap;line-height:1.7"></pre>
       </div>
       <div class="drop-zone" id="dz-ocr" ondragover="dzDragOver(event,'ocr')" ondragleave="dzDragLeave('ocr')" ondrop="dzDrop(event,'ocr')" onclick="dzClick('ocr')">
         <div class="dz-icon">⊞</div>
@@ -562,44 +498,32 @@ body.proto-c #proto-switch{bottom:72px}
     <!-- ANALYZE CONFIG -->
     <div class="cfg-pane active" id="cfg-analyze">
       <div class="cf"><label>QUERY</label><input type="text" id="c-query" value="people and vehicles"></div>
-      <div class="cf n3"><label>PROMPTS</label><input type="text" id="c-prompts" value="person vehicle animal"></div>
-      <div class="cf n1">
+      <div class="cf"><label>PROMPTS</label><input type="text" id="c-prompts" value="person vehicle animal"></div>
+      <div class="cf">
         <label>THRESHOLD</label>
         <div class="range-row"><input type="range" id="c-thresh" min="0.01" max="0.5" step="0.01" value="0.05" oninput="document.getElementById('c-thresh-v').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-thresh-v">0.05</span></div>
       </div>
-      <div class="cf n0"><label>RES</label>
+      <div class="cf"><label>RES</label>
         <select id="c-res"><option value="512" selected>512</option><option value="756">756</option><option value="1008">1008</option></select>
       </div>
-      <div class="cf n0"><label>EVERY</label>
+      <div class="cf"><label>EVERY</label>
         <select id="c-every"><option value="1">1F</option><option value="2">2F</option><option value="3">3F</option><option value="5" selected>5F</option><option value="10">10F</option></select>
       </div>
-      <div class="cf n0"><label>REPORT</label>
+      <div class="cf"><label>REPORT</label>
         <select id="c-rtype"><option value="field" selected>FIELD</option><option value="brief">BRIEF</option><option value="json">JSON</option></select>
       </div>
       <div class="togs">
         <label class="tog"><input type="checkbox" id="c-report" checked><span>REPORT</span></label>
         <label class="tog"><input type="checkbox" id="c-falcon"><span>FALCON+</span></label>
         <label class="tog"><input type="checkbox" id="c-fast" onchange="toggleFastScan()"><span>FASTSCAN</span></label>
-        <label class="tog"><input type="checkbox" id="c-adaptive"><span>ADAPTIVE</span></label>
-        <label class="tog"><input type="checkbox" id="c-parallel" checked><span>PARALLEL</span></label>
       </div>
       <div id="fastscan-extra" style="display:none;margin-bottom:6px">
-        <div class="cf n0" style="flex-direction:row;align-items:center;gap:6px">
+        <div class="cf" style="flex-direction:row;align-items:center;gap:6px">
           <label style="font-size:9px;color:var(--ink-2)">PROPAGATE</label>
           <input type="number" id="c-propagate" value="0" min="0" max="20" style="width:48px;height:22px;font-size:11px">
           <span style="font-size:9px;color:var(--ink-2)">frames</span>
           <label style="font-size:9px;color:var(--ink-2);margin-left:8px">MIN-REL</label>
           <input type="number" id="c-min-rel" value="0.2" min="0" max="1" step="0.05" style="width:48px;height:22px;font-size:11px">
-        </div>
-      </div>
-      <div id="chunk-extra" style="margin-bottom:6px">
-        <div class="cf n0" style="flex-direction:row;align-items:center;gap:6px">
-          <label style="font-size:9px;color:var(--ink-2)">CHUNK</label>
-          <input type="number" id="c-chunk-dur" value="30" min="10" max="120" style="width:48px;height:22px;font-size:11px">
-          <span style="font-size:9px;color:var(--ink-2)">sec</span>
-          <label style="font-size:9px;color:var(--ink-2);margin-left:8px">OVERLAP</label>
-          <input type="number" id="c-chunk-overlap" value="3" min="0" max="10" style="width:48px;height:22px;font-size:11px">
-          <span style="font-size:9px;color:var(--ink-2)">sec</span>
         </div>
       </div>
       <div class="sep"></div>
@@ -610,7 +534,6 @@ body.proto-c #proto-switch{bottom:72px}
     <!-- DETECT CONFIG -->
     <div class="cfg-pane" id="cfg-detect">
       <div class="cf"><label>EXPRESSION QUERY</label><input type="text" id="c-det-query" value="person" placeholder="describe what to find…"></div>
-      <div class="cf n1"><label>MAX TOKENS</label><input type="number" id="c-det-tok" value="200" min="50" max="2000" style="height:24px"></div>
       <div class="sep"></div>
       <button class="btn-launch" id="btn-launch-detect" onclick="launchJob('detect')">▶ detect</button>
     </div>
@@ -618,7 +541,6 @@ body.proto-c #proto-switch{bottom:72px}
     <!-- SEGMENT CONFIG -->
     <div class="cfg-pane" id="cfg-segment">
       <div class="cf"><label>EXPRESSION QUERY</label><input type="text" id="c-seg-query" value="person" placeholder="describe what to segment…"></div>
-      <div class="cf n1"><label>MAX TOKENS</label><input type="number" id="c-seg-tok" value="2048" min="200" max="4096" style="height:24px"></div>
       <div class="sep"></div>
       <button class="btn-launch" id="btn-launch-segment" onclick="launchJob('segment')">▶ segment</button>
     </div>
@@ -626,19 +548,15 @@ body.proto-c #proto-switch{bottom:72px}
     <!-- TRACK CONFIG -->
     <div class="cfg-pane" id="cfg-track">
       <div class="cf"><label>TRACK PROMPTS</label><input type="text" id="c-trk-prompts" value="person" placeholder="person car animal…"></div>
-      <div class="cf n1">
+      <div class="cf">
         <label>THRESHOLD</label>
         <div class="range-row"><input type="range" id="c-trk-thresh" min="0.01" max="0.5" step="0.01" value="0.15" oninput="document.getElementById('c-trk-tv').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-trk-tv">0.15</span></div>
       </div>
-      <div class="cf n0"><label>RES</label>
+      <div class="cf"><label>RES</label>
         <select id="c-trk-res"><option value="512">512</option><option value="756">756</option><option value="1008" selected>1008</option></select>
       </div>
-      <div class="cf n0"><label>EVERY</label>
+      <div class="cf"><label>EVERY</label>
         <select id="c-trk-every"><option value="1">1F</option><option value="2" selected>2F</option><option value="3">3F</option><option value="5">5F</option></select>
-      </div>
-      <div class="cf n1">
-        <label>OPACITY</label>
-        <div class="range-row"><input type="range" id="c-trk-op" min="0.1" max="1" step="0.05" value="0.6" oninput="document.getElementById('c-trk-ov').textContent=parseFloat(this.value).toFixed(1)"><span class="rv" id="c-trk-ov">0.6</span></div>
       </div>
       <div class="sep"></div>
       <button class="btn-launch" id="btn-launch-track" onclick="launchJob('track')">▶ track</button>
@@ -647,14 +565,14 @@ body.proto-c #proto-switch{bottom:72px}
     <!-- SAM3 CONFIG -->
     <div class="cfg-pane" id="cfg-sam3">
       <div class="cf"><label>DETECTION PROMPTS</label><input type="text" id="c-sam-prompts" value="person" placeholder="person car bicycle…"></div>
-      <div class="cf n1">
+      <div class="cf">
         <label>THRESHOLD</label>
         <div class="range-row"><input type="range" id="c-sam-thresh" min="0.01" max="0.5" step="0.01" value="0.15" oninput="document.getElementById('c-sam-tv').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-sam-tv">0.15</span></div>
       </div>
-      <div class="cf n0"><label>RES</label>
+      <div class="cf"><label>RES</label>
         <select id="c-sam-res"><option value="512">512</option><option value="756">756</option><option value="1008" selected>1008</option></select>
       </div>
-      <div class="cf n1"><label>TASK</label>
+      <div class="cf"><label>TASK</label>
         <select id="c-sam-task"><option value="detect" selected>DETECT</option><option value="segment">SEGMENT</option></select>
       </div>
       <div class="sep"></div>
@@ -663,8 +581,6 @@ body.proto-c #proto-switch{bottom:72px}
   
     <!-- OCR CONFIG -->
     <div class="cfg-pane" id="cfg-ocr">
-      <div class="cf"><label>OCR QUESTION</label><input type="text" id="c-ocr-q" value="read all text in the image" placeholder="what text to extract…"></div>
-      <div class="sep"></div>
       <button class="btn-launch" id="btn-launch-ocr" onclick="launchJob('ocr')">▶ read text</button>
     </div>
   
@@ -770,7 +686,7 @@ async function checkStatus() {
       gr.style.color = 'var(--ok)';
     } else {
       gr.textContent = '○ offline';
-      gr.style.color = 'var(--red)';
+      gr.style.color = 'var(--err)';
     }
     const allReady = d.models.every(m => m.ready);
     const dot = document.getElementById('conn-dot');
@@ -923,27 +839,27 @@ async function launchJob(tab) {
     fd.append('falcon_refine',g('c-falcon').checked ? 'true' : 'false');
     fd.append('falcon_frames','6');
     fd.append('fast',          fast ? 'true' : 'false');
-    fd.append('adaptive',      g('c-adaptive').checked ? 'true' : 'false');
-    fd.append('parallel_falcon', g('c-parallel').checked ? 'true' : 'false');
+    // pinned former UI controls (removed from the panel; values = previous defaults)
+    fd.append('adaptive',      'false');
+    fd.append('parallel_falcon', 'true');
     fd.append('propagate',     fast ? g('c-propagate').value : '0');
     fd.append('relevance_filter', fast ? 'true' : 'false');
-    fd.append('chunk_duration', g('c-chunk-dur').value);
-    fd.append('chunk_overlap',  g('c-chunk-overlap').value);
+    fd.append('chunk_duration', '30');
+    fd.append('chunk_overlap',  '3');
   } else if (tab === 'detect') {
     fd.append('file_id', finfo.file_id);
     fd.append('query',      g('c-det-query').value);
-    fd.append('max_tokens', g('c-det-tok').value);
+    fd.append('max_tokens', '200');
   } else if (tab === 'segment') {
     fd.append('file_id', finfo.file_id);
     fd.append('query',      g('c-seg-query').value);
-    fd.append('max_tokens', g('c-seg-tok').value);
+    fd.append('max_tokens', '2048');
   } else if (tab === 'track') {
     fd.append('file_id', finfo.file_id);
     fd.append('prompts',   g('c-trk-prompts').value);
     fd.append('threshold', g('c-trk-thresh').value);
     fd.append('resolution',g('c-trk-res').value);
     fd.append('every',     g('c-trk-every').value);
-    fd.append('opacity',   g('c-trk-op').value);
   } else if (tab === 'sam3') {
     fd.append('file_id', finfo.file_id);
     fd.append('prompts',   g('c-sam-prompts').value);
@@ -952,7 +868,6 @@ async function launchJob(tab) {
     fd.append('task',      g('c-sam-task').value);
   } else if (tab === 'ocr') {
     fd.append('file_id', finfo.file_id);
-    fd.append('question',  g('c-ocr-q').value);
   }
 
   log(`launching ${tab} mission…`, 'h');
@@ -1105,7 +1020,6 @@ async function onJobDone(jid, tab, results) {
   log(tab === 'fastscan' ? 'complete · fastscan ready' : 'complete · report ready', 'h');
   log('────────────────────────────────', 'h');
 
-  triggerFlash();
   updateProgress(1);
 
   if (tab === 'analyze' || tab === 'track') {
@@ -1343,7 +1257,6 @@ function showRunningState(tab, filename) {
   g('mr-file').textContent = filename || 'mission input';
   g('mr-phase').textContent = 'starting';
   g('mr-elapsed').textContent = '0s';
-  g('mr-hb').textContent = 'fresh';
   g('mr-prog').textContent = '0%';
   g('mr-latest').textContent = 'Waiting for subprocess output…';
   g('mr-progress-bar').style.width = '0%';
@@ -1393,11 +1306,6 @@ function clearLog() {
   document.getElementById('ops-log').innerHTML = '';
   log('Log cleared.', 'i');
 }
-
-// ══════════════════════════════════════════════════════
-//  MISSION FLASH (retired — calm motion per design system)
-// ══════════════════════════════════════════════════════
-function triggerFlash() { /* no-op */ }
 
 // ══════════════════════════════════════════════════════
 //  DOWNLOAD / COPY
@@ -1483,11 +1391,9 @@ function updateMissionDisplay() {
   const mr = g('mission-run');
   if (!mr || mr.style.display === 'none') return;
   const now = Date.now()/1000;
-  const hbAge = S.mission.lastHeartbeatAt ? Math.max(0, now - S.mission.lastHeartbeatAt) : 999;
   const elapsed = S.mission.startedAt ? Math.max(0, now - S.mission.startedAt) : 0;
   g('mr-phase').textContent = S.mission.phase || 'running';
   g('mr-elapsed').textContent = elapsed.toFixed(0) + 's';
-  g('mr-hb').textContent = hbAge <= 3 ? 'fresh' : hbAge <= 10 ? 'quiet' : 'stale';
   g('mr-latest').textContent = S.mission.latest || 'Running…';
   updateProgress(S.mission.progress || 0);
 }
@@ -1502,70 +1408,6 @@ function stopMissionTicker() {
   S.mission.timerId = null;
   S.mission.running = false;
 }
-</script>
-
-<!-- ═══ PROTOTYPE (throwaway) — variant wiring + floating switcher. Remove with #proto-style. ═══ -->
-<div id="proto-cmdbar" aria-hidden="true"></div>
-
-<div id="proto-console">
-  <span style="font-family:var(--font-mono);font-size:9px;font-weight:600;letter-spacing:.18em;color:var(--ink-4)">MISSION</span>
-  <!-- query .cf + launch button are moved here at runtime in variant C -->
-  <button class="btn-proto-adv" id="proto-adv">⚙ advanced</button>
-</div>
-
-<div id="proto-switch"><b id="proto-prev">◀</b><span id="proto-lbl"></span><b id="proto-next">▶</b></div>
-
-<script>
-/* ═══ PROTOTYPE (throwaway) ═══ */
-(function () {
-  var qp = new URLSearchParams(location.search);
-  var v = (qp.get('variant') || '').toLowerCase();
-  if (['a', 'b', 'c'].indexOf(v) === -1) return;   // no param → production layout, untouched
-  document.body.classList.add('proto-' + v);
-
-  var NAMES = { a: 'A — command bar', b: 'B — rail priority', c: 'C — bottom console' };
-  var lbl = document.getElementById('proto-lbl');
-  lbl.textContent = NAMES[v];
-
-  function cycle(d) {
-    var order = ['a', 'b', 'c'];
-    var next = order[(order.indexOf(v) + d + order.length) % order.length];
-    qp.set('variant', next);
-    location.replace(location.pathname + '?' + qp.toString());
-  }
-  document.getElementById('proto-prev').onclick = function () { cycle(-1); };
-  document.getElementById('proto-next').onclick = function () { cycle(1); };
-  document.addEventListener('keydown', function (e) {
-    var t = document.activeElement;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
-    if (e.key === 'ArrowRight') cycle(1);
-    else if (e.key === 'ArrowLeft') cycle(-1);
-  });
-
-  var queryRow  = document.querySelector('#cfg-analyze .cf');      // the QUERY field row
-  var launchBtn = document.getElementById('btn-launch-analyze');
-
-  if (v === 'a') {
-    var main = document.getElementById('main');
-    var bar = document.getElementById('proto-cmdbar');   // static div sits outside #app — move it in
-    main.insertBefore(bar, main.firstChild);
-    bar.appendChild(queryRow);
-    bar.appendChild(launchBtn);
-  }
-
-  if (v === 'c') {
-    var con = document.getElementById('proto-console');
-    var adv = document.getElementById('proto-adv');
-    con.insertBefore(queryRow, adv);
-    con.insertBefore(launchBtn, adv);
-    document.getElementById('mission-setup').classList.add('proto-drawer');
-    var setup = document.getElementById('mission-setup');
-    adv.onclick = function () { setup.classList.toggle('proto-open'); };
-    setup.querySelector('.ph').title = 'click to close';
-    setup.querySelector('.ph').onclick = function () { setup.classList.remove('proto-open'); };
-    setup.classList.add('proto-open');   // open on first load so the drawer is discoverable
-  }
-})();
 </script>
 </body>
 </html>
