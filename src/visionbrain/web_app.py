@@ -162,6 +162,7 @@ async def job_analyze(
     falcon_refine:  bool  = Form(False),
     falcon_frames:  int   = Form(6),
     max_tokens:     int   = Form(512),
+    include_video:  bool  = Form(True),   # UI plays/downloads the annotated mp4
     # ── Fast-path + adaptive ────────────────────────────────
     fast:           bool  = Form(False),
     fast_output:    str   = Form(""),
@@ -198,6 +199,8 @@ async def job_analyze(
            "--max-tokens", str(max_tokens)]
     if report:
         cmd.append("--report")
+    if include_video:
+        cmd.append("--include-video")
     if falcon_refine:
         cmd += ["--falcon-refine", "--falcon-frames", str(falcon_frames)]
     if fast:
