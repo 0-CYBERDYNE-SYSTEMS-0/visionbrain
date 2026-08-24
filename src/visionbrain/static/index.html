@@ -293,11 +293,7 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
   </div>
   <nav id="mode-tabs">
     <button class="tab-btn active" data-tab="analyze">analyze</button>
-    <button class="tab-btn" data-tab="detect">detect</button>
-    <button class="tab-btn" data-tab="segment">segment</button>
-    <button class="tab-btn" data-tab="track">track</button>
-    <button class="tab-btn" data-tab="sam3">sam-3</button>
-    <button class="tab-btn" data-tab="ocr">ocr</button>
+    <button class="tab-btn" data-tab="inspect">inspect</button>
   </nav>
   <div id="conn-status">
     <div class="conn-dot" id="conn-dot"></div>
@@ -402,88 +398,27 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
       </div>
     </div>
 
-    <!-- ■ DETECT TAB -->
-    <div class="tab-pane" id="tab-detect">
-      <div id="image-result-detect" style="display:none;flex:1;min-height:0;padding:14px">
-        <img id="ri-detect" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--rule)">
+    <!-- ■ INSPECT TAB (image: detect · segment · sam3 · ocr) -->
+    <div class="tab-pane" id="tab-inspect">
+      <div id="image-result-inspect" style="display:none;flex:1;min-height:0;padding:14px">
+        <img id="ri-inspect" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--rule)">
       </div>
-      <div class="drop-zone" id="dz-detect" ondragover="dzDragOver(event,'detect')" ondragleave="dzDragLeave('detect')" ondrop="dzDrop(event,'detect')" onclick="dzClick('detect')">
-        <div class="dz-icon">◈</div>
-        <div class="dz-title">drop image</div>
-        <div class="dz-sub">PNG · JPG · JPEG · WEBP</div>
-        <div class="dz-file" id="dz-file-detect" style="display:none"></div>
-        <button class="btn-browse" onclick="event.stopPropagation();dzClick('detect')">browse files</button>
-      </div>
-    </div>
-
-    <!-- ■ SEGMENT TAB -->
-    <div class="tab-pane" id="tab-segment">
-      <div id="image-result-segment" style="display:none;flex:1;min-height:0;padding:14px">
-        <img id="ri-segment" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--rule)">
-      </div>
-      <div class="drop-zone" id="dz-segment" ondragover="dzDragOver(event,'segment')" ondragleave="dzDragLeave('segment')" ondrop="dzDrop(event,'segment')" onclick="dzClick('segment')">
-        <div class="dz-icon">⬟</div>
-        <div class="dz-title">drop image</div>
-        <div class="dz-sub">PNG · JPG · JPEG · WEBP</div>
-        <div class="dz-file" id="dz-file-segment" style="display:none"></div>
-        <button class="btn-browse" onclick="event.stopPropagation();dzClick('segment')">browse files</button>
-      </div>
-    </div>
-
-    <!-- ■ TRACK TAB -->
-    <div class="tab-pane" id="tab-track">
-      <div id="video-result-track" style="display:none;flex:1;min-height:0;padding:14px">
-        <div class="video-wrap" style="flex:1;min-height:0">
-          <div class="corner tl"></div><div class="corner tr"></div>
-          <div class="corner bl"></div><div class="corner br"></div>
-          <video id="rv-track" controls style="width:100%;height:100%;object-fit:contain"></video>
-        </div>
-      </div>
-      <div class="drop-zone" id="dz-track" ondragover="dzDragOver(event,'track')" ondragleave="dzDragLeave('track')" ondrop="dzDrop(event,'track')" onclick="dzClick('track')">
-        <div class="dz-icon">▷</div>
-        <div class="dz-title">drop video</div>
-        <div class="dz-sub">MP4 · MOV · AVI · WebM</div>
-        <div class="dz-file" id="dz-file-track" style="display:none"></div>
-        <button class="btn-browse" onclick="event.stopPropagation();dzClick('track')">browse files</button>
-      </div>
-    </div>
-
-    <!-- ■ SAM-3 TAB -->
-    <div class="tab-pane" id="tab-sam3">
-      <div id="image-result-sam3" style="display:none;flex:1;min-height:0;padding:14px">
-        <img id="ri-sam3" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--rule)">
-      </div>
-      <div class="drop-zone" id="dz-sam3" ondragover="dzDragOver(event,'sam3')" ondragleave="dzDragLeave('sam3')" ondrop="dzDrop(event,'sam3')" onclick="dzClick('sam3')">
-        <div class="dz-icon">⊕</div>
-        <div class="dz-title">drop image</div>
-        <div class="dz-sub">PNG · JPG · JPEG · WEBP</div>
-        <div class="dz-file" id="dz-file-sam3" style="display:none"></div>
-        <button class="btn-browse" onclick="event.stopPropagation();dzClick('sam3')">browse files</button>
-      </div>
-    </div>
-
-    <!-- ■ OCR TAB -->
-    <div class="tab-pane" id="tab-ocr">
       <div id="ocr-output" style="display:none;flex:1;min-height:0;padding:14px 18px;overflow-y:auto">
         <div class="ph" style="padding:0 0 8px 0;border:none">EXTRACTED TEXT</div>
         <pre id="ocr-text" style="font-family:var(--font-mono);font-size:11px;color:var(--ink-1);white-space:pre-wrap;line-height:1.7"></pre>
       </div>
-      <div class="drop-zone" id="dz-ocr" ondragover="dzDragOver(event,'ocr')" ondragleave="dzDragLeave('ocr')" ondrop="dzDrop(event,'ocr')" onclick="dzClick('ocr')">
-        <div class="dz-icon">⊞</div>
-        <div class="dz-title">drop image for ocr</div>
+      <div class="drop-zone" id="dz-inspect" ondragover="dzDragOver(event,'inspect')" ondragleave="dzDragLeave('inspect')" ondrop="dzDrop(event,'inspect')" onclick="dzClick('inspect')">
+        <div class="dz-icon">◈</div>
+        <div class="dz-title">drop image</div>
         <div class="dz-sub">PNG · JPG · JPEG · WEBP</div>
-        <div class="dz-file" id="dz-file-ocr" style="display:none"></div>
-        <button class="btn-browse" onclick="event.stopPropagation();dzClick('ocr')">browse files</button>
+        <div class="dz-file" id="dz-file-inspect" style="display:none"></div>
+        <button class="btn-browse" onclick="event.stopPropagation();dzClick('inspect')">browse files</button>
       </div>
     </div>
 
     <!-- Hidden file inputs -->
     <input type="file" id="fi-analyze" accept="video/*" hidden onchange="fileChosen('analyze',this)">
-    <input type="file" id="fi-detect"  accept="image/*" hidden onchange="fileChosen('detect',this)">
-    <input type="file" id="fi-segment" accept="image/*" hidden onchange="fileChosen('segment',this)">
-    <input type="file" id="fi-track"   accept="video/*" hidden onchange="fileChosen('track',this)">
-    <input type="file" id="fi-sam3"    accept="image/*" hidden onchange="fileChosen('sam3',this)">
-    <input type="file" id="fi-ocr"     accept="image/*" hidden onchange="fileChosen('ocr',this)">
+    <input type="file" id="fi-inspect" accept="image/*" hidden onchange="fileChosen('inspect',this)">
 
   </main>
 
@@ -495,95 +430,93 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
     <div class="ph">MISSION SETUP</div>
     <div id="setup-panes">
 
-    <!-- ANALYZE CONFIG -->
+    <!-- VIDEO CONFIG · modes: full mission | track only | fastscan -->
     <div class="cfg-pane active" id="cfg-analyze">
-      <div class="cf"><label>QUERY</label><input type="text" id="c-query" value="people and vehicles"></div>
-      <div class="cf"><label>PROMPTS</label><input type="text" id="c-prompts" value="person vehicle animal"></div>
-      <div class="cf">
-        <label>THRESHOLD</label>
-        <div class="range-row"><input type="range" id="c-thresh" min="0.01" max="0.5" step="0.01" value="0.05" oninput="document.getElementById('c-thresh-v').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-thresh-v">0.05</span></div>
+      <div class="cf"><label>MODE</label>
+        <select id="c-mode" onchange="switchMode(this.value)">
+          <option value="mission" selected>FULL MISSION</option>
+          <option value="track">TRACK ONLY</option>
+          <option value="fastscan">FASTSCAN</option>
+        </select>
       </div>
-      <div class="cf"><label>RES</label>
-        <select id="c-res"><option value="512" selected>512</option><option value="756">756</option><option value="1008">1008</option></select>
+      <div class="cf" id="row-query"><label>QUERY</label><input type="text" id="c-query" value="people and vehicles"></div>
+
+      <div id="mode-mission">
+        <div class="cf">
+          <label>THRESHOLD</label>
+          <div class="range-row"><input type="range" id="c-thresh" min="0.01" max="0.5" step="0.01" value="0.05" oninput="document.getElementById('c-thresh-v').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-thresh-v">0.05</span></div>
+        </div>
+        <div class="cf"><label>RES</label>
+          <select id="c-res"><option value="512" selected>512</option><option value="756">756</option><option value="1008">1008</option></select>
+        </div>
+        <div class="cf"><label>EVERY</label>
+          <select id="c-every"><option value="1">1F</option><option value="2">2F</option><option value="3">3F</option><option value="5" selected>5F</option><option value="10">10F</option></select>
+        </div>
+        <div class="cf"><label>REPORT</label>
+          <select id="c-rtype"><option value="field" selected>FIELD</option><option value="brief">BRIEF</option><option value="json">JSON</option></select>
+        </div>
+        <div class="togs">
+          <label class="tog"><input type="checkbox" id="c-report" checked><span>REPORT</span></label>
+          <label class="tog"><input type="checkbox" id="c-falcon"><span>FALCON+</span></label>
+        </div>
       </div>
-      <div class="cf"><label>EVERY</label>
-        <select id="c-every"><option value="1">1F</option><option value="2">2F</option><option value="3">3F</option><option value="5" selected>5F</option><option value="10">10F</option></select>
+
+      <div id="mode-track" style="display:none">
+        <div class="cf"><label>TRACK PROMPTS</label><input type="text" id="c-trk-prompts" value="person" placeholder="person car animal…"></div>
+        <div class="cf">
+          <label>THRESHOLD</label>
+          <div class="range-row"><input type="range" id="c-trk-thresh" min="0.01" max="0.5" step="0.01" value="0.15" oninput="document.getElementById('c-trk-tv').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-trk-tv">0.15</span></div>
+        </div>
+        <div class="cf"><label>RES</label>
+          <select id="c-trk-res"><option value="512">512</option><option value="756">756</option><option value="1008" selected>1008</option></select>
+        </div>
+        <div class="cf"><label>EVERY</label>
+          <select id="c-trk-every"><option value="1">1F</option><option value="2" selected>2F</option><option value="3">3F</option><option value="5">5F</option></select>
+        </div>
       </div>
-      <div class="cf"><label>REPORT</label>
-        <select id="c-rtype"><option value="field" selected>FIELD</option><option value="brief">BRIEF</option><option value="json">JSON</option></select>
+
+      <div id="mode-fastscan" style="display:none">
+        <div class="cf"><label>MIN-REL</label>
+          <input type="number" id="c-min-rel" value="0.2" min="0" max="1" step="0.05">
+        </div>
+        <div class="cf"><label>PROPAGATE</label>
+          <div class="range-row"><input type="number" id="c-propagate" value="0" min="0" max="20" style="width:64px"><span style="font-size:9px;color:var(--ink-2)">frames</span></div>
+        </div>
       </div>
-      <div class="togs">
-        <label class="tog"><input type="checkbox" id="c-report" checked><span>REPORT</span></label>
-        <label class="tog"><input type="checkbox" id="c-falcon"><span>FALCON+</span></label>
-        <label class="tog"><input type="checkbox" id="c-fast" onchange="toggleFastScan()"><span>FASTSCAN</span></label>
+
+      <div class="sep"></div>
+      <button class="btn-launch" id="btn-launch-analyze" onclick="launchVideo()">▶ launch</button>
+    </div>
+
+    <!-- IMAGE INSPECT CONFIG · auto-routed by task -->
+    <div class="cfg-pane" id="cfg-inspect">
+      <div class="cf"><label>TASK</label>
+        <select id="c-task" onchange="switchTask(this.value)">
+          <option value="auto" selected>AUTO</option>
+          <option value="detect">DETECT</option>
+          <option value="segment">SEGMENT</option>
+          <option value="sam3">SAM-3</option>
+          <option value="ocr">OCR</option>
+        </select>
       </div>
-      <div id="fastscan-extra" style="display:none;margin-bottom:6px">
-        <div class="cf" style="flex-direction:row;align-items:center;gap:6px">
-          <label style="font-size:9px;color:var(--ink-2)">PROPAGATE</label>
-          <input type="number" id="c-propagate" value="0" min="0" max="20" style="width:48px;height:22px;font-size:11px">
-          <span style="font-size:9px;color:var(--ink-2)">frames</span>
-          <label style="font-size:9px;color:var(--ink-2);margin-left:8px">MIN-REL</label>
-          <input type="number" id="c-min-rel" value="0.2" min="0" max="1" step="0.05" style="width:48px;height:22px;font-size:11px">
+      <div class="cf" id="row-insp-q"><label>EXPRESSION</label><input type="text" id="c-insp-q" value="person" placeholder="describe what to find…"></div>
+      <div id="task-sam3" style="display:none">
+        <div class="cf"><label>SAM PROMPTS</label><input type="text" id="c-sam-prompts" value="person" placeholder="person car bicycle…"></div>
+        <div class="cf">
+          <label>THRESHOLD</label>
+          <div class="range-row"><input type="range" id="c-sam-thresh" min="0.01" max="0.5" step="0.01" value="0.15" oninput="document.getElementById('c-sam-tv').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-sam-tv">0.15</span></div>
+        </div>
+        <div class="cf"><label>RES</label>
+          <select id="c-sam-res"><option value="512">512</option><option value="756">756</option><option value="1008" selected>1008</option></select>
+        </div>
+        <div class="cf"><label>SAM TASK</label>
+          <select id="c-sam-task"><option value="detect" selected>DETECT</option><option value="segment">SEGMENT</option></select>
         </div>
       </div>
       <div class="sep"></div>
-      <button class="btn-launch" id="btn-launch-analyze" onclick="launchJob('analyze')">▶ launch</button>
-      <button class="btn-launch" id="btn-launch-fastscan" onclick="launchFastscan()" style="display:none;background:var(--accent)">▶ fastscan</button>
+      <button class="btn-launch" id="btn-launch-inspect" onclick="launchInspect()">▶ run</button>
     </div>
-  
-    <!-- DETECT CONFIG -->
-    <div class="cfg-pane" id="cfg-detect">
-      <div class="cf"><label>EXPRESSION QUERY</label><input type="text" id="c-det-query" value="person" placeholder="describe what to find…"></div>
-      <div class="sep"></div>
-      <button class="btn-launch" id="btn-launch-detect" onclick="launchJob('detect')">▶ detect</button>
-    </div>
-  
-    <!-- SEGMENT CONFIG -->
-    <div class="cfg-pane" id="cfg-segment">
-      <div class="cf"><label>EXPRESSION QUERY</label><input type="text" id="c-seg-query" value="person" placeholder="describe what to segment…"></div>
-      <div class="sep"></div>
-      <button class="btn-launch" id="btn-launch-segment" onclick="launchJob('segment')">▶ segment</button>
-    </div>
-  
-    <!-- TRACK CONFIG -->
-    <div class="cfg-pane" id="cfg-track">
-      <div class="cf"><label>TRACK PROMPTS</label><input type="text" id="c-trk-prompts" value="person" placeholder="person car animal…"></div>
-      <div class="cf">
-        <label>THRESHOLD</label>
-        <div class="range-row"><input type="range" id="c-trk-thresh" min="0.01" max="0.5" step="0.01" value="0.15" oninput="document.getElementById('c-trk-tv').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-trk-tv">0.15</span></div>
-      </div>
-      <div class="cf"><label>RES</label>
-        <select id="c-trk-res"><option value="512">512</option><option value="756">756</option><option value="1008" selected>1008</option></select>
-      </div>
-      <div class="cf"><label>EVERY</label>
-        <select id="c-trk-every"><option value="1">1F</option><option value="2" selected>2F</option><option value="3">3F</option><option value="5">5F</option></select>
-      </div>
-      <div class="sep"></div>
-      <button class="btn-launch" id="btn-launch-track" onclick="launchJob('track')">▶ track</button>
-    </div>
-  
-    <!-- SAM3 CONFIG -->
-    <div class="cfg-pane" id="cfg-sam3">
-      <div class="cf"><label>DETECTION PROMPTS</label><input type="text" id="c-sam-prompts" value="person" placeholder="person car bicycle…"></div>
-      <div class="cf">
-        <label>THRESHOLD</label>
-        <div class="range-row"><input type="range" id="c-sam-thresh" min="0.01" max="0.5" step="0.01" value="0.15" oninput="document.getElementById('c-sam-tv').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-sam-tv">0.15</span></div>
-      </div>
-      <div class="cf"><label>RES</label>
-        <select id="c-sam-res"><option value="512">512</option><option value="756">756</option><option value="1008" selected>1008</option></select>
-      </div>
-      <div class="cf"><label>TASK</label>
-        <select id="c-sam-task"><option value="detect" selected>DETECT</option><option value="segment">SEGMENT</option></select>
-      </div>
-      <div class="sep"></div>
-      <button class="btn-launch" id="btn-launch-sam3" onclick="launchJob('sam3')">▶ sam-3</button>
-    </div>
-  
-    <!-- OCR CONFIG -->
-    <div class="cfg-pane" id="cfg-ocr">
-      <button class="btn-launch" id="btn-launch-ocr" onclick="launchJob('ocr')">▶ read text</button>
-    </div>
-  
+
     </div>
   </section>
     <div class="ph">OPERATIONS LOG</div>
@@ -626,6 +559,7 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
 // ══════════════════════════════════════════════════════
 const S = {
   tab: 'analyze',
+  mode: 'mission',  // video pane: mission | track | fastscan
   files: {},        // tab → {file_id, name, suffix}
   uploading: {},    // tab → bool while /api/upload is in-flight
   job: null,        // current job id
@@ -804,164 +738,140 @@ async function uploadFile(tab, file) {
 }
 
 // ══════════════════════════════════════════════════════
-//  JOB LAUNCH
+//  JOB LAUNCH — video pane (mission · track · fastscan)
+//  and inspect pane (auto-routed image tasks)
 // ══════════════════════════════════════════════════════
-async function launchJob(tab) {
-  if (S.uploading[tab]) {
-    log(`Upload still in progress for ${tab.toUpperCase()} — wait for 'Upload OK' before launch.`, 'w');
-    return;
-  }
-  const finfo = S.files[tab];
-  if (!finfo) { log(`No file loaded for ${tab.toUpperCase()} — drop a file first.`, 'w'); return; }
+const FAMILY = { analyze:'analyze', track:'analyze', fastscan:'analyze',
+                 detect:'inspect', segment:'inspect', sam3:'inspect', ocr:'inspect' };
 
+function switchMode(m) {
+  S.mode = m;
+  g('mode-mission').style.display  = m === 'mission'  ? '' : 'none';
+  g('mode-track').style.display    = m === 'track'    ? '' : 'none';
+  g('mode-fastscan').style.display = m === 'fastscan' ? '' : 'none';
+  g('row-query').style.display     = m === 'track'    ? 'none' : '';
+  const labels = { mission: '▶ launch', track: '▶ track', fastscan: '▶ fastscan' };
+  g('btn-launch-analyze').textContent = labels[m];
+}
+
+function switchTask(v) {
+  g('row-insp-q').style.display = v === 'ocr' ? 'none' : '';
+  g('task-sam3').style.display  = v === 'sam3' ? '' : 'none';
+}
+
+// AUTO task routing for the inspect pane — text-y queries go to OCR,
+// mask-y queries to segmentation, everything else to expression detection.
+function routeInspect(q) {
+  const l = (q || '').toLowerCase();
+  if (l.match(/text|ocr|read|writing|sign|plate|label/)) return 'ocr';
+  if (l.match(/segment|mask|outline|boundary|silhouette/)) return 'segment';
+  return 'detect';
+}
+
+async function startJob(kind, fd, btn, filename) {
   resetPipeline();
   hideResults();
   clearOcrOutput();
-  showRunningState(tab, finfo.name);
+  showRunningState(FAMILY[kind], filename);
 
-  const btn = document.getElementById(`btn-launch-${tab}`);
   btn.disabled = true;
   btn.classList.add('running');
   btn.textContent = '⏳ running';
 
-  const fd = new FormData();
-
-  if (tab === 'analyze') {
-    fd.append('file_id', finfo.file_id);
-    const fast = g('c-fast').checked;
-    fd.append('query',        g('c-query').value);
-    fd.append('prompts',      g('c-prompts').value);
-    fd.append('threshold',    g('c-thresh').value);
-    fd.append('resolution',   g('c-res').value);
-    fd.append('every',       g('c-every').value);
-    fd.append('report',       g('c-report').checked ? 'true' : 'false');
-    fd.append('report_type',  g('c-rtype').value);
-    fd.append('falcon_refine',g('c-falcon').checked ? 'true' : 'false');
-    fd.append('falcon_frames','6');
-    fd.append('fast',          fast ? 'true' : 'false');
-    // pinned former UI controls (removed from the panel; values = previous defaults)
-    fd.append('adaptive',      'false');
-    fd.append('parallel_falcon', 'true');
-    fd.append('propagate',     fast ? g('c-propagate').value : '0');
-    fd.append('relevance_filter', fast ? 'true' : 'false');
-    fd.append('chunk_duration', '30');
-    fd.append('chunk_overlap',  '3');
-  } else if (tab === 'detect') {
-    fd.append('file_id', finfo.file_id);
-    fd.append('query',      g('c-det-query').value);
-    fd.append('max_tokens', '200');
-  } else if (tab === 'segment') {
-    fd.append('file_id', finfo.file_id);
-    fd.append('query',      g('c-seg-query').value);
-    fd.append('max_tokens', '2048');
-  } else if (tab === 'track') {
-    fd.append('file_id', finfo.file_id);
-    fd.append('prompts',   g('c-trk-prompts').value);
-    fd.append('threshold', g('c-trk-thresh').value);
-    fd.append('resolution',g('c-trk-res').value);
-    fd.append('every',     g('c-trk-every').value);
-  } else if (tab === 'sam3') {
-    fd.append('file_id', finfo.file_id);
-    fd.append('prompts',   g('c-sam-prompts').value);
-    fd.append('threshold', g('c-sam-thresh').value);
-    fd.append('resolution',g('c-sam-res').value);
-    fd.append('task',      g('c-sam-task').value);
-  } else if (tab === 'ocr') {
-    fd.append('file_id', finfo.file_id);
-  }
-
-  log(`launching ${tab} mission…`, 'h');
-
+  log(`launching ${kind} job…`, 'h');
   try {
-    const r = await fetch(`/api/job/${tab}`, { method: 'POST', body: fd });
+    const r = await fetch(`/api/job/${kind}`, { method: 'POST', body: fd });
     const d = await r.json();
     S.job = d.job_id;
     S.lastJobId = d.job_id;
     S.mission.running = true;
     S.mission.status = 'running';
-    S.mission.phase = 'starting';
+    S.mission.phase = kind === 'fastscan' ? 'fastscan' : 'starting';
     S.mission.startedAt = (d.created_at || Date.now()/1000);
     S.mission.lastHeartbeatAt = Date.now()/1000;
-    S.mission.latest = 'Job dispatched; waiting for first output.';
+    S.mission.latest = `${kind} dispatched; waiting for first output.`;
     S.mission.progress = 0;
     S.mission.chunkIndex = 0;
     S.mission.chunkTotal = 0;
     startMissionTicker();
-    setMissionPill('running', 'running · awaiting heartbeat');
+    setMissionPill('running', `${kind} · running`);
     log(`Job ${d.job_id} dispatched.`, 'i');
-    connectSSE(d.job_id, tab, btn);
+    connectSSE(d.job_id, kind, btn);
   } catch(e) {
     log(`Launch failed: ${e.message}`, 'e');
-    resetBtn(btn, tab);
+    resetBtn(btn, kind);
   }
 }
 
-// ══════════════════════════════════════════════════════
-//  FASTSCAN UI HELPERS
-// ══════════════════════════════════════════════════════
-function toggleFastScan() {
-  const on = g('c-fast').checked;
-  const extra = document.getElementById('fastscan-extra');
-  const launchBtn = document.getElementById('btn-launch-analyze');
-  const fastscanBtn = document.getElementById('btn-launch-fastscan');
-  if (on) {
-    extra.style.display = '';
-    launchBtn.style.display = 'none';
-    fastscanBtn.style.display = '';
-  } else {
-    extra.style.display = 'none';
-    launchBtn.style.display = '';
-    fastscanBtn.style.display = 'none';
+async function launchVideo() {
+  const kind = S.mode === 'track' ? 'track' : S.mode === 'fastscan' ? 'fastscan' : 'analyze';
+  if (S.uploading.analyze) {
+    log(`Upload still in progress — wait for 'Upload OK' before launch.`, 'w');
+    return;
   }
-}
-
-async function launchFastscan() {
   const finfo = S.files['analyze'];
-  if (!finfo) { log('drop a video first', 'e'); return; }
-  const btn = document.getElementById('btn-launch-fastscan');
-  hideResults();
-  resetPipeline();
-  showRunningState('analyze', finfo.name);
-  setBtnLoading(btn, true);
+  if (!finfo) { log('No video loaded — drop drone footage first.', 'w'); return; }
+  const btn = g('btn-launch-analyze');
 
   const fd = new FormData();
   fd.append('file_id', finfo.file_id);
-  fd.append('query',       g('c-query').value);
-  fd.append('every',       '5.0');
-  fd.append('max_frames',  '60');
-  fd.append('resolution',  '360');
-  fd.append('min_relevance', g('c-min-rel').value);
-
-  log('launching fastscan mission…', 'h');
-
-  try {
-    const r = await fetch('/api/job/fastscan', { method: 'POST', body: fd });
-    const d = await r.json();
-    S.job = d.job_id;
-    S.lastJobId = d.job_id;
-    S.mission.running = true;
-    S.mission.status = 'running';
-    S.mission.phase = 'fastscan';
-    S.mission.startedAt = (d.created_at || Date.now()/1000);
-    S.mission.lastHeartbeatAt = Date.now()/1000;
-    S.mission.latest = 'Fastscan dispatched; waiting for first output.';
-    S.mission.progress = 0;
-    S.mission.chunkIndex = 0;
-    S.mission.chunkTotal = 0;
-    startMissionTicker();
-    setMissionPill('running', 'fastscan · running');
-    log(`Fastscan job ${d.job_id} dispatched.`, 'i');
-    connectSSE(d.job_id, 'fastscan', btn);
-  } catch(e) {
-    log(`Launch failed: ${e.message}`, 'e');
-    setBtnLoading(btn, false);
+  if (kind === 'analyze') {
+    // SAM targets are derived server-side from the query (prompt_router);
+    // sampling/chunking fall back to CLI defaults (auto).
+    fd.append('query',        g('c-query').value);
+    fd.append('threshold',    g('c-thresh').value);
+    fd.append('resolution',   g('c-res').value);
+    fd.append('every',        g('c-every').value);
+    fd.append('report',       g('c-report').checked ? 'true' : 'false');
+    fd.append('report_type',  g('c-rtype').value);
+    fd.append('falcon_refine',g('c-falcon').checked ? 'true' : 'false');
+  } else if (kind === 'track') {
+    fd.append('prompts',    g('c-trk-prompts').value);
+    fd.append('threshold',  g('c-trk-thresh').value);
+    fd.append('resolution', g('c-trk-res').value);
+    fd.append('every',      g('c-trk-every').value);
+  } else { // fastscan
+    fd.append('query',         g('c-query').value);
+    fd.append('every',         '5.0');
+    fd.append('max_frames',    '60');
+    fd.append('resolution',    '360');
+    fd.append('min_relevance', g('c-min-rel').value);
   }
+  await startJob(kind, fd, btn, finfo.name);
+}
+
+async function launchInspect() {
+  if (S.uploading.inspect) {
+    log(`Upload still in progress — wait for 'Upload OK' before launch.`, 'w');
+    return;
+  }
+  const finfo = S.files['inspect'];
+  if (!finfo) { log('No image loaded — drop an image first.', 'w'); return; }
+  const btn = g('btn-launch-inspect');
+
+  let kind = g('c-task').value;
+  if (kind === 'auto') {
+    kind = routeInspect(g('c-insp-q').value);
+    log(`task auto-routed to ${kind}.`, 'i');
+  }
+
+  const fd = new FormData();
+  fd.append('file_id', finfo.file_id);
+  if (kind === 'detect' || kind === 'segment') {
+    fd.append('query', g('c-insp-q').value);
+  } else if (kind === 'sam3') {
+    fd.append('prompts',    g('c-sam-prompts').value);
+    fd.append('threshold',  g('c-sam-thresh').value);
+    fd.append('resolution', g('c-sam-res').value);
+    fd.append('task',       g('c-sam-task').value);
+  } // ocr: backend default question applies
+  await startJob(kind, fd, btn, finfo.name);
 }
 
 // ══════════════════════════════════════════════════════
 //  SSE STREAMING
 // ══════════════════════════════════════════════════════
-function connectSSE(jid, tab, btn) {
+function connectSSE(jid, kind, btn) {
   const es = new EventSource(`/api/job/${jid}/stream`);
 
   es.onmessage = (ev) => {
@@ -971,7 +881,7 @@ function connectSSE(jid, tab, btn) {
       const cls = classifyLine(d.msg);
       log(d.msg, cls);
       updateMissionFromLog(d.msg);
-      if (tab === 'analyze') updatePipelineFromLog(d.msg);
+      if (kind === 'analyze') updatePipelineFromLog(d.msg);
       const m = d.msg.match(/Frame\s+(\d+)\/(\d+)/);
       if (m) updateFrameProgress(+m[1], +m[2]);
     }
@@ -986,7 +896,7 @@ function connectSSE(jid, tab, btn) {
 
     if (d.type === 'done') {
       es.close();
-      resetBtn(btn, tab);
+      resetBtn(btn, kind);
       stopMissionTicker();
       if (d.status === 'done') {
         setMissionPill('idle', 'complete');
@@ -994,7 +904,7 @@ function connectSSE(jid, tab, btn) {
         setMissionPill('error', 'job failed');
       }
       if (d.status === 'done') {
-        onJobDone(jid, tab, d.results);
+        onJobDone(jid, kind, d.results);
       } else {
         updateMissionDisplay();
         log(`Job ${jid} FAILED.`, 'e');
@@ -1004,7 +914,7 @@ function connectSSE(jid, tab, btn) {
 
   es.onerror = () => {
     es.close();
-    resetBtn(btn, tab);
+    resetBtn(btn, kind);
     stopMissionTicker();
     setMissionPill('error', 'stream disconnected');
     log('SSE stream error.', 'e');
@@ -1014,17 +924,17 @@ function connectSSE(jid, tab, btn) {
 // ══════════════════════════════════════════════════════
 //  JOB COMPLETE HANDLER
 // ══════════════════════════════════════════════════════
-async function onJobDone(jid, tab, results) {
+async function onJobDone(jid, kind, results) {
   S.jobResults[jid] = results;
   log('────────────────────────────────', 'h');
-  log(tab === 'fastscan' ? 'complete · fastscan ready' : 'complete · report ready', 'h');
+  log(`complete · ${kind} ready`, 'h');
   log('────────────────────────────────', 'h');
 
   updateProgress(1);
 
-  if (tab === 'analyze' || tab === 'track') {
+  if (kind === 'analyze' || kind === 'track') {
     if (results.video) {
-      showVideo(tab, `/api/job/${jid}/file/video`);
+      showVideo(`/api/job/${jid}/file/video`);
       enableDl('btn-dl-video', true);
     }
     if (results.json) {
@@ -1039,24 +949,23 @@ async function onJobDone(jid, tab, results) {
       await loadFastScan(jid);
     }
     // Mark pipeline done
-    if (tab === 'analyze') {
+    if (kind === 'analyze') {
       markStage('ps-sam', 'done');
       if (g('c-falcon').checked) markStage('ps-falcon', 'done');
       markStage('ps-gemma', 'done');
       markLine('pl-1', 'done');
       markLine('pl-2', 'done');
     }
-  } else if (tab === 'detect' || tab === 'segment' || tab === 'sam3') {
-    if (results.image) showImage(tab, `/api/job/${jid}/file/image`);
-  } else if (tab === 'fastscan') {
+  } else if (kind === 'detect' || kind === 'segment' || kind === 'sam3') {
+    if (results.image) showImage(`/api/job/${jid}/file/image`);
+  } else if (kind === 'fastscan') {
     if (results.fast_json) {
       await loadFastScan(jid);
       enableDl('btn-dl-json', true);
     }
-  } else if (tab === 'ocr') {
+  } else if (kind === 'ocr') {
     // Parse OCR from ops log — show last meaningful block
     const job = await (await fetch(`/api/job/${jid}`)).json();
-    const ocrLines = job.output.filter(l => l.includes('Extracted markup') || l.includes('Region') || l.includes('OCR'));
     showOcrOutput(job.output.join('\n'));
   }
 }
@@ -1122,25 +1031,18 @@ function resetPipeline() {
 // ══════════════════════════════════════════════════════
 //  RESULTS DISPLAY
 // ══════════════════════════════════════════════════════
-function showVideo(tab, url) {
-  if (tab === 'analyze') {
-    g('mission-run').style.display = 'none';
-    g('video-result').style.display = 'flex';
-    g('rv').src = url;
-    const dz = g('dz-analyze');
-    if (dz) dz.style.display = 'none';
-  } else if (tab === 'track') {
-    g('video-result-track').style.display = 'flex';
-    g('rv-track').src = url;
-    const dz = g('dz-track');
-    if (dz) dz.style.display = 'none';
-  }
+function showVideo(url) {
+  g('mission-run').style.display = 'none';
+  g('video-result').style.display = 'flex';
+  g('rv').src = url;
+  const dz = g('dz-analyze');
+  if (dz) dz.style.display = 'none';
 }
 
-function showImage(tab, url) {
-  const imgEl = g(`ri-${tab}`);
-  const resDiv = g(`image-result-${tab}`);
-  const dz = g(`dz-${tab}`);
+function showImage(url) {
+  const imgEl = g('ri-inspect');
+  const resDiv = g('image-result-inspect');
+  const dz = g('dz-inspect');
   if (imgEl) { imgEl.src = url; resDiv.style.display = 'flex'; if(dz)dz.style.display='none'; }
 }
 
@@ -1222,7 +1124,7 @@ function renderMarkdown(md) {
 function showOcrOutput(text) {
   g('ocr-text').textContent = text;
   g('ocr-output').style.display = 'block';
-  const dz = g('dz-ocr');
+  const dz = g('dz-inspect');
   if (dz) dz.style.display = 'none';
 }
 
@@ -1234,15 +1136,12 @@ function clearOcrOutput() {
 function hideResults() {
   g('video-result').style.display = 'none';
   g('mission-run').style.display = 'none';
-  g('image-result-detect').style.display = 'none';
-  g('image-result-segment').style.display = 'none';
-  g('image-result-sam3').style.display = 'none';
-  g('video-result-track').style.display = 'none';
+  g('image-result-inspect').style.display = 'none';
   g('report-panel').style.display = 'none';
   g('det-panel').style.display = 'none';
   g('fast-panel').style.display = 'none';
   // Re-show drop zones
-  ['analyze','detect','segment','track','sam3','ocr'].forEach(t => {
+  ['analyze','inspect'].forEach(t => {
     const dz = g(`dz-${t}`);
     if (dz) dz.style.display = 'flex';
   });
@@ -1349,18 +1248,12 @@ function enableDl(id, state) {
 // ══════════════════════════════════════════════════════
 function g(id) { return document.getElementById(id); }
 
-function resetBtn(btn, tab) {
-  const labels = {analyze:'▶ launch',fastscan:'▶ fastscan',detect:'▶ detect',segment:'▶ segment',track:'▶ track',sam3:'▶ sam-3',ocr:'▶ read text'};
+function resetBtn(btn, kind) {
+  const labels = {analyze:'▶ launch',track:'▶ track',fastscan:'▶ fastscan',
+                  detect:'▶ run',segment:'▶ run',sam3:'▶ run',ocr:'▶ run',inspect:'▶ run'};
   btn.disabled = false;
   btn.classList.remove('running');
-  btn.textContent = labels[tab] || '▶ RUN';
-}
-
-function setBtnLoading(btn, state) {
-  if (!btn) return;
-  btn.disabled = state;
-  btn.classList.toggle('running', state);
-  btn.textContent = state ? '⏳ running' : '▶ fastscan';
+  btn.textContent = labels[kind] || '▶ RUN';
 }
 
 function setMissionPill(kind, text) {

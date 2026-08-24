@@ -91,7 +91,7 @@ must pass with no MLX hardware and no cached weights.
 - `visionbrain fastscan` is implemented by `cmd_fastscan()` in `cli.py`; `frame_selector.py` only provides the `score_frames()` scorer
 - `src/visionbrain/__init__.py` currently exports only `__version__` — do not rely on package-level re-exports of inference functions
 - `FAST_PIPELINE_SPEC.md` describes an in-progress feature (fast path + adaptive sampling); check status before assuming its behavior exists
-- Web UI layout: all form controls live in the right-rail **MISSION SETUP** panel (`#mission-setup` in `static/index.html`) — there is no bottom config bar; tab switching toggles `.cfg-pane` elements by ID (`cfg-<tab>`)
+- Web UI layout: two top-level tabs — **analyze** (video) and **inspect** (image) — with all form controls in the right-rail **MISSION SETUP** panel (`#mission-setup` in `static/index.html`); tab switching toggles `.cfg-pane` elements by ID (`cfg-analyze` / `cfg-inspect`). Video modes (mission · track · fastscan) switch via `#c-mode`; image tasks (auto · detect · segment · sam3 · ocr, auto is keyword-routed) via `#c-task`. There is no bottom config bar. The analyze pipeline derives SAM targets from the query server-side (`prompt_router`) — there is no separate prompts field on the video pane
 - The annotator palette constant is `SOM_PALETTE` in `viz.py` (renamed from `FARM_PALETTE`)
 
 ## Commit & Pull Request Guidelines
