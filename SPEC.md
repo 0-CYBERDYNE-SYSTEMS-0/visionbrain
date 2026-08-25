@@ -279,6 +279,39 @@ visionbrain analyze --video drone.mp4 --query "person" --adaptive --propagate 5 
 --sequential-falcon  Disable parallel Falcon processing
 ```
 
+### `detection_core.py` — Shared Detection Primitives
+
+**Public API:**
+- `box_iou(a, b) -> float` — IoU of two xyxy boxes in any shared coordinate space
+- `labels_compatible(a, b) -> bool` — casefold/substring label match ("cow" vs "brown cow")
+- `dedup_detections(items, *, threshold) -> list` — center-distance duplicate suppression (unit-agnostic; bridge passes normalized boxes + TII's 0.01)
+- `PersistentTrackManager` — dependency-free session-local identity assignment (`assign(items, frame_id=, now_ms=)` → items with `track_id`/`color_id`/`track_state`/`track_confidence`; TTL + frame-gap expiry; ambiguity → "uncertain")
+- `merge_validate(sam_items, falcon_items, mode="soft|hard|off") -> (overlay, llm_items, stats)` — cross-engine agreement merge
+- Constants: `AGREE_IOU_THRESHOLD`, `VALIDATE_MODES`, `DEFAULT_TRACK_TTL_MS`, …
+
+Pure Python, no MLX — canonical for web app, CLI, and the live bridge hub.
+
+### `live_tracking.py` — Stateful Live SAM 3.1 Tracker
+
+**Public API:**
+- `LiveSamTracker(*, model, resolution, threshold, detect_every, backbone_every, tracker=None, backbone_fn=None, detect_fn=None, preprocess_fn=None, mask_to_polygon=None)`
+- `.step(image, prompts, task, width, height, frame_id, timestamp_ms) -> list[dict]` — one frame in, normalized items out (`label/score/box/source="sam"/track_id/color_id/track_state/stale_ms`, optional `polygon`)
+- `.reset()` — new shot/scene
+
+ViT backbone cached across frames (recompute every `backbone_every`); between detects the last items are re-emitted held with `track_state="predicted"` and honest `stale_ms`. Loader and all three compute hooks are injectable → unit-testable without mlx_vlm or weights.
+
+### `model_host.py` — Refcounted MLX Checkpoint Residency
+
+- `HOST.acquire(key, loader) / HOST.release(key) / HOST.resident()` — payload-agnostic refcount cache; entry freed + `mx.clear_cache()` when the last holder releases. Lets engine and VLM share one LFM checkpoint.
+
+### `vlm_registry.py` — Hot-Swappable Local VLMs (ask/report)
+
+- `MODELS = {"gemma": gemma-4-e2b-it-4bit, "lfm": LFM2.5-VL-450M-MLX-4bit, "lfm3b": LFM2.5-VL-3B-MLX-4bit}`
+- `set_model(key) / current_key() / current_model() / available()`
+- `ask(question, detections=None, prompts=None, image=None) -> str`; `generate_report(summary_text, report_type="field", image=None) -> str` — multimodal generation via mlx_vlm with shared sampling policy (min_p=0.15, repetition_penalty=1.05)
+- `position_label(x, y)`, `format_detection_lines(dets)` — shared plain-language rendering for prompts/HUDs
+- `SYSTEM_PROMPT` — anti-hallucination copilot contract (detector counts are authoritative but never a full inventory)
+
 ### `prompt_router.py` — Query Routing
 
 **Public API:**
