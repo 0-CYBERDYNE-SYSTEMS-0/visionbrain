@@ -551,6 +551,8 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
       <div class="sep"></div>
       <button class="btn-launch" onclick="liveApply()">apply to hub</button>
       <button class="btn-launch" style="margin-top:6px;background:var(--ink-1);color:var(--bg)" onclick="liveAsk()">ask</button>
+      <button class="btn-launch" style="margin-top:6px" onclick="liveReport()">report</button>
+      <button class="btn-launch" id="live-rec-btn" style="margin-top:6px;background:#a33;color:#fff" onclick="liveRecToggle()">● record</button>
     </div>
 
     </div>
@@ -1421,6 +1423,50 @@ function liveApply() {
 function liveAsk() {
   const q = document.getElementById('live-q').value.trim(); if (!q) return;
   if (!liveSend({ type: 'ask', question: q })) liveStatus('✗ not connected');
+}
+
+function liveReport() {
+  const n = LIVE.lastDets.length;
+  const counts = {};
+  for (const d of LIVE.lastDets) counts[d.label] = (counts[d.label] || 0) + 1;
+  const summary = Object.entries(counts).map(([k, v]) => `${v}x ${k}`).join(', ') || 'no detections';
+  if (liveSend({ type: 'report', report_type: 'field', summary })) liveOut('report requested…');
+}
+
+// ── Annotated-video export: records the canvas (frame + overlays) exactly as
+// rendered — mode-dependent by construction. MP4 when Chrome supports it, else WebM.
+const REC = { mr: null, chunks: [] };
+
+function liveRecToggle() {
+  if (REC.mr) { REC.mr.stop(); return; }
+  const cv = document.getElementById('live-canvas');
+  let stream;
+  try { stream = cv.captureStream(30); } catch (e) { liveStatus('✗ captureStream unsupported'); return; }
+  const mime = MediaRecorder.isTypeSupported('video/mp4;codecs=avc1')
+    ? 'video/mp4;codecs=avc1' : 'video/webm;codecs=vp9';
+  REC.chunks = [];
+  REC.mr = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 4_000_000 });
+  REC.mr.ondataavailable = (e) => { if (e.data.size) REC.chunks.push(e.data); };
+  REC.mr.onstop = () => {
+    const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+    const url = URL.createObjectURL(new Blob(REC.chunks, { type: mime }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `live-session-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    REC.mr = null;
+    document.getElementById('live-rec-btn').textContent = '● record';
+    liveStatus(`● saved ${ext.toUpperCase()} (${REC._t || '?'}s)`);
+  };
+  REC.mr.start(1000);
+  REC._start = Date.now();
+  REC._tick = setInterval(() => {
+    REC._t = Math.round((Date.now() - REC._start) / 1000);
+    document.getElementById('live-rec-btn').textContent = `■ stop (${REC._t}s)`;
+  }, 500);
+  document.getElementById('live-rec-btn').textContent = '■ stop (0s)';
+  liveStatus('● recording annotated view');
 }
 </script>
 </body>
