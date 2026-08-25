@@ -294,6 +294,7 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
   <nav id="mode-tabs">
     <button class="tab-btn active" data-tab="analyze">analyze</button>
     <button class="tab-btn" data-tab="inspect">inspect</button>
+    <button class="tab-btn" data-tab="live">live</button>
   </nav>
   <div id="conn-status">
     <div class="conn-dot" id="conn-dot"></div>
@@ -416,6 +417,19 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
       </div>
     </div>
 
+    <!-- ■ LIVE TAB (field hub: ws relay + detections HUD) -->
+    <div class="tab-pane" id="tab-live" style="flex-direction:column;gap:10px;padding:14px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button id="live-connect" class="btn-browse" onclick="liveToggle()">connect to hub</button>
+        <span id="live-status" style="font-size:11px;color:var(--ink-2)">ws://127.0.0.1:8765</span>
+      </div>
+      <div style="position:relative;flex:1;min-height:0;border:1px solid var(--rule);background:#000">
+        <canvas id="live-canvas" width="1280" height="720" style="width:100%;height:100%;object-fit:contain"></canvas>
+        <div class="ph" id="live-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border:none">no feed — connect, or start a cockpit/scout stream</div>
+      </div>
+      <pre id="live-ask-out" style="display:none;font-family:var(--font-mono);font-size:11px;color:var(--ink-1);white-space:pre-wrap;max-height:120px;overflow-y:auto;border-top:1px solid var(--rule);padding-top:8px"></pre>
+    </div>
+
     <!-- Hidden file inputs -->
     <input type="file" id="fi-analyze" accept="video/*" hidden onchange="fileChosen('analyze',this)">
     <input type="file" id="fi-inspect" accept="image/*" hidden onchange="fileChosen('inspect',this)">
@@ -500,6 +514,7 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
         </select>
       </div>
       <div class="cf" id="row-insp-q"><label>EXPRESSION</label><input type="text" id="c-insp-q" value="person" placeholder="describe what to find…"></div>
+
       <div id="task-sam3" style="display:none">
         <div class="cf"><label>SAM PROMPTS</label><input type="text" id="c-sam-prompts" value="person" placeholder="person car bicycle…"></div>
         <div class="cf">
@@ -515,6 +530,27 @@ body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(
       </div>
       <div class="sep"></div>
       <button class="btn-launch" id="btn-launch-inspect" onclick="launchInspect()">▶ run</button>
+    </div>
+
+    <!-- ─── LIVE HUB CONTROLS ─── -->
+    <div class="cfg-pane" id="cfg-live">
+      <div class="cf"><label>ENGINES</label>
+        <div style="display:flex;gap:10px;font-size:11px;color:var(--ink-1)">
+          <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="live-sam" checked>sam</label>
+          <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="live-falcon">falcon</label>
+          <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="live-lfm">lfm</label>
+        </div>
+      </div>
+      <div class="cf"><label>LFM CHECKPOINT</label>
+        <select id="live-lfm-model"><option value="lfm" selected>LFM2.5-VL 450M</option><option value="lfm3b">LFM2.5-VL 3B</option></select>
+      </div>
+      <div class="cf"><label>ASK VLM</label>
+        <select id="live-vlm"><option value="gemma" selected>Gemma 4 E2B</option><option value="lfm">LFM2.5-VL 450M</option><option value="lfm3b">LFM2.5-VL 3B</option></select>
+      </div>
+      <div class="cf"><label>ASK</label><input type="text" id="live-q" value="what do you see?" placeholder="ask about the live view…"></div>
+      <div class="sep"></div>
+      <button class="btn-launch" onclick="liveApply()">apply to hub</button>
+      <button class="btn-launch" style="margin-top:6px;background:var(--ink-1);color:var(--bg)" onclick="liveAsk()">ask</button>
     </div>
 
     </div>
@@ -1300,6 +1336,91 @@ function stopMissionTicker() {
   if (S.mission.timerId) clearInterval(S.mission.timerId);
   S.mission.timerId = null;
   S.mission.running = false;
+}
+
+// ══════════════════════════════════════════════════════
+//  LIVE HUB (field bridge ws://…:8765 — observer relay)
+// ══════════════════════════════════════════════════════
+const LIVE = { ws: null, connected: false, lastDets: [], img: null };
+
+const LIVE_PALETTE = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6','#bcf60c'];
+
+function liveToggle() { LIVE.connected ? liveDisconnect() : liveConnect(); }
+
+function liveConnect() {
+  const url = 'ws://127.0.0.1:8765';
+  const btn = document.getElementById('live-connect');
+  let ws;
+  try { ws = new WebSocket(url); } catch (e) { liveStatus('✗ ' + e.message); return; }
+  ws.binaryType = 'arraybuffer';
+  LIVE.ws = ws;
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'hello', role: 'dashboard' }));
+    LIVE.connected = true;
+    btn.textContent = 'disconnect';
+    liveStatus('● connected');
+    document.getElementById('live-empty').style.display = 'none';
+  };
+  ws.onmessage = (ev) => {
+    if (ev.data instanceof ArrayBuffer) { liveDrawFrame(ev.data); return; }
+    let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === 'detections') { LIVE.lastDets = msg.detections || msg.items || []; }
+    else if (msg.type === 'answer') { liveOut('ANSWER\n' + (msg.answer || msg.text || '')); }
+    else if (msg.type === 'status') { liveStatus('● ' + (msg.note || 'ok')); }
+  };
+  ws.onclose = () => { LIVE.connected = false; btn.textContent = 'connect to hub'; liveStatus('— disconnected'); };
+  ws.onerror = () => liveStatus('✗ hub unreachable');
+}
+
+function liveDisconnect() { if (LIVE.ws) LIVE.ws.close(); }
+
+function liveStatus(t) { document.getElementById('live-status').textContent = t; }
+function liveOut(t) {
+  const el = document.getElementById('live-ask-out');
+  el.style.display = 'block'; el.textContent = t;
+}
+
+// Binary frame: >III header (frame_id, jpeg_len, json_len) + JPEG + telemetry
+function liveDrawFrame(buf) {
+  const dv = new DataView(buf);
+  const jpegLen = dv.getUint32(4), jsonLen = dv.getUint32(8);
+  const blob = new Blob([new Uint8Array(buf, 12, jpegLen)], { type: 'image/jpeg' });
+  createImageBitmap(blob).then(bmp => {
+    LIVE.img = bmp;
+    const cv = document.getElementById('live-canvas'), ctx = cv.getContext('2d');
+    ctx.drawImage(bmp, 0, 0, cv.width, cv.height);
+    for (const d of LIVE.lastDets) liveBox(ctx, d, cv.width, cv.height);
+  }).catch(() => {});
+}
+
+function liveBox(ctx, d, W, H) {
+  const b = d.box; if (!b || b.length < 4) return;
+  const x1 = b[0]*W, y1 = b[1]*H, w = (b[2]-b[0])*W, h = (b[3]-b[1])*H;
+  const color = LIVE_PALETTE[(d.color_id ?? d.track_id ?? 0) % 8];
+  ctx.strokeStyle = color; ctx.lineWidth = 2;
+  ctx.strokeRect(x1, y1, w, h);
+  const label = `${d.label}${d.track_state === 'predicted' ? ' ·held' : ''} ${Math.round((d.score||0)*100)}%`;
+  ctx.font = '12px monospace';
+  const tw = ctx.measureText(label).width + 8;
+  ctx.fillStyle = color; ctx.fillRect(x1, Math.max(0,y1-16), tw, 16);
+  ctx.fillStyle = '#000'; ctx.fillText(label, x1+4, Math.max(11,y1-4));
+}
+
+function liveSend(obj) { if (LIVE.ws && LIVE.ws.readyState === 1) LIVE.ws.send(JSON.stringify(obj)); return !!LIVE.ws; }
+
+function liveApply() {
+  if (!liveSend({ type: 'set_engine',
+      sam: document.getElementById('live-sam').checked,
+      falcon: document.getElementById('live-falcon').checked,
+      lfm: document.getElementById('live-lfm').checked,
+      lfm_model: document.getElementById('live-lfm-model').value })) { liveStatus('✗ not connected'); return; }
+  liveSend({ type: 'set_vlm', model: document.getElementById('live-vlm').value });
+  liveStatus('● engines/vlm updated');
+}
+
+function liveAsk() {
+  const q = document.getElementById('live-q').value.trim(); if (!q) return;
+  if (!liveSend({ type: 'ask', question: q })) liveStatus('✗ not connected');
 }
 </script>
 </body>
