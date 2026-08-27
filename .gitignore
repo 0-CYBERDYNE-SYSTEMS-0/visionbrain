@@ -19,3 +19,7 @@ venv/
 # Browser automation / test artifacts
 .playwright-mcp/
 .vix/
+
+# Generated sample / test artifacts
+assets/samples/*_annotated.mp4
+assets/samples/*.mp4
