@@ -19,10 +19,12 @@ dependencies = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.29",
     "python-multipart>=0.0.9",
+    "supervision>=0.28,<0.30",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "httpx2>=2.0.0",
     "pytest>=8.0",
 ]
 
