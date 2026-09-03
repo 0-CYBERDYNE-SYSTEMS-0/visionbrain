@@ -620,6 +620,77 @@ class TestVLMRegistry:
         assert out == "- cow, 87% confidence, upper left of frame [sam]"
 
 
+class TestMlxCompat:
+    """mlx_vlm load shims (gemma-4 quantized ScaledLinear, lfm2_vl layernorm)."""
+
+    def test_apply_all_idempotent(self):
+        from visionbrain.mlx_compat import apply_all
+
+        try:
+            import mlx_vlm  # noqa: F401
+        except ImportError:
+            pytest.skip("mlx_vlm not installed")
+        apply_all()
+        apply_all()  # second call must be a no-op, not a double patch
+
+    def test_scaled_linear_quantized_matches_reference(self):
+        try:
+            import mlx.core as mx
+            from mlx_vlm.models.gemma4.language import ScaledLinear
+        except ImportError:
+            pytest.skip("mlx_vlm gemma4 arch not available")
+
+        from visionbrain.mlx_compat import ensure_scaled_linear_quantization
+
+        ensure_scaled_linear_quantization()
+        if not hasattr(ScaledLinear, "to_quantized"):
+            pytest.fail("ScaledLinear.to_quantized shim was not installed")
+
+        layer = ScaledLinear(128, 64, scalar=0.25)
+        layer.weight = mx.random.normal((64, 128))
+        x = mx.random.normal((2, 16, 128))
+
+        ql = layer.to_quantized(group_size=64, bits=4, mode="affine")
+        got = ql(x)
+        w, scales, biases = mx.quantize(layer.weight, 64, 4, mode="affine")
+        want = (x @ mx.dequantize(w, scales, biases, 64).T) * 0.25
+        assert mx.abs(got - want).max() < 1e-4
+
+    def test_lfm_guard_corrects_only_proven_layernorm(self, tmp_path):
+        import json
+
+        try:
+            import mlx_vlm  # noqa: F401
+        except ImportError:
+            pytest.skip("mlx_vlm not installed")
+
+        from visionbrain.mlx_compat import ensure_lfm_projector_layernorm
+        from mlx_vlm.utils import load_config
+
+        ensure_lfm_projector_layernorm()
+
+        def make_case(name, layernorm_in_weights, declared):
+            d = tmp_path / name
+            d.mkdir()
+            (d / "config.json").write_text(json.dumps({
+                "model_type": "lfm2-vl",
+                "projector_use_layernorm": declared,
+            }))
+            weight_map = {"language_model.model.embed_tokens.weight": "m.safetensors"}
+            if layernorm_in_weights:
+                weight_map["multi_modal_projector.layer_norm.weight"] = "m.safetensors"
+            (d / "model.safetensors.index.json").write_text(
+                json.dumps({"weight_map": weight_map})
+            )
+            return d
+
+        lying = make_case("lying", layernorm_in_weights=True, declared=False)
+        assert load_config(lying)["projector_use_layernorm"] is True
+
+        honest = make_case("honest", layernorm_in_weights=False, declared=False)
+        assert load_config(honest)["projector_use_layernorm"] is False
+
+
 class TestLiveTracking:
     """LiveSamTracker with fully injected inference — no mlx_vlm needed."""
 

@@ -189,6 +189,11 @@ def _ensure_local_gemma(kv_bits: float = 3.5, kv_quant_scheme: str = "turboquant
     if "model" not in _gemma_cache:
         from mlx_vlm.utils import load as vlm_load
 
+        # mlx_vlm 0.4.4 cannot load gemma-4's quantized per_layer_model_projection
+        # (ScaledLinear lacks to_quantized) — see visionbrain.mlx_compat.
+        from .mlx_compat import apply_all
+
+        apply_all()
         print(f"Loading Gemma 4 26B ({LOCAL_HF_REPO}) via MLX...")
         t0 = time.perf_counter()
         model, processor = vlm_load(LOCAL_HF_REPO)

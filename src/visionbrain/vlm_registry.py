@@ -108,6 +108,13 @@ def set_model(key: str) -> str:
 def _load_checkpoint(target: str):
     from mlx_vlm.utils import load, load_config
 
+    # mlx_vlm 0.4.4 cannot load gemma-4's quantized per_layer_model_projection
+    # (ScaledLinear lacks to_quantized) nor LiquidAI's LFM2.5-VL checkpoints
+    # (config/weights disagree on the projector layernorm) — see
+    # visionbrain.mlx_compat.
+    from .mlx_compat import apply_all
+
+    apply_all()
     model, processor = load(target)
     config = load_config(target)
     return model, processor, config

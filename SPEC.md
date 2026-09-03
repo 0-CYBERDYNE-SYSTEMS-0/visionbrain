@@ -304,6 +304,13 @@ ViT backbone cached across frames (recompute every `backbone_every`); between de
 
 - `HOST.acquire(key, loader) / HOST.release(key) / HOST.resident()` — payload-agnostic refcount cache; entry freed + `mx.clear_cache()` when the last holder releases. Lets engine and VLM share one LFM checkpoint.
 
+### `mlx_compat.py` — mlx_vlm Load Compatibility Shims
+
+- `apply_all()` — idempotent, thread-safe shims called before any `mlx_vlm.utils.load` (wired into `vlm_registry._load_checkpoint`, `gemma_inference._ensure_local_gemma`, and the bridge's `lfm._load_checkpoint`):
+  - gemma 4: mlx_vlm 0.4.4's `ScaledLinear` gets a `to_quantized()` (→ `QuantizedScaledLinear` re-applying the scalar) so the quantized `per_layer_model_projection` loads; `Attention` stops allocating dead `k_norm/k_proj/v_proj` for KV-shared layers (checkpoints omit them).
+  - LFM2.5-VL: wraps `load_config` to force `projector_use_layernorm=true` only when the checkpoint's weight index actually ships `multi_modal_projector.layer_norm` (checkpoint configs claim false).
+  - No-ops permanently once mlx_vlm ships equivalent support. NOTE: LFM loads additionally require torch+torchvision for the image processor; without them the LFM engine cannot load regardless.
+
 ### `vlm_registry.py` — Hot-Swappable Local VLMs (ask/report)
 
 - `MODELS = {"gemma": gemma-4-e2b-it-4bit, "lfm": LFM2.5-VL-450M-MLX-4bit, "lfm3b": LFM2.5-VL-3B-MLX-4bit}`
