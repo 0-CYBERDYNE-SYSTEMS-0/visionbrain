@@ -1368,6 +1368,8 @@ function liveConnect() {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.type === 'detections') { LIVE.lastDets = msg.detections || msg.items || []; }
     else if (msg.type === 'answer') { liveOut('ANSWER\n' + (msg.answer || msg.text || '')); }
+    else if (msg.type === 'ask_ack') { liveOut('thinking… [' + (msg.model || 'vlm') + ']'); }
+    else if (msg.type === 'report_result') { liveOut('REPORT\n' + (msg.text || '')); }
     else if (msg.type === 'status') { liveStatus('● ' + (msg.note || 'ok')); }
   };
   ws.onclose = () => { LIVE.connected = false; btn.textContent = 'connect to hub'; liveStatus('— disconnected'); };
@@ -1382,10 +1384,11 @@ function liveOut(t) {
   el.style.display = 'block'; el.textContent = t;
 }
 
-// Binary frame: >III header (frame_id, jpeg_len, json_len) + JPEG + telemetry
+// Binary frame (bridge wire format): >III (frame_id, timestamp_ms, jpeg_len)
+// + JPEG + >I telem_len + telemetry JSON — jpeg_len is at offset 8, pixels at 12.
 function liveDrawFrame(buf) {
   const dv = new DataView(buf);
-  const jpegLen = dv.getUint32(4), jsonLen = dv.getUint32(8);
+  const jpegLen = dv.getUint32(8);
   const blob = new Blob([new Uint8Array(buf, 12, jpegLen)], { type: 'image/jpeg' });
   createImageBitmap(blob).then(bmp => {
     LIVE.img = bmp;
