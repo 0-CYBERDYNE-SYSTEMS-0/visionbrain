@@ -104,7 +104,7 @@ must pass with no MLX hardware and no cached weights.
 - Live-tab **record** exports the annotated view client-side via `canvas.captureStream` + MediaRecorder (MP4 if supported, else WebM) — overlays included by construction since the canvas is what's recorded; **report** button posts `{type:"report", report_type:"field", summary}` where summary is a counts line built from the last detections frame
 - The annotator palette constant is `SOM_PALETTE` in `viz.py` (renamed from `FARM_PALETTE`)
 - SAM 3.1 weights (`mlx-community/sam3.1-bf16`, snapshot `a992e302…`) are already MLX-layout/post-sanitize; the local `.venv` patch at `.venv/lib/python3.14/site-packages/mlx_vlm/models/sam3_1/sam3_1.py::sanitize()` detects this (`mask_embed.conv` marker) and passes them through — without it every Conv2d double-transposes and `track_video` dies with a shape mismatch. Pre-patch original kept beside it as `sam3_1.py.bak-pre-fix`. If mlx-vlm is ever upgraded, re-check this guard still applies
-- `static/prototype/` holds standalone gallery/cockpit HTML design mockups (untracked); `web_app.py` does not serve or reference them
+- `prototype/` (repo root, untracked) holds standalone gallery/cockpit HTML design mockups; kept out of `static/` so the web app does not serve them
 
 ## Commit & Pull Request Guidelines
 
