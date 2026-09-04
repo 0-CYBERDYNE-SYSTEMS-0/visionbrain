@@ -24,6 +24,7 @@ VisionBrain/
 │   ├── live_tracking.py      # LiveSamTracker.step(): per-frame SAM 3.1 tracking with cached backbone
 │   ├── model_host.py         # Refcounted MLX checkpoint residency host (HOST)
 │   ├── vlm_registry.py       # Named local VLMs (gemma|lfm|lfm3b) for ask/report, loaded via model_host
+│   ├── mlx_compat.py         # Idempotent shims so pinned mlx_vlm loads gemma4/LFM checkpoints (applied via apply_all())
 │   ├── web_app.py            # FastAPI web UI (Aerial Ground Control)
 │   ├── viz.py                # Set-of-Marks rendering, crop extraction
 │   ├── agent_tools.py        # Agent-facing tools: ground_expression(), compute_relations()
@@ -85,7 +86,7 @@ must pass with no MLX hardware and no cached weights.
 - All tests live in `tests/test_visionbrain.py` organized into classes:
   `TestLoader`, `TestFalconPerception`, `TestAgentTools`, `TestViz`,
   `TestReviewOutputs`, `TestCLI`, `TestWebApp`, `TestDetectionCore`,
-  `TestModelHost`, `TestVLMRegistry`, `TestLiveTracking`
+  `TestModelHost`, `TestVLMRegistry`, `TestLiveTracking`, `TestMlxCompat`
 - Tests must pass without MLX hardware or cached model weights — heavy inference paths are skipped/mocked
 - CLI smoke tests verify each `cmd_*` function handles missing arguments gracefully
 - Loader tests validate model registry records and cache paths
