@@ -212,6 +212,12 @@ class TestLiveEngine:
         assert callable(le.configure)
         assert callable(le.resolve_file_id)
         assert callable(le.live_ws)
+        # Smart-capture helpers must be importable without heavy deps too.
+        assert callable(le.validate_zones)
+        assert callable(le.sanitize_clip_name)
+        assert callable(le.RectZone)
+        assert callable(le.DwellTracker)
+        assert callable(le.DirectionTriggerState)
 
     def test_resolve_file_id_guards(self, tmp_path, monkeypatch):
         import visionbrain.live_engine as le
@@ -245,3 +251,333 @@ class TestLiveEngine:
 
         # No match at all.
         assert le.resolve_file_id("zzz") is None
+
+    def test_configure_clips_dir(self, tmp_path, monkeypatch):
+        import visionbrain.live_engine as le
+
+        monkeypatch.setattr(le, "_uploads_dir", None)
+        monkeypatch.setattr(le, "_clips_dir", None)
+
+        clips = tmp_path / "nested" / "clips"
+        le.configure(tmp_path, clips)
+        assert le._clips_dir == clips
+        assert clips.is_dir()  # created (with parents) when missing
+
+        # clips_dir is optional — None disables capture but keeps uploads.
+        le.configure(tmp_path)
+        assert le._uploads_dir == tmp_path
+        assert le._clips_dir is None
+
+        # An uncreatable clips dir degrades gracefully to disabled capture.
+        blocked = tmp_path / "f"
+        blocked.write_bytes(b"not a dir")
+        le.configure(tmp_path, blocked / "clips")
+        assert le._clips_dir is None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Smart capture: sanitize_clip_name / validate_zones / pure trigger helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestSanitizeClipName:
+    def test_accepts_safe_names(self):
+        import visionbrain.live_engine as le
+
+        assert le.sanitize_clip_name("clip_1_line_cross.mp4") == "clip_1_line_cross.mp4"
+        assert le.sanitize_clip_name("A9-_.mp4") == "A9-_.mp4"
+
+    def test_rejects_unsafe_names(self):
+        import visionbrain.live_engine as le
+
+        # Path traversal, separators, wrong extension, non-strings.
+        for bad in ("../evil", "a/b.mp4", "a\\b.mp4", "x.txt", "..",
+                    "", ".mp4.mp3", None, 42, b"clip.mp4", "clip mp4"):
+            assert le.sanitize_clip_name(bad) is None, bad
+
+
+class TestValidateZones:
+    def test_valid_line_and_rect_normalized(self):
+        import visionbrain.live_engine as le
+
+        out = le.validate_zones([
+            {"kind": "line", "name": "gate", "a": [0, 0.5], "b": [1, 0.5]},
+            {"kind": "rect", "x1": 0.1, "y1": 0.2, "x2": 0.4, "y2": 0.9},
+        ])
+        assert out[0] == {"kind": "line", "name": "gate", "a": [0.0, 0.5], "b": [1.0, 0.5]}
+        # Missing/None name defaults to "zone N" (1-based position).
+        assert out[1]["name"] == "zone 2"
+        assert out[1]["x1"] == 0.1 and out[1]["y2"] == 0.9
+
+    def test_rejects_bad_zones(self):
+        import visionbrain.live_engine as le
+
+        bad_sets = [
+            "nope",                                   # not a list
+            [{"kind": "poly", "a": [0, 0], "b": [1, 1]}],   # bad kind
+            [{"kind": "line", "a": [0, 0]}],                 # missing b
+            [{"kind": "line", "a": [0, 0], "b": [1]}],       # 1-number pair
+            [{"kind": "line", "a": [0, 0], "b": [1, 1.5]}],  # out of 0-1
+            [{"kind": "line", "a": [0, 0], "b": [1, True]}], # bool coords
+            [{"kind": "line", "a": [0, 0], "b": [1, "x"]}],  # non-number
+            [{"kind": "rect", "x1": 0.5, "y1": 0, "x2": 0.5, "y2": 1}],  # x1 == x2
+            [{"kind": "rect", "x1": 0.9, "y1": 0, "x2": 0.1, "y2": 1}],  # x1 > x2
+            [{"kind": "rect", "y1": 0.9, "x1": 0, "x2": 1, "y2": 0.1}],  # y1 > y2
+            [{"kind": "rect", "x1": 0, "y1": 0, "x2": 1.2, "y2": 1}],    # out of range
+            [{"kind": "rect", "x1": 0, "y1": 0, "x2": 1, "y2": 1, "name": 7}],  # bad name
+            [{"kind": "line", "a": [0, 0], "b": [1, 1], "name": "x" * 41}],      # name too long
+            [{"kind": "line", "a": [0, 0], "b": [1, 1]}] * 9,                    # > 8 zones
+        ]
+        for zones in bad_sets:
+            with pytest.raises(ValueError):
+                le.validate_zones(zones)
+
+    def test_max_eight_zones_ok_and_names_stripped(self):
+        import visionbrain.live_engine as le
+
+        eight = [{"kind": "line", "a": [0, 0], "b": [1, 1]} for _ in range(8)]
+        out = le.validate_zones(eight)
+        assert len(out) == 8
+        assert [z["name"] for z in out] == [f"zone {i}" for i in range(1, 9)]
+        assert le.validate_zones([
+            {"kind": "line", "a": [0, 0], "b": [1, 1], "name": "  gate  "}
+        ])[0]["name"] == "gate"
+
+
+class TestValidateControlSmartCapture:
+    def test_set_zones_valid(self):
+        import visionbrain.live_engine as le
+
+        action, payload = le.validate_control({
+            "type": "set_zones",
+            "zones": [
+                {"kind": "line", "name": "gate", "a": [0, 0.5], "b": [1, 0.5]},
+                {"kind": "rect", "name": "yard", "x1": 0, "y1": 0, "x2": 0.5, "y2": 0.5},
+            ],
+        })
+        assert action == "set_zones"
+        assert [z["name"] for z in payload["zones"]] == ["gate", "yard"]
+
+        # Empty set is valid (clears all zones); "action" alias works too.
+        assert le.validate_control({"type": "set_zones", "zones": []})[1] == {"zones": []}
+        action, _ = le.validate_control({"action": "set_zones", "zones": []})
+        assert action == "set_zones"
+
+    def test_set_zones_invalid(self):
+        import visionbrain.live_engine as le
+
+        good_line = {"kind": "line", "a": [0, 0], "b": [1, 1]}
+        bad_sets = [
+            None, "x", 7,                     # zones not a list
+            [{"kind": "poly"}],               # bad kind
+            [{"kind": "line", "a": [0, 0], "b": [2, 2]}],   # coords out of 0-1
+            [{"kind": "rect", "x1": 0.9, "y1": 0, "x2": 0.1, "y2": 1}],  # x1 > x2
+            [good_line] * 9,                  # > 8 zones
+        ]
+        for zones in bad_sets:
+            action, payload = le.validate_control({"type": "set_zones", "zones": zones})
+            assert action == "unknown", zones
+            assert payload == {}
+
+    def test_set_triggers_valid(self):
+        import visionbrain.live_engine as le
+
+        action, payload = le.validate_control({
+            "type": "set_triggers", "line_cross": True, "direction": "north",
+            "dwell_s": 5, "clip": False, "pre_s": 3, "post_s": 2.5,
+        })
+        assert action == "set_triggers"
+        assert payload == {
+            "line_cross": True, "direction": "north", "dwell_s": 5.0,
+            "clip": False, "pre_s": 3.0, "post_s": 2.5,
+        }
+
+        # All keys optional — a partial update carries only what was sent.
+        action, payload = le.validate_control({"action": "set_triggers", "dwell_s": 10})
+        assert action == "set_triggers"
+        assert payload == {"dwell_s": 10.0}
+
+        # Every compass direction is accepted; zero dwell/edge values are fine.
+        for d in ("none", "any", "north", "northeast", "east", "southeast",
+                  "south", "southwest", "west", "northwest"):
+            assert le.validate_control({"type": "set_triggers", "direction": d})[0] == "set_triggers"
+        assert le.validate_control({"type": "set_triggers", "dwell_s": 0})[1] == {"dwell_s": 0.0}
+
+    def test_set_triggers_invalid(self):
+        import visionbrain.live_engine as le
+
+        bad_msgs = [
+            {"direction": "up"},              # not a compass value
+            {"direction": None},
+            {"line_cross": 1},                # int, not bool
+            {"clip": "yes"},
+            {"dwell_s": "five"},
+            {"dwell_s": -1},
+            {"pre_s": True},                  # bool is not a number here
+            {"post_s": -0.5},
+        ]
+        for extra in bad_msgs:
+            action, payload = le.validate_control({"type": "set_triggers", **extra})
+            assert action == "unknown", extra
+            assert payload == {}
+
+    def test_set_watch_valid(self):
+        import visionbrain.live_engine as le
+
+        action, payload = le.validate_control({
+            "type": "set_watch", "enabled": True, "condition": "any person visible",
+            "interval_s": 10, "model": "lfm3b",
+        })
+        assert action == "set_watch"
+        assert payload == {
+            "enabled": True, "condition": "any person visible",
+            "interval_s": 10.0, "model": "lfm3b",
+        }
+        # Interval bounds 1..30 inclusive on both ends.
+        for iv in (1, 30, 4.5):
+            assert le.validate_control({"type": "set_watch", "interval_s": iv})[0] == "set_watch"
+
+    def test_set_watch_invalid(self):
+        import visionbrain.live_engine as le
+
+        bad_msgs = [
+            {"model": "gemma"},               # watch models are lfm|lfm3b only
+            {"model": None},
+            {"interval_s": 0},                # below 1
+            {"interval_s": 31},               # above 30
+            {"interval_s": "fast"},
+            {"interval_s": True},
+            {"enabled": 1},                   # not a bool
+            {"condition": 42},                # not a string
+        ]
+        for extra in bad_msgs:
+            action, payload = le.validate_control({"type": "set_watch", **extra})
+            assert action == "unknown", extra
+            assert payload == {}
+
+
+class TestRectZone:
+    def test_contains(self):
+        import visionbrain.live_engine as le
+
+        zone = le.RectZone(10, 20, 30, 40, "yard")
+        assert zone.contains(10, 20) and zone.contains(30, 40)  # edges inclusive
+        assert zone.contains(20, 30)
+        assert not zone.contains(9.9, 30) and not zone.contains(20, 40.1)
+
+    def test_enter_exit_transitions(self):
+        import visionbrain.live_engine as le
+
+        zone = le.RectZone(0, 0, 10, 10, "yard")
+        # First sighting inside → exactly one enter event.
+        ev = zone.update(1, True, 1.0)
+        assert ev == {"kind": "zone_enter", "zone": "yard", "track_id": 1,
+                      "detail": "track 1 entered", "ts": 1.0}
+        # Staying inside → silent.
+        assert zone.update(1, True, 2.0) is None
+        # Leaving → one exit event.
+        ev = zone.update(1, False, 3.0)
+        assert ev["kind"] == "zone_exit"
+        assert ev["detail"] == "track 1 exited"
+        # Staying outside → silent; re-entering fires again.
+        assert zone.update(1, False, 4.0) is None
+        assert zone.update(1, True, 5.0)["kind"] == "zone_enter"
+
+        # Tracks are independent.
+        assert zone.update(2, True, 6.0)["track_id"] == 2
+        assert zone.update(1, True, 7.0) is None
+
+
+class TestDwellTracker:
+    def test_fires_once_then_re_arms(self):
+        import visionbrain.live_engine as le
+
+        tracker = le.DwellTracker(5.0)
+        assert tracker.update(7, True, 10.0) is None          # timer starts
+        assert tracker.update(7, True, 13.0) is None          # 3s < 5s
+        ev = tracker.update(7, True, 15.0)                    # 5s reached
+        assert ev == {"kind": "dwell", "track_id": 7,
+                      "detail": "track 7 stationary >= 5s", "ts": 15.0}
+        # Still stationary → fired once per stretch, no more events.
+        assert tracker.update(7, True, 20.0) is None
+        assert tracker.update(7, True, 100.0) is None
+        # Movement clears the stretch; a new stretch can fire again.
+        assert tracker.update(7, False, 101.0) is None
+        assert tracker.update(7, True, 102.0) is None
+        ev2 = tracker.update(7, True, 107.5)
+        assert ev2 is not None and ev2["track_id"] == 7
+
+    def test_tracks_independent_and_disabled_at_zero(self):
+        import visionbrain.live_engine as le
+
+        tracker = le.DwellTracker(2.0)
+        assert tracker.update(1, True, 0.0) is None
+        assert tracker.update(1, True, 2.0) is not None
+        # A different track has its own timer.
+        assert tracker.update(2, True, 0.5) is None
+        assert tracker.update(2, True, 2.5) is not None
+        # Movement by track 1 does not affect track 2's fired state.
+        assert tracker.update(1, False, 3.0) is None
+        assert tracker.update(2, True, 3.0) is None
+
+        # dwell_s = 0 means disabled: timers start but never fire.
+        off = le.DwellTracker(0.0)
+        assert off.update(3, True, 0.0) is None
+        assert off.update(3, True, 999.0) is None
+
+
+class TestDirectionTriggerState:
+    def test_none_never_fires(self):
+        import visionbrain.live_engine as le
+
+        state = le.DirectionTriggerState()
+        for d in ("north", "east", "any-label", "unknown", "stationary"):
+            assert state.update(1, d, "none", 1.0) is None
+
+    def test_any_semantics(self):
+        import visionbrain.live_engine as le
+
+        state = le.DirectionTriggerState()
+        # unknown / stationary never fire, even under "any".
+        assert state.update(1, "unknown", "any", 1.0) is None
+        assert state.update(1, "stationary", "any", 2.0) is None
+        # Any real compass heading fires once...
+        ev = state.update(1, "east", "any", 3.0)
+        assert ev["kind"] == "direction"
+        assert ev["track_id"] == 1 and ev["direction"] == "east"
+        assert "east" in ev["detail"]
+        # ...and the same heading does not re-fire...
+        assert state.update(1, "east", "any", 4.0) is None
+        assert state.update(1, "east", "any", 5.0) is None
+        # ...but a heading change re-arms: a new direction fires again.
+        ev2 = state.update(1, "north", "any", 6.0)
+        assert ev2 is not None and ev2["direction"] == "north"
+        # And returning to a previous heading fires again after the change.
+        ev3 = state.update(1, "east", "any", 7.0)
+        assert ev3 is not None and ev3["direction"] == "east"
+
+    def test_fixed_direction_match(self):
+        import visionbrain.live_engine as le
+
+        state = le.DirectionTriggerState()
+        # Non-matching headings are silent.
+        assert state.update(2, "west", "north", 1.0) is None
+        assert state.update(2, "stationary", "north", 2.0) is None
+        # Match fires once...
+        ev = state.update(2, "north", "north", 3.0)
+        assert ev is not None and ev["direction"] == "north"
+        assert state.update(2, "north", "north", 4.0) is None
+        # ...and re-arms only via a direction change (west then north again).
+        assert state.update(2, "west", "north", 5.0) is None
+        ev2 = state.update(2, "north", "north", 6.0)
+        assert ev2 is not None
+
+    def test_tracks_independent(self):
+        import visionbrain.live_engine as le
+
+        state = le.DirectionTriggerState()
+        assert state.update(1, "east", "any", 1.0) is not None
+        # Another track heading the same way fires on its own.
+        assert state.update(2, "east", "any", 2.0) is not None
+        # Track 1 holding its heading stays silent while 2 re-arms via change.
+        assert state.update(1, "east", "any", 3.0) is None
+        assert state.update(2, "south", "any", 4.0) is not None

@@ -518,17 +518,49 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
         <div class="cf"><label>DETECT EVERY</label>
           <select id="live-every"><option value="1">1F</option><option value="5">5F</option><option value="10" selected>10F</option><option value="15">15F</option></select>
         </div>
+        <div class="cf"><label>ZONES</label>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0">
+            <button id="live-draw-off" class="btn-browse seg-btn active" onclick="liveSetDrawMode('off')">draw: off</button>
+            <button id="live-draw-rect" class="btn-browse seg-btn" onclick="liveSetDrawMode('rect')">draw: rect</button>
+            <button id="live-draw-line" class="btn-browse seg-btn" onclick="liveSetDrawMode('line')">draw: line</button>
+            <button id="live-zones-clear" class="btn-browse" onclick="liveZonesClear()">clear zones</button>
+            <span id="live-zones-count" style="font-size:10px;color:var(--ink-3)">0 zones</span>
+          </div>
+        </div>
         <div class="sep"></div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn-browse" id="btn-live-start" onclick="liveStartToggle()">▶ start</button>
           <button class="btn-browse" id="btn-live-apply" onclick="liveApplyPrompts()">apply prompts</button>
           <button class="btn-browse" id="btn-live-free" onclick="liveEngineFree()">✕ free model</button>
         </div>
+        <div class="sep"></div>
+        <div class="cf"><label>TRIGGERS</label>
+          <div class="togs" style="align-items:center">
+            <label class="tog"><input type="checkbox" id="live-trig-line"><span>LINE CROSS</span></label>
+            <label class="tog"><input type="checkbox" id="live-trig-clip" checked><span>CLIP</span></label>
+            <select id="live-trig-dir" style="width:auto"><option value="any" selected>any</option><option value="none">none</option><option value="north">north</option><option value="northeast">northeast</option><option value="east">east</option><option value="southeast">southeast</option><option value="south">south</option><option value="southwest">southwest</option><option value="west">west</option><option value="northwest">northwest</option></select>
+            <input type="number" id="live-trig-dwell" value="0" min="0" max="600" title="dwell seconds (0=off)" style="width:64px">
+            <input type="number" id="live-trig-pre" value="6" min="1" max="15" style="width:56px">
+            <input type="number" id="live-trig-post" value="4" min="1" max="15" style="width:56px">
+            <button class="btn-browse" id="btn-live-triggers" onclick="liveApplyTriggers()">apply triggers</button>
+          </div>
+        </div>
+        <div class="sep"></div>
+        <div class="cf"><label>WATCH</label>
+          <div class="togs" style="align-items:center">
+            <label class="tog"><input type="checkbox" id="live-watch"><span>VLM WATCH</span></label>
+            <input type="text" id="live-watch-cond" placeholder="capture when a boat enters the channel…" style="flex:1;min-width:140px">
+            <select id="live-watch-int" style="width:auto"><option value="2">2S</option><option value="4" selected>4S</option><option value="8">8S</option></select>
+            <select id="live-watch-model" style="width:auto"><option value="lfm" selected>LFM 450M</option><option value="lfm3b">LFM 3B</option></select>
+            <button class="btn-browse" id="btn-live-watch" onclick="liveApplyWatch()">apply watch</button>
+          </div>
+        </div>
       </div>
       <div style="position:relative;flex:1;min-height:0;border:1px solid var(--rule);background:#000">
         <canvas id="live-canvas" width="1280" height="720" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></canvas>
         <div class="ph" id="live-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border:none">no feed — connect, or start a cockpit/scout stream</div>
       </div>
+      <div id="live-events" style="display:none;max-height:130px;overflow-y:auto;border-top:1px solid var(--rule);font-family:var(--font-mono);font-size:10px;color:var(--ink-1);flex-shrink:0"></div>
       <pre id="live-ask-out" style="display:none;font-family:var(--font-mono);font-size:11px;color:var(--ink-1);white-space:pre-wrap;max-height:120px;overflow-y:auto;border-top:1px solid var(--rule);padding-top:8px"></pre>
     </div>
 
@@ -1704,7 +1736,8 @@ function stopMissionTicker() {
 //  LIVE HUB (field bridge ws://…:8765 — observer relay)
 // ══════════════════════════════════════════════════════
 const LIVE = { ws: null, connected: false, lastDets: [], img: null,
-               mode: 'hub', pendingStart: null, engineRunning: false };
+               mode: 'hub', pendingStart: null, engineRunning: false,
+               zones: [], drawMode: 'off', lineStart: null, rectStart: null, zoneSeq: 0 };
 
 const LIVE_PALETTE = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6','#bcf60c'];
 
@@ -1726,6 +1759,7 @@ function wireSocket(ws) {
       LIVE.pendingStart = null;
       liveSend(payload);
       liveSetRunning(true);
+      liveRestoreControls();
     }
   };
   ws.onmessage = (ev) => {
@@ -1737,6 +1771,8 @@ function wireSocket(ws) {
     else if (msg.type === 'report_result') { liveOut('REPORT\n' + (msg.text || '')); }
     else if (msg.type === 'status') { liveStatus('● ' + (msg.note || 'ok')); }
     else if (msg.type === 'engine_stopped') { liveSetRunning(false); liveStatus('engine stopped'); }
+    else if (msg.type === 'event') { liveEventFeed(msg.event || {}); }
+    else if (msg.type === 'capture') { liveCaptureFeed(msg.clip || {}); }
   };
   ws.onclose = () => {
     LIVE.connected = false;
@@ -1843,6 +1879,7 @@ function liveStartToggle() {
   if (LIVE.connected && LIVE.ws && LIVE.ws.readyState === 1) {
     liveSend(payload);
     liveSetRunning(true);
+    liveRestoreControls();
   } else {
     LIVE.pendingStart = payload;
     liveEngineConnect();
@@ -1919,6 +1956,161 @@ function liveReport() {
   const summary = Object.entries(counts).map(([k, v]) => `${v}x ${k}`).join(', ') || 'no detections';
   if (liveSend({ type: 'report', report_type: 'field', summary })) liveOut('report requested…');
 }
+
+// ── Zone drawing (local panel) — rect via mousedown/mouseup, line via two clicks.
+// Client coords → canvas px via bounding-rect scale (cv.width / rect.width),
+// then normalized to 0-1 by canvas dimensions. Inert unless a draw mode is active.
+function liveCanvasNorm(e) {
+  const cv = document.getElementById('live-canvas');
+  const r = cv.getBoundingClientRect();
+  const cx = (e.clientX - r.left) * (cv.width / r.width);
+  const cy = (e.clientY - r.top) * (cv.height / r.height);
+  return [Math.min(1, Math.max(0, cx / cv.width)), Math.min(1, Math.max(0, cy / cv.height))];
+}
+
+function liveSetDrawMode(m) {
+  LIVE.drawMode = m;
+  LIVE.lineStart = null;
+  LIVE.rectStart = null;
+  g('live-draw-off').classList.toggle('active', m === 'off');
+  g('live-draw-rect').classList.toggle('active', m === 'rect');
+  g('live-draw-line').classList.toggle('active', m === 'line');
+}
+
+function liveZonesCount() {
+  const el = document.getElementById('live-zones-count');
+  if (el) el.textContent = `${LIVE.zones.length} zone${LIVE.zones.length === 1 ? '' : 's'}`;
+}
+
+function liveSendZones() {
+  liveZonesCount();
+  if (LIVE.connected && LIVE.ws && LIVE.ws.readyState === 1) {
+    liveSend({ type: 'set_zones', zones: LIVE.zones });
+  }
+}
+
+function liveZonesClear() {
+  LIVE.zones = [];
+  liveSendZones();
+  log('zones cleared', 'i');
+}
+
+function liveZoneComplete(z) {
+  LIVE.zoneSeq += 1;
+  z.name = `zone ${LIVE.zoneSeq}`;
+  LIVE.zones.push(z);
+  liveSetDrawMode('off');
+  liveSendZones();
+  log(`zone added: ${z.name}`, 'i');
+}
+
+// ── Triggers / watch payloads — shared by the apply buttons and START auto-restore ──
+function liveTriggersPayload() {
+  return { type: 'set_triggers',
+           line_cross: g('live-trig-line').checked,
+           direction: g('live-trig-dir').value,
+           dwell_s: parseFloat(g('live-trig-dwell').value) || 0,
+           clip: g('live-trig-clip').checked,
+           pre_s: parseFloat(g('live-trig-pre').value),
+           post_s: parseFloat(g('live-trig-post').value) };
+}
+
+function liveApplyTriggers() {
+  if (!liveSend(liveTriggersPayload())) { liveStatus('✗ not connected'); return; }
+  liveStatus('● triggers updated');
+}
+
+function liveWatchPayload() {
+  return { type: 'set_watch',
+           enabled: g('live-watch').checked,
+           condition: g('live-watch-cond').value.trim(),
+           interval_s: parseInt(g('live-watch-int').value, 10),
+           model: g('live-watch-model').value };
+}
+
+function liveApplyWatch() {
+  if (!liveSend(liveWatchPayload())) { liveStatus('✗ not connected'); return; }
+  liveStatus('● watch updated');
+}
+
+// START auto-restore — re-assert zones, then triggers, then watch (when armed).
+// The server accepts these while the worker is still spinning up.
+function liveRestoreControls() {
+  if (LIVE.zones.length) liveSendZones();
+  liveSend(liveTriggersPayload());
+  if (g('live-watch').checked && g('live-watch-cond').value.trim()) liveSend(liveWatchPayload());
+}
+
+// ── Events/captures feed — shared by hub + local engine. Newest first, capped at 10.
+// href != null renders a real anchor (server contract '/api/clips/<name>') + clip kind.
+function feedEntry(text, href) {
+  const feed = document.getElementById('live-events');
+  if (!feed) return;
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;justify-content:space-between;gap:8px;padding:2px 0';
+  const left = document.createElement('span');
+  if (href) {
+    const a = document.createElement('a');
+    a.href = href;
+    a.target = '_blank';
+    a.textContent = '▶ clip';
+    a.style.color = 'var(--accent)';
+    left.appendChild(a);
+    left.appendChild(document.createTextNode(' ' + text));
+  } else {
+    left.textContent = text;
+  }
+  const ts = document.createElement('span');
+  ts.textContent = new Date().toLocaleTimeString();
+  ts.style.cssText = 'color:var(--ink-4);white-space:nowrap';
+  row.appendChild(left);
+  row.appendChild(ts);
+  feed.insertBefore(row, feed.firstChild);
+  while (feed.children.length > 10) feed.removeChild(feed.lastChild);
+  feed.style.display = 'block';
+}
+
+function liveEventFeed(ev) {
+  let t = '⚑ ' + (ev.kind || 'event');
+  if (ev.zone) t += ' · ' + ev.zone;
+  if (ev.direction) t += ' · ' + ev.direction;
+  if (ev.detail) t += ' — ' + ev.detail;
+  feedEntry(t, null);
+  log(t, 'w');
+}
+
+function liveCaptureFeed(clip) {
+  feedEntry(clip.kind || 'clip', clip.url || null);
+  log('clip captured: ' + (clip.url || ''), 'h');
+}
+
+// Canvas mouse handlers — attached once at load; do nothing when drawMode is 'off'.
+(function () {
+  const cv = document.getElementById('live-canvas');
+  if (!cv) return;
+  cv.addEventListener('mousedown', (e) => {
+    if (LIVE.drawMode !== 'rect') return;
+    LIVE.rectStart = liveCanvasNorm(e);
+  });
+  cv.addEventListener('mouseup', (e) => {
+    if (LIVE.drawMode !== 'rect' || !LIVE.rectStart) return;
+    const a = LIVE.rectStart;
+    const b = liveCanvasNorm(e);
+    LIVE.rectStart = null;
+    if (Math.hypot((b[0] - a[0]) * cv.width, (b[1] - a[1]) * cv.height) < 4) return;
+    liveZoneComplete({ kind: 'rect',
+                       x1: Math.min(a[0], b[0]), y1: Math.min(a[1], b[1]),
+                       x2: Math.max(a[0], b[0]), y2: Math.max(a[1], b[1]) });
+  });
+  cv.addEventListener('click', (e) => {
+    if (LIVE.drawMode !== 'line') return;
+    const p = liveCanvasNorm(e);
+    if (!LIVE.lineStart) { LIVE.lineStart = p; return; }
+    const a = LIVE.lineStart;
+    LIVE.lineStart = null;
+    liveZoneComplete({ kind: 'line', a: a, b: p });
+  });
+})();
 
 // ── Annotated-video export: records the canvas (frame + overlays) exactly as
 // rendered — mode-dependent by construction. MP4 when Chrome supports it, else WebM.

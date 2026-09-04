@@ -30,15 +30,20 @@ app.state.started_at = time.time()
 WORK_DIR   = Path(tempfile.gettempdir()) / "visionbrain_ui"
 UPLOADS    = WORK_DIR / "uploads"
 RESULTS    = WORK_DIR / "results"
-for d in (WORK_DIR, UPLOADS, RESULTS):
+CLIPS      = WORK_DIR / "clips"
+for d in (WORK_DIR, UPLOADS, RESULTS, CLIPS):
     d.mkdir(exist_ok=True)
 
 PYTHON     = sys.executable          # same env that launched us
 STATIC_DIR = Path(__file__).parent / "static"
 
 # ── Local live engine (SAM 3.1 streamed over /api/live/ws) ────────────────────
-from .live_engine import configure as _live_configure, router as _live_router
-_live_configure(UPLOADS)
+from .live_engine import (
+    configure as _live_configure,
+    router as _live_router,
+    sanitize_clip_name as _sanitize_clip_name,
+)
+_live_configure(UPLOADS, CLIPS)
 app.include_router(_live_router)
 
 # ── Job store ──────────────────────────────────────────────────────────────────
@@ -576,6 +581,19 @@ async def serve_upload(fid: str):
     if not matches:
         raise HTTPException(404)
     return FileResponse(str(matches[0]))
+
+
+@app.get("/api/clips/{name}")
+async def serve_clip(name: str):
+    # sanitize_clip_name allows only [A-Za-z0-9_.-] + ".mp4" — no path
+    # separators, no traversal; anything else is a 404.
+    clean = _sanitize_clip_name(name)
+    if clean is None:
+        raise HTTPException(404)
+    path = CLIPS / clean
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(str(path))
 
 
 # ── Static + root ──────────────────────────────────────────────────────────────

@@ -332,6 +332,21 @@ Pure Python, no MLX — canonical for web app, CLI, and the live bridge hub.
 
 ViT backbone cached across frames (recompute every `backbone_every`); between detects the last items are re-emitted held with `track_state="predicted"` and honest `stale_ms`. Loader and all three compute hooks are injectable → unit-testable without mlx_vlm or weights.
 
+### `live_engine.py` — Local Live Engine (field-hub WS + smart capture)
+
+Lets VisionBrain itself play the field-hub server role: one worker streams SAM 3.1 over `WS /api/live/ws` in the exact hub binary format (`>III` header + JPEG + `>I` + telemetry JSON), so the unmodified browser client renders it. `configure(uploads_dir, clips_dir=None)` pins the upload resolution dir and the clip output dir (created when missing; `None` disables capture).
+
+**Controls** (inbound JSON; key `"type"`, `"action"` accepted as alias): `start` (file/webcam + optional `threshold`/`detect_every`/`resolution`), `set_prompts`, `set_zones`, `set_triggers`, `set_watch`, `stop`, `shutdown`; `hello` → ignored. Anything invalid → `("unknown", {})` + status note, never an exception.
+- `{"type":"set_zones","zones":[...]}` — REPLACES the set: `{"kind":"line","name"?,"a":[x,y],"b":[x,y]}` or `{"kind":"rect","name"?,"x1","y1","x2","y2"}`, normalized 0-1 (rect needs `x1<x2`, `y1<y2`), ≤ 40-char names (default `"zone N"`), max 8 — `validate_zones()`. Accepted before a worker exists (held pending, applied on start) and while running (rebuilt under the state lock on the next detect frame, which resets line counters). Ack `zones set (N)`.
+- `{"type":"set_triggers","line_cross"?,"direction"?,"dwell_s"?,"clip"?,"pre_s"?,"post_s"?}` — partial merge over defaults (False / `"none"` / 0=off / True / 6 / 4); `direction` ∈ none|any|8-way compass. Ack `triggers set`.
+- `{"type":"set_watch","enabled"?,"condition"?,"interval_s"? (1-30, default 4),"model"? ("lfm"|"lfm3b")}` — Ack `watch on`/`watch off`.
+
+**New outbound JSON:** `{"type":"event","event":{kind: line_cross|direction|dwell|watch|zone_enter|zone_exit, zone, direction, track_id|null, ts, frame_id, detail}}` and `{"type":"capture","clip":{name, url:"/api/clips/<name>", kind}}`. Rect zones fire enter/exit per track transition (`RectZone`); line zones run `zones.LineZoneCounter` per detect frame on pixel boxes (totals increment → `line_cross`); `DirectionTriggerState` fires once per (track, heading) and re-arms on heading change (`"any"` = any real heading); `DwellTracker` fires once per stationary stretch after `dwell_s`.
+
+**Clips:** the worker rings the same encoded JPEGs it streams (`maxlen = min(pre_s·fps or 30, 150)`); a fired trigger snapshots pre-roll, accumulates until `trigger_ts + post_s`, writes `clips_dir/clip_<ts>_<kind>.mp4` (cv2/`mp4v`), announces it, and prunes the dir to the 50 newest files. One pending capture at a time — later triggers still emit events. `web_app` serves `GET /api/clips/{name}` after `sanitize_clip_name()` (alnum/`_.-` + `.mp4` only; else 404).
+
+**Design:** single instance per process (module handle + `_engine_lock`); worker + watcher are daemon threads pushing onto an `asyncio.Queue` drained by a sender task. `vlm_registry` (and all heavy deps) import inside thread bodies, so CI imports the module and tests the pure helpers (`pack_frame`, `make_item`, `validate_control`, `validate_zones`, `sanitize_clip_name`, `RectZone`, `DwellTracker`, `DirectionTriggerState`) with no MLX/weights. The watch thread sleeps `interval_s`, skips ticks when the worker is idle/busy, asks the local VLM `"…Answer with exactly YES or NO. Condition: …"` on the latest full-res frame, fires a `watch` event (+capture) on YES; errors → status notes throttled to 1/30s, and a model that never loads disables the watch with one note.
+
 ### `model_host.py` — Refcounted MLX Checkpoint Residency
 
 - `HOST.acquire(key, loader) / HOST.release(key) / HOST.resident()` — payload-agnostic refcount cache; entry freed + `mx.clear_cache()` when the last holder releases. Lets engine and VLM share one LFM checkpoint.
