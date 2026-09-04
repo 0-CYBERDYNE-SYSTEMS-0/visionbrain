@@ -297,6 +297,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         available_backend,
     )
     from .prompt_router import route, route_fallback
+    from .crosscheck import crosscheck, falcon_to_dets, summarize
 
     video_path = Path(args.video)
     if not video_path.exists():
@@ -495,6 +496,8 @@ def cmd_analyze(args: argparse.Namespace) -> None:
 
     # ── Step 2 (optional): Falcon Perception key-frame refinement ───────────────
     falcon_summary_parts = []
+    crosscheck_results: list = []
+    do_crosscheck = not getattr(args, "no_crosscheck", False)
     if getattr(args, "falcon_refine", False):
         rec = falcon_perception_record()
         if not rec.can_load:
@@ -505,6 +508,24 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                 n_refine = min(getattr(args, "falcon_frames", 6), len(frames_with_dets))
                 print(f"[2/{total_steps}] Falcon Perception — semantic analysis on top {n_refine} frames...")
                 key_frames = _extract_key_frames(str(video_path), frames_with_dets, n=n_refine)
+
+                # Cross-engine inputs: SAM detections per frame index + key-frame
+                # pixel dims (for Falcon normalized → pixel box conversion).
+                sam_by_frame = {f["frame_index"]: f.get("detections", []) for f in frame_data}
+                key_frame_dims = {fi: pf.size for fi, _ts, pf in key_frames}
+
+                def _crosscheck_frame(fi: int, fp_results: list) -> None:
+                    """Validate one frame's Falcon boxes against SAM (never fails the pipeline)."""
+                    if not do_crosscheck:
+                        return
+                    try:
+                        w, h = key_frame_dims.get(fi, (0, 0))
+                        falcon_dets = falcon_to_dets(fp_results, w, h)
+                        cc = crosscheck(sam_by_frame.get(fi, []), falcon_dets)
+                        cc.frame_index = fi
+                        crosscheck_results.append(cc)
+                    except Exception as exc:
+                        print(f"    WARNING: SAM-vs-Falcon cross-check failed on frame {fi}: {exc}")
 
                 if getattr(args, "parallel_falcon", True):
                     # ── Parallel Falcon via ThreadPoolExecutor ───────────────
@@ -530,6 +551,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                                 + ("\n".join(det_strs) if det_strs else "  [no detections]")
                             )
                             print(f"  Frame {fi} (t={ts:.1f}s): {len(fp_results)} Falcon detections — {fp_stats.total_ms:.0f}ms [parallel]")
+                            _crosscheck_frame(fi, fp_results)
                     print()
                 else:
                     # ── Sequential Falcon (fallback) ─────────────────────────
@@ -545,10 +567,20 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                             + ("\n".join(det_strs) if det_strs else "  [no detections]")
                         )
                         print(f"  Frame {fi} (t={ts:.1f}s): {len(fp_results)} Falcon detections — {fp_stats.total_ms:.0f}ms")
+                        _crosscheck_frame(fi, fp_results)
                     print()
             else:
                 print(f"[2/{total_steps}] Falcon Perception — no frames with SAM detections to refine; skipping.")
                 print()
+        if crosscheck_results:
+            print(f"  Cross-check (SAM vs Falcon, IoU ≥ 0.5):")
+            for cc in sorted(crosscheck_results, key=lambda r: r.frame_index):
+                print(f"    frame {cc.frame_index}: matched {cc.matched} · sam-only {cc.sam_only} · "
+                      f"falcon-only {cc.falcon_only} (agreement {cc.agreement:.2f})")
+            agg = summarize(crosscheck_results)
+            print(f"  → Cross-check aggregate: {agg['frames']} frames · agreement {agg['agreement']*100:.0f}% · "
+                  f"{agg['matched']} matched · {agg['sam_only']} SAM-only · {agg['falcon_only']} falcon-only")
+            print()
         step_gemma = f"[3/{total_steps}]"
     else:
         step_gemma = f"[2/{total_steps}]"
@@ -597,6 +629,17 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         summary_parts.append("")
         summary_parts.append("Falcon Perception key-frame semantic analysis:")
         summary_parts.extend(falcon_summary_parts)
+
+    if crosscheck_results:
+        try:
+            agg = summarize(crosscheck_results)
+            summary_parts.append(
+                f"Cross-engine check (SAM vs Falcon) on {agg['frames']} key frames: "
+                f"agreement {agg['agreement']*100:.0f}%, {agg['matched']} matched, "
+                f"{agg['sam_only']} SAM-only, {agg['falcon_only']} Falcon-only."
+            )
+        except Exception as exc:
+            print(f"  WARNING: cross-check summary for Gemma failed: {exc}")
 
     summary_text = "\n".join(summary_parts)
 
@@ -831,6 +874,8 @@ def main() -> None:
                    help="Run Falcon Perception on key frames for semantic deep-dive")
     p.add_argument("--falcon-frames", type=int, default=6,
                    help="Number of key frames to analyze with Falcon (default 6)")
+    p.add_argument("--no-crosscheck", action="store_true",
+                   help="Skip SAM-vs-Falcon cross-validation on key frames")
     # ── Fast-path + adaptive ─────────────────────────────────────
     p.add_argument("--fast", action="store_true",
                    help="Run fast-path Falcon scan first, return quick answer immediately")

@@ -493,6 +493,7 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
           <select id="live-src" onchange="liveSrcChange(this.value)">
             <option value="file" selected>VIDEO FILE</option>
             <option value="webcam">WEBCAM 0</option>
+            <option value="url">RTSP / URL</option>
           </select>
         </div>
         <div class="cf" id="live-file-row">
@@ -505,6 +506,10 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
         <div class="cf" id="live-cam-row" style="display:none">
           <label>CAMERA</label>
           <select id="live-cam"><option value="0" selected>CAMERA 0</option><option value="1">CAMERA 1</option><option value="2">CAMERA 2</option></select>
+        </div>
+        <div class="cf" id="live-url-row" style="display:none">
+          <label>URL</label>
+          <input type="text" id="live-rtsp" placeholder="rtsp://user:pass@camera.local:554/stream" spellcheck="false" autocomplete="off">
         </div>
         <div class="sep"></div>
         <div class="cf"><label>PROMPTS</label><input type="text" id="live-prompts" value="person" placeholder="boat person kayak…"></div>
@@ -1827,6 +1832,7 @@ function liveEngineConnect() {
 function liveSrcChange(v) {
   g('live-file-row').style.display = v === 'file' ? '' : 'none';
   g('live-cam-row').style.display = v === 'webcam' ? '' : 'none';
+  g('live-url-row').style.display = v === 'url' ? '' : 'none';
 }
 
 function liveFileChosen(input) {
@@ -1864,6 +1870,14 @@ function liveStartToggle() {
   if (LIVE.engineRunning) { liveSend({ type: 'stop' }); return; }
   const source = g('live-src').value;
   if (source === 'file' && !S.files['live']) { log('Load a video file first.', 'w'); return; }
+  let streamUrl = '';
+  if (source === 'url') {
+    streamUrl = g('live-rtsp').value.trim();
+    if (!streamUrl || !/^(rtsp|rtsps|https?):\/\//i.test(streamUrl)) {
+      log('Enter an rtsp:// or http(s):// stream URL.', 'w');
+      return;
+    }
+  }
   const prompts = g('live-prompts').value.trim().split(/\s+/).filter(Boolean);
   if (!prompts.length) { log('Enter at least one prompt.', 'w'); return; }
   const payload = {
@@ -1875,6 +1889,7 @@ function liveStartToggle() {
     detect_every: parseInt(g('live-every').value, 10),
   };
   if (source === 'file') payload.file_id = S.files['live'].file_id;
+  else if (source === 'url') payload.url = streamUrl;
   else payload.camera = parseInt(g('live-cam').value, 10);
   if (LIVE.connected && LIVE.ws && LIVE.ws.readyState === 1) {
     liveSend(payload);

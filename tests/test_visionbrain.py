@@ -7,6 +7,7 @@ Run with:
 from __future__ import annotations
 
 import sys
+import types
 from pathlib import Path
 
 # Ensure visionbrain is importable
@@ -660,6 +661,143 @@ class TestDetectionCore:
         fal = [{"label": "tractor", "score": 0.6, "box": [0.6, 0.6, 0.9, 0.9]}]
         overlay, llm, stats = merge_validate(sam, fal, mode="soft")
         assert len(overlay) == 2 and stats["agree"] == 0
+
+
+class TestCrosscheck:
+    def test_falcon_to_dets_center_size_to_pixel_corners(self):
+        from visionbrain.crosscheck import falcon_to_dets
+
+        det = types.SimpleNamespace(
+            label="cow", score=0.9, cx=0.5, cy=0.25, h=0.5, w=0.5
+        )
+        dets = falcon_to_dets([det], orig_w=200, orig_h=100)
+        assert len(dets) == 1
+        box = dets[0]["bbox_xyxy"]
+        # corners: (0.5±0.25)*200, (0.25±0.25)*100
+        assert abs(box[0] - 50.0) < 0.2
+        assert abs(box[1] - 0.0) < 0.2
+        assert abs(box[2] - 150.0) < 0.2
+        assert abs(box[3] - 50.0) < 0.2
+        assert dets[0]["label"] == "cow"
+        assert dets[0]["score"] == 0.9
+
+    def test_falcon_to_dets_accepts_dicts(self):
+        from visionbrain.crosscheck import falcon_to_dets
+
+        dets = falcon_to_dets(
+            [{"label": "car", "score": 0.5, "cx": 0.5, "cy": 0.5, "h": 1.0, "w": 1.0}],
+            orig_w=100, orig_h=100,
+        )
+        assert dets[0]["bbox_xyxy"] == [0.0, 0.0, 100.0, 100.0]
+
+    def test_crosscheck_perfect_match_agreement_one(self):
+        from visionbrain.crosscheck import crosscheck
+
+        sam = [{"label": "cow", "score": 0.9, "bbox_xyxy": [10.0, 10.0, 50.0, 50.0], "track_id": 3}]
+        fal = [{"label": "cow", "score": 0.8, "bbox_xyxy": [10.0, 10.0, 50.0, 50.0]}]
+        res = crosscheck(sam, fal)
+        assert res.matched == 1
+        assert res.sam_only == 0 and res.falcon_only == 0
+        assert res.agreement == 1.0
+        assert res.matches[0]["sam_track_id"] == 3
+        assert res.matches[0]["iou"] == 1.0
+
+    def test_crosscheck_disjoint_boxes_match_nothing(self):
+        from visionbrain.crosscheck import crosscheck
+
+        sam = [{"label": "cow", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]}]
+        fal = [{"label": "cow", "score": 0.8, "bbox_xyxy": [100.0, 100.0, 120.0, 120.0]}]
+        res = crosscheck(sam, fal)
+        assert res.matched == 0
+        assert res.agreement == 0.0
+        assert res.sam_only == 1 and res.falcon_only == 1
+        assert res.matches == []
+
+    def test_crosscheck_overlap_below_threshold_no_match(self):
+        from visionbrain.crosscheck import crosscheck
+
+        # IoU = 0.4 / 1.0 = 0.4 < 0.5
+        sam = [{"label": "cow", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]}]
+        fal = [{"label": "cow", "score": 0.8, "bbox_xyxy": [0.0, 0.0, 10.0, 4.0]}]
+        res = crosscheck(sam, fal)
+        assert res.matched == 0
+        assert res.agreement == 0.0
+
+    def test_crosscheck_iou_at_threshold_matches(self):
+        from visionbrain.crosscheck import crosscheck
+
+        # IoU = 0.5 / 1.0 = 0.5 → >= threshold matches
+        sam = [{"label": "cow", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]}]
+        fal = [{"label": "cow", "score": 0.8, "bbox_xyxy": [0.0, 0.0, 10.0, 5.0]}]
+        res = crosscheck(sam, fal)
+        assert res.matched == 1
+
+    def test_crosscheck_greedy_one_to_one_highest_iou_first(self):
+        from visionbrain.crosscheck import crosscheck
+
+        sam = [
+            {"label": "a", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]},   # IoU 0.95 with falcon
+            {"label": "b", "score": 0.8, "bbox_xyxy": [1.0, 0.0, 11.0, 10.0]},   # IoU ~0.77 with falcon
+        ]
+        fal = [{"label": "a", "score": 0.7, "bbox_xyxy": [0.0, 0.0, 9.5, 10.0]}]
+        res = crosscheck(sam, fal)
+        assert res.matched == 1
+        assert res.sam_only == 1 and res.falcon_only == 0
+        # Higher-IoU pair wins; one Falcon det can match only one SAM det.
+        assert res.matches[0]["sam_label"] == "a"
+        assert res.agreement == 0.5  # 1 / max(1, max(2, 1))
+
+    def test_crosscheck_label_passthrough(self):
+        from visionbrain.crosscheck import crosscheck
+
+        sam = [{"label": "vehicle", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]}]
+        fal = [{"label": "truck", "score": 0.8, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]}]
+        res = crosscheck(sam, fal)
+        assert res.matched == 1
+        assert res.matches[0]["sam_label"] == "vehicle"
+        assert res.matches[0]["falcon_label"] == "truck"
+
+    def test_crosscheck_track_id_propagation(self):
+        from visionbrain.crosscheck import crosscheck
+
+        sam = [
+            {"label": "cow", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0], "track_id": 7},
+            {"label": "cow", "score": 0.9, "bbox_xyxy": [50.0, 0.0, 60.0, 10.0]},  # no track_id
+        ]
+        fal = [
+            {"label": "cow", "score": 0.8, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]},
+            {"label": "cow", "score": 0.8, "bbox_xyxy": [50.0, 0.0, 60.0, 10.0]},
+        ]
+        res = crosscheck(sam, fal)
+        assert [m["sam_track_id"] for m in res.matches] == [7, None]
+
+    def test_crosscheck_frame_index_defaults_unset(self):
+        from visionbrain.crosscheck import crosscheck
+
+        res = crosscheck([], [])
+        assert res.frame_index == -1
+        res.frame_index = 42  # CLI sets it after matching
+        assert res.frame_index == 42
+
+    def test_summarize_aggregates_and_means(self):
+        from visionbrain.crosscheck import CrosscheckResult, summarize
+
+        results = [
+            CrosscheckResult(frame_index=1, matched=2, sam_only=0, falcon_only=0, agreement=1.0),
+            CrosscheckResult(frame_index=2, matched=1, sam_only=1, falcon_only=0, agreement=0.5),
+        ]
+        agg = summarize(results)
+        assert agg["frames"] == 2
+        assert agg["matched"] == 3
+        assert agg["sam_only"] == 1
+        assert agg["falcon_only"] == 0
+        assert abs(agg["agreement"] - 0.75) < 1e-9
+
+    def test_summarize_empty_is_zero(self):
+        from visionbrain.crosscheck import summarize
+
+        agg = summarize([])
+        assert agg == {"frames": 0, "matched": 0, "sam_only": 0, "falcon_only": 0, "agreement": 0.0}
 
 
 class TestModelHost:

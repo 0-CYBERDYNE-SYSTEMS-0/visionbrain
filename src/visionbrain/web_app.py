@@ -19,12 +19,44 @@ from typing import AsyncGenerator, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+from . import service
 
 app = FastAPI(title="VisionBrain — Aerial Ground Control", docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.state.started_at = time.time()
+
+
+# ── Shared-token auth (VB_TOKEN; off by default) ──────────────────────────────
+@app.middleware("http")
+async def _token_auth(request: Request, call_next):
+    """Enforce the shared token on /api/* (except /api/healthz) when enabled.
+
+    Token sources, in order: the X-Auth-Token header, then the ?token= query
+    parameter. The live WebSocket route is HTTP-middleware-exempt by design —
+    see DEPLOY.md ("Token auth") for the documented gap.
+    """
+    if service.token_enabled():
+        path = request.url.path
+        if path.startswith("/api/") and path != "/api/healthz":
+            provided = request.headers.get("x-auth-token") or request.query_params.get("token")
+            if not service.check_token(provided):
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
+# ── Job queue (VB_MAX_JOBS heavy-subprocess slot limiter) ─────────────────────
+_job_queue: Optional[service.JobQueue] = None
+
+
+def _queue() -> service.JobQueue:
+    """Lazily-built queue singleton so VB_MAX_JOBS is read at first use."""
+    global _job_queue
+    if _job_queue is None:
+        _job_queue = service.JobQueue(service.max_jobs())
+    return _job_queue
 
 # ── Directories ────────────────────────────────────────────────────────────────
 WORK_DIR   = Path(tempfile.gettempdir()) / "visionbrain_ui"
@@ -103,6 +135,30 @@ async def _exec(job: dict, cmd: list[str], outputs: dict[str, str]) -> None:
         job["status"] = "error"
         job["phase"] = "error"
         job["error"] = f"exit {proc.returncode}"
+
+
+async def _run_queued(job: dict, cmd: list[str], outputs: dict[str, str]) -> int:
+    """Acquire a queue slot for *job*, then run its subprocess in background.
+
+    The handler awaits this only until a slot is granted, so the launch
+    response can report the submit-time queue position (returned); the
+    subprocess itself keeps running via create_task and releases the slot
+    in a done-callback, so a client disconnect never leaks the slot.
+    """
+    queue = _queue()
+    position = await queue.acquire(job["id"])
+    job["queue_position"] = position
+    if position > 0:
+        job["phase"] = "queued"
+    task = asyncio.create_task(_exec(job, cmd, outputs))
+    task.add_done_callback(lambda _t: queue.release(job["id"]))
+    return position
+
+
+def _launch_payload(job: dict, position: int) -> dict:
+    """Standard response body for a job-launch endpoint."""
+    return {"job_id": job["id"], "created_at": job["ts"],
+            "queued": position > 0, "position": position}
 
 
 # ── Status ─────────────────────────────────────────────────────────────────────
@@ -296,9 +352,9 @@ async def job_analyze(
     if chunk_overlap != 3:
         cmd += ["--chunk-overlap", str(chunk_overlap)]
 
-    asyncio.create_task(_exec(job, cmd, {"video": out_v, "json": out_j, "report": out_r,
-                                          "fast_json": out_f if out_f else ""}))
-    return {"job_id": jid, "created_at": job["ts"]}
+    position = await _run_queued(job, cmd, {"video": out_v, "json": out_j, "report": out_r,
+                                            "fast_json": out_f if out_f else ""})
+    return _launch_payload(job, position)
 
 
 # ── FastScan ──────────────────────────────────────────────────────────────────
@@ -325,8 +381,8 @@ async def job_fastscan(
            "--min-relevance", str(min_relevance),
            "--output", out]
 
-    asyncio.create_task(_exec(job, cmd, {"fast_json": out}))
-    return {"job_id": jid, "created_at": job["ts"]}
+    position = await _run_queued(job, cmd, {"fast_json": out})
+    return _launch_payload(job, position)
 
 
 # ── Detect ─────────────────────────────────────────────────────────────────────
@@ -423,8 +479,8 @@ async def job_track(
             cmd += ["--motion-threshold", str(motion_threshold)]
     if propagate > 0:
         cmd += ["--propagate", str(propagate)]
-    asyncio.create_task(_exec(job, cmd, {"video": out, "json": out_j if json_output else ""}))
-    return {"job_id": jid, "created_at": job["ts"]}
+    position = await _run_queued(job, cmd, {"video": out, "json": out_j if json_output else ""})
+    return _launch_payload(job, position)
 
 
 # ── SAM-3 ──────────────────────────────────────────────────────────────────────
@@ -481,8 +537,8 @@ async def job_agent(
         cmd += ["--model", model]
     if base_url:
         cmd += ["--base-url", base_url]
-    asyncio.create_task(_exec(job, cmd, {"image": out}))
-    return {"job_id": jid, "created_at": job["ts"]}
+    position = await _run_queued(job, cmd, {"image": out})
+    return _launch_payload(job, position)
 
 
 # ── Job query & SSE ────────────────────────────────────────────────────────────
@@ -491,7 +547,10 @@ async def get_job(jid: str):
     job = _jobs.get(jid)
     if not job:
         raise HTTPException(404)
-    return {k: v for k, v in job.items() if k != "_proc"}
+    payload = {k: v for k, v in job.items() if k != "_proc"}
+    payload["queue_position"] = job.get("queue_position")
+    payload["queued"] = job.get("phase") == "queued"
+    return payload
 
 
 def _result_path(jid: str, kind: str) -> Path:
@@ -553,6 +612,8 @@ async def stream_job(jid: str, request: Request):
                     "type": "heartbeat",
                     "status": job["status"],
                     "phase": job.get("phase", "running"),
+                    "queue_position": job.get("queue_position"),
+                    "queued": job.get("phase") == "queued",
                     "ts": now,
                     "last_heartbeat_at": job.get("last_heartbeat_at", now),
                     "last_output_at": job.get("last_output_at"),

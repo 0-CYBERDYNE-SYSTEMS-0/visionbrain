@@ -323,6 +323,15 @@ visionbrain track --video drone.mp4 --prompts person car --output tracked.mp4
 
 Pure Python, no MLX — canonical for web app, CLI, and the live bridge hub.
 
+### `crosscheck.py` — SAM-vs-Falcon Cross-Engine Validation
+
+Pure (stdlib + `detection_core.box_iou` only):
+- `crosscheck(sam_dets, falcon_dets, *, iou_threshold=0.5) -> CrosscheckResult` — greedy highest-IoU-first one-to-one matching between two detection lists (`{"bbox_xyxy", "label", "score"?}`); a pair matches when `iou >= threshold` (labels are reported per pair but not required to agree, so disagreement stays visible). `CrosscheckResult`: `frame_index, matched, sam_only, falcon_only, agreement, matches` — agreement = `matched / max(1, max(len(sam), len(falcon)))`
+- `falcon_to_dets(detection_results, orig_w, orig_h)` — Falcon normalized `cx/cy/h/w` → pixel `bbox_xyxy` dicts
+- `summarize(results) -> dict` — aggregate `{frames, matched, sam_only, falcon_only, agreement}` (mean per-frame agreement; 0.0 when empty)
+
+`cmd_analyze` runs it automatically on Falcon-refined key frames (unless `--no-crosscheck`), prints a per-frame + aggregate block to the ops log (failures warn and never break the pipeline), and feeds one compact agreement line into Gemma's reasoning context.
+
 ### `live_tracking.py` — Stateful Live SAM 3.1 Tracker
 
 **Public API:**
@@ -336,7 +345,7 @@ ViT backbone cached across frames (recompute every `backbone_every`); between de
 
 Lets VisionBrain itself play the field-hub server role: one worker streams SAM 3.1 over `WS /api/live/ws` in the exact hub binary format (`>III` header + JPEG + `>I` + telemetry JSON), so the unmodified browser client renders it. `configure(uploads_dir, clips_dir=None)` pins the upload resolution dir and the clip output dir (created when missing; `None` disables capture).
 
-**Controls** (inbound JSON; key `"type"`, `"action"` accepted as alias): `start` (file/webcam + optional `threshold`/`detect_every`/`resolution`), `set_prompts`, `set_zones`, `set_triggers`, `set_watch`, `stop`, `shutdown`; `hello` → ignored. Anything invalid → `("unknown", {})` + status note, never an exception.
+**Controls** (inbound JSON; key `"type"`, `"action"` accepted as alias): `start` (file/webcam/url + optional `threshold`/`detect_every`/`resolution`), `set_prompts`, `set_zones`, `set_triggers`, `set_watch`, `stop`, `shutdown`; `hello` → ignored. Anything invalid → `("unknown", {})` + status note, never an exception. `url` sources (`rtsp://`, `rtsps://`, `http://`, `https://` only) are gated by `validate_stream_url()` and always rendered via `redact_url()` (userinfo → `user:***@`) in status notes; a stream that fails to open (or 40 consecutive read failures) fails cleanly with `engine_stopped` — no auto-retry in the first cut.
 - `{"type":"set_zones","zones":[...]}` — REPLACES the set: `{"kind":"line","name"?,"a":[x,y],"b":[x,y]}` or `{"kind":"rect","name"?,"x1","y1","x2","y2"}`, normalized 0-1 (rect needs `x1<x2`, `y1<y2`), ≤ 40-char names (default `"zone N"`), max 8 — `validate_zones()`. Accepted before a worker exists (held pending, applied on start) and while running (rebuilt under the state lock on the next detect frame, which resets line counters). Ack `zones set (N)`.
 - `{"type":"set_triggers","line_cross"?,"direction"?,"dwell_s"?,"clip"?,"pre_s"?,"post_s"?}` — partial merge over defaults (False / `"none"` / 0=off / True / 6 / 4); `direction` ∈ none|any|8-way compass. Ack `triggers set`.
 - `{"type":"set_watch","enabled"?,"condition"?,"interval_s"? (1-30, default 4),"model"? ("lfm"|"lfm3b")}` — Ack `watch on`/`watch off`.
@@ -345,7 +354,16 @@ Lets VisionBrain itself play the field-hub server role: one worker streams SAM 3
 
 **Clips:** the worker rings the same encoded JPEGs it streams (`maxlen = min(pre_s·fps or 30, 150)`); a fired trigger snapshots pre-roll, accumulates until `trigger_ts + post_s`, writes `clips_dir/clip_<ts>_<kind>.mp4` (cv2/`mp4v`), announces it, and prunes the dir to the 50 newest files. One pending capture at a time — later triggers still emit events. `web_app` serves `GET /api/clips/{name}` after `sanitize_clip_name()` (alnum/`_.-` + `.mp4` only; else 404).
 
-**Design:** single instance per process (module handle + `_engine_lock`); worker + watcher are daemon threads pushing onto an `asyncio.Queue` drained by a sender task. `vlm_registry` (and all heavy deps) import inside thread bodies, so CI imports the module and tests the pure helpers (`pack_frame`, `make_item`, `validate_control`, `validate_zones`, `sanitize_clip_name`, `RectZone`, `DwellTracker`, `DirectionTriggerState`) with no MLX/weights. The watch thread sleeps `interval_s`, skips ticks when the worker is idle/busy, asks the local VLM `"…Answer with exactly YES or NO. Condition: …"` on the latest full-res frame, fires a `watch` event (+capture) on YES; errors → status notes throttled to 1/30s, and a model that never loads disables the watch with one note.
+**Design:** single instance per process (module handle + `_engine_lock`); worker + watcher are daemon threads pushing onto an `asyncio.Queue` drained by a sender task. `vlm_registry` (and all heavy deps) import inside thread bodies, so CI imports the module and tests the pure helpers (`pack_frame`, `make_item`, `validate_control`, `validate_zones`, `sanitize_clip_name`, `validate_stream_url`, `redact_url`, `RectZone`, `DwellTracker`, `DirectionTriggerState`) with no MLX/weights. The watch thread sleeps `interval_s`, skips ticks when the worker is idle/busy, asks the local VLM `"…Answer with exactly YES or NO. Condition: …"` on the latest full-res frame, fires a `watch` event (+capture) on YES; errors → status notes throttled to 1/30s, and a model that never loads disables the watch with one note.
+
+### `service.py` — Shared-Token Auth + Job-Slot Queue
+
+Pure asyncio/stdlib primitives for LAN/business deployments (no fastapi or MLX imports — importable anywhere):
+- `token_enabled() / check_token(provided)` — VB_TOKEN env (read at call time); constant-time compare via `hmac.compare_digest`; unset/empty disables auth entirely
+- `max_jobs() -> int` — `VB_MAX_JOBS` clamped to 1..4 (default 1); invalid → default
+- `JobQueue` — asyncio FIFO slot limiter: `acquire(key) -> position` (0 = started immediately, 1 = first in line…), `release(key)`, `queued_count`; deque-of-futures so there is no busy waiting, and a waiter cancelled while queued is skipped cleanly and never consumes a slot
+
+`web_app.py` wiring: when `VB_TOKEN` is set, every `/api/*` path except `/api/healthz` requires the token via the `X-Auth-Token` header or `?token=` query (401 JSON otherwise; the live WebSocket is NOT token-enforced — protect via network boundary/reverse proxy). The heavy subprocess endpoints (`analyze`, `fastscan`, `track`, `agent`) run through a shared `JobQueue`; light image jobs (`detect`, `segment`, `sam3`, `ocr`) bypass it. Job dicts carry `queue_position`/`queued`, launch responses gain `{queued, position}`, and SSE heartbeats include both.
 
 ### `model_host.py` — Refcounted MLX Checkpoint Residency
 
@@ -410,6 +428,9 @@ FastAPI app serving the single-page Ground Control dashboard (`static/index.html
 - `POST /api/job/{kind}` — start a job (`analyze`, `fastscan`, `detect`, `segment`, `ocr`, `track`, `sam3`, `agent`); each spawns the CLI as a subprocess and returns `{job_id}`. `agent` accepts optional `question`/`api_key`/`model`/`base_url` form fields (empty fields fall back to the saved VLM settings); `track` accepts optional `json_output`/`supervision`/`persistent_ids`/`adaptive_motion`/`motion_threshold`/`propagate`; `analyze` accepts optional `question` (forwarded to Gemma)
 - `GET /api/job/{jid}` — job state + streamed output; `GET /api/job/{jid}/stream` — SSE stream (phase, heartbeat, progress)
 - `GET /api/job/{jid}/detections|report|fast|file/{kind}` — result artifacts
+- `GET /api/clips/{name}` — serve smart-capture clips (name sanitized; traversal/bad extensions → 404)
+
+**Auth + concurrency (service.py):** set `VB_TOKEN` to require the token (X-Auth-Token header or `?token=`) on all `/api/*` except `/api/healthz` — off by default; `VB_MAX_JOBS` (1..4, default 1) caps concurrent heavy jobs via a FIFO queue with `queue_position`/`queued` visible in job state, launch responses, and SSE heartbeats. The live WebSocket is not token-enforced. See DEPLOY.md.
 
 **UI layout:**
 - Header: logo, mode tabs (analyze / detect / segment / track / sam-3 / ocr), connection status

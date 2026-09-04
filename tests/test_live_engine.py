@@ -215,6 +215,8 @@ class TestLiveEngine:
         # Smart-capture helpers must be importable without heavy deps too.
         assert callable(le.validate_zones)
         assert callable(le.sanitize_clip_name)
+        assert callable(le.validate_stream_url)
+        assert callable(le.redact_url)
         assert callable(le.RectZone)
         assert callable(le.DwellTracker)
         assert callable(le.DirectionTriggerState)
@@ -276,8 +278,145 @@ class TestLiveEngine:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Smart capture: sanitize_clip_name / validate_zones / pure trigger helpers
+# Network-stream sources: validate_stream_url / redact_url / url starts
 # ──────────────────────────────────────────────────────────────────────────────
+
+class TestStreamUrl:
+    def test_validate_stream_url_accepts(self):
+        import visionbrain.live_engine as le
+
+        for url in (
+            "rtsp://cam.local:554/stream",
+            "rtsps://cam.local:322/live",
+            "http://cam.local:8080/video",
+            "https://example.com/live.m3u8",
+            "RTSP://CAM:554/x",              # scheme match is case-insensitive
+            "RtSpS://cam/x",
+            "HTTP://cam/v",
+            "HTTPS://example.com/a",
+            "rtsp://user:pass@cam:554/s",    # userinfo allowed (redacted later)
+            "https://a.b",                   # minimal non-empty remainder
+        ):
+            assert le.validate_stream_url(url) is True, url
+
+    def test_validate_stream_url_rejects(self):
+        import visionbrain.live_engine as le
+
+        for url in (
+            "",                              # empty
+            "   ",                           # blank — no scheme
+            "camera.local:554/stream",       # plain host, no scheme
+            "file:///x.mp4",                 # disallowed scheme
+            "ftp://x",                       # disallowed scheme
+            "gopher://host/x",               # disallowed scheme
+            "rtsp://",                       # empty remainder after scheme
+            "http://", "https://", "rtsps://",
+            "rtsp://cam host/stream",        # whitespace in remainder
+            "rtsp://cam\tstream",            # tab counts as whitespace
+            "https://example.com/a b?c=d",   # space in query
+            " rtsp://cam",                   # leading space breaks the scheme
+            "rtsp://cam/path ",              # trailing space in remainder
+            "rtsp://" + "a" * 494,           # 501 chars total — too long
+            "x" * 501,                       # way too long, no scheme anyway
+            None, 42, True, b"rtsp://cam", ["rtsp://cam"],  # non-strings
+        ):
+            assert le.validate_stream_url(url) is False, repr(url)
+
+    def test_validate_stream_url_length_boundary(self):
+        import visionbrain.live_engine as le
+
+        # "rtsp://" is 7 chars: 493 fill = exactly 500 (ok), 494 = 501 (no).
+        assert le.validate_stream_url("rtsp://" + "a" * 493) is True
+        assert le.validate_stream_url("rtsp://" + "a" * 494) is False
+
+    def test_redact_url_masks_credentials(self):
+        import visionbrain.live_engine as le
+
+        assert (
+            le.redact_url("rtsp://admin:secret@cam:554/s")
+            == "rtsp://admin:***@cam:554/s"
+        )
+        # Empty user → the whole userinfo collapses to ***@.
+        assert le.redact_url("rtsp://:s3cret@cam:554/s") == "rtsp://***@cam:554/s"
+        # Works on http(s) too, and for later path segments.
+        assert (
+            le.redact_url("https://bob:hunter2@example.com/live?a=1")
+            == "https://bob:***@example.com/live?a=1"
+        )
+
+    def test_redact_url_noop_without_userinfo(self):
+        import visionbrain.live_engine as le
+
+        # No @ in the authority → unchanged; port colons must not confuse it.
+        assert le.redact_url("rtsp://cam:554/live") == "rtsp://cam:554/live"
+        assert le.redact_url("http://example.com/a?b=1") == "http://example.com/a?b=1"
+        # An @ appearing later (path/query) is not userinfo.
+        assert (
+            le.redact_url("rtsp://cam:554/a?user=me@x")
+            == "rtsp://cam:554/a?user=me@x"
+        )
+
+    def test_validate_control_url_start(self):
+        import visionbrain.live_engine as le
+
+        action, payload = le.validate_control({
+            "type": "start", "source": "url",
+            "url": "rtsp://admin:secret@cam:554/stream", "prompts": ["person"],
+        })
+        assert action == "start"
+        assert payload["source"] == "url"
+        assert payload["url"] == "rtsp://admin:secret@cam:554/stream"
+        assert payload["prompts"] == ["person"]
+
+        # The "action" alias works for url starts too, with tuning knobs.
+        action, payload = le.validate_control({
+            "action": "start", "source": "url",
+            "url": "https://cam.local/live.m3u8", "prompts": ["car"],
+            "threshold": 0.3,
+        })
+        assert action == "start"
+        assert payload["url"] == "https://cam.local/live.m3u8"
+        assert payload["threshold"] == 0.3
+
+    def test_validate_control_url_start_invalid(self):
+        import visionbrain.live_engine as le
+
+        def start(url):
+            return le.validate_control({
+                "type": "start", "source": "url", "url": url, "prompts": ["x"],
+            })
+
+        # Missing url key.
+        action, payload = le.validate_control({
+            "type": "start", "source": "url", "prompts": ["x"],
+        })
+        assert action == "unknown"
+        assert payload == {}
+
+        # Bad schemes / malformed urls / empty.
+        for bad in (
+            "", "   ", "camera.local:554/stream", "file:///x.mp4", "ftp://x",
+            "rtsp://", "rtsp://a b/c", "rtsp://" + "a" * 494,
+        ):
+            action, payload = start(bad)
+            assert action == "unknown", bad
+            assert payload == {}
+
+        # Non-string urls.
+        for bad in (None, 42, True, ["rtsp://cam"], {"url": "rtsp://cam"}):
+            action, payload = start(bad)
+            assert action == "unknown", bad
+            assert payload == {}
+
+        # Unknown sources stay unknown (no collision with the new branch).
+        for bad in ("rtsp", "http", "url ", "URL"):
+            action, _ = le.validate_control({
+                "action": "start", "source": bad, "prompts": ["x"],
+            })
+            assert action == "unknown"
+
+
+
 
 class TestSanitizeClipName:
     def test_accepts_safe_names(self):

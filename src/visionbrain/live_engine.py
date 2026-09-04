@@ -4,7 +4,9 @@ Purpose
 -------
 The live tab normally connects as a WebSocket *client* to an external field
 hub. This module lets the VisionBrain app itself play that server role: it
-runs SAM 3.1 detection over an uploaded video file or a local webcam and
+runs SAM 3.1 detection over an uploaded video file, a local webcam, or a
+network stream (rtsp/rtspS/http(s) URL, credentials redacted everywhere a
+URL is displayed) and
 streams the SAME wire protocol, so the existing browser client works
 unchanged. Frames are sent CLEAN (no overlay) — the client draws boxes from
 the detection items itself. On top of the raw stream it adds smart capture:
@@ -43,6 +45,10 @@ as an alias for programmatic callers.
      "prompts": [str, ...]}              -> run on an uploaded file
     {"type": "start", "source": "webcam", "camera": int >= 0,
      "prompts": [str, ...]}              -> run on a local camera
+    {"type": "start", "source": "url", "url": str,
+     "prompts": [str, ...]}              -> run on a network stream
+        (rtsp://, rtsps://, http://, https:// — see ``validate_stream_url``;
+        URLs are always redacted via ``redact_url`` before display)
     {"type": "set_prompts", "prompts": [str, ...]} -> swap prompts live
     {"type": "set_zones", "zones": [...]}  -> REPLACE the whole zone set.
         Each zone: {"kind": "line", "name"?: str, "a": [x, y], "b": [x, y]}
@@ -122,6 +128,8 @@ __all__ = [
     "pack_frame",
     "make_item",
     "validate_control",
+    "validate_stream_url",
+    "redact_url",
     "validate_zones",
     "sanitize_clip_name",
     "RectZone",
@@ -205,6 +213,54 @@ def sanitize_clip_name(name: Any) -> Optional[str]:
     if not name.endswith(".mp4"):
         return None
     return name
+
+
+_URL_SCHEMES = ("rtsp://", "rtsps://", "http://", "https://")
+_MAX_URL_LEN = 500
+
+
+def validate_stream_url(url: Any) -> bool:
+    """True when ``url`` is an acceptable network-stream URL.
+
+    Valid means: the scheme (case-insensitive) is one of ``rtsp://``,
+    ``rtsps://``, ``http://``, ``https://``; the total length is at most
+    500 characters; and whatever follows the scheme is non-empty and
+    contains no whitespace. Anything else — plain hostnames without a
+    scheme, ``file://``, ``ftp://``, empty strings, non-strings — is False.
+    """
+    if not isinstance(url, str):
+        return False
+    if not url or len(url) > _MAX_URL_LEN:
+        return False
+    lowered = url.lower()
+    for scheme in _URL_SCHEMES:
+        if lowered.startswith(scheme):
+            rest = url[len(scheme):]
+            return bool(rest) and re.search(r"\s", rest) is None
+    return False
+
+
+# scheme "://" + userinfo up to the FIRST "@" ("/" and "@" cannot appear
+# in userinfo, so the first @ always terminates it).
+_USERINFO_RE = re.compile(r"^(?P<head>[A-Za-z][A-Za-z0-9+.\-]*://)(?P<userinfo>[^/@]*)@")
+
+
+def redact_url(url: str) -> str:
+    """Mask userinfo credentials in ``url`` for safe display and logs.
+
+    ``scheme://user:pass@host/…`` becomes ``scheme://user:***@host/…``;
+    an empty user masks to ``scheme://***@host/…``. URLs without userinfo
+    pass through unchanged (non-strings are returned as-is).
+    """
+    if not isinstance(url, str):
+        return url
+    match = _USERINFO_RE.match(url)
+    if match is None:
+        return url
+    head = match.group("head")
+    user = match.group("userinfo").split(":", 1)[0]
+    tail = url[match.end():]
+    return f"{head}{user}:***@{tail}" if user else f"{head}***@{tail}"
 
 
 def _coord01(value: Any, label: str) -> float:
@@ -478,7 +534,7 @@ def validate_control(msg: Any) -> tuple[str, dict]:
 
     if action == "start":
         source = msg.get("source")
-        if source not in ("file", "webcam"):
+        if source not in ("file", "webcam", "url"):
             return ("unknown", {})
         prompts = _valid_prompts(msg.get("prompts"))
         if prompts is None:
@@ -490,11 +546,16 @@ def validate_control(msg: Any) -> tuple[str, dict]:
             if not isinstance(file_id, str) or not file_id.strip():
                 return ("unknown", {})
             payload["file_id"] = file_id
-        else:
+        elif source == "webcam":
             camera = msg.get("camera")
             if isinstance(camera, bool) or not isinstance(camera, int) or camera < 0:
                 return ("unknown", {})
             payload["camera"] = camera
+        else:
+            url = msg.get("url")
+            if not isinstance(url, str) or not validate_stream_url(url):
+                return ("unknown", {})
+            payload["url"] = url
 
         # Optional tuning knobs — dropped silently when bogus.
         threshold = msg.get("threshold")
@@ -785,6 +846,7 @@ _JPEG_QUALITY = 70
 _HELD_EVERY = 5  # resend held boxes every Nth non-detect frame
 _MAX_RING_FRAMES = 150
 _MAX_CLIPS = 50
+_MAX_STREAM_READ_FAILS = 40  # consecutive url read failures before giving up
 
 
 class _EngineWorker:
@@ -1147,6 +1209,12 @@ class _EngineWorker:
                 return
             cap = cv2.VideoCapture(str(resolved))
             source_desc = resolved.name
+        elif source == "url":
+            url = str(cfg["url"])
+            # A URL can surface in status notes and telemetry — always the
+            # redacted form, never raw credentials.
+            source_desc = redact_url(url)
+            cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
         else:
             camera = int(cfg["camera"])
             cap = cv2.VideoCapture(camera)
@@ -1154,7 +1222,13 @@ class _EngineWorker:
 
         try:
             if not cap.isOpened():
-                self.push({"type": "status", "note": f"cannot open source: {source_desc}"})
+                if source == "url":
+                    self.push({
+                        "type": "status",
+                        "note": f"stream unreachable: {source_desc}",
+                    })
+                else:
+                    self.push({"type": "status", "note": f"cannot open source: {source_desc}"})
                 return
 
             # ── model (lazy load; cached inside sam3_inference) ───────────
@@ -1173,7 +1247,14 @@ class _EngineWorker:
             if fps <= 0:
                 fps = 30.0
             # File playback is paced to the video's own fps; webcam ~30fps.
-            frame_interval = 1.0 / (30.0 if source == "webcam" else fps)
+            # Network streams pace themselves via their blocking reads — for
+            # them the loop only applies a burst guard (see below).
+            if source == "url":
+                frame_interval = 0.0
+                burst_min_s = 1.0 / max(fps, 1.0) / 2.0   # 2x-fps read floor
+                last_read_t = time.monotonic()
+            else:
+                frame_interval = 1.0 / (30.0 if source == "webcam" else fps)
             src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
@@ -1188,6 +1269,7 @@ class _EngineWorker:
 
             frame_id = 0   # wire frame counter (monotonic, even across loops)
             fi = 0         # position in the stream (resets when a file loops)
+            read_fails = 0  # consecutive failed reads (url sources only)
             held_tick = 0
             latest_items: list[dict] = []
             next_frame_t = time.monotonic()
@@ -1203,8 +1285,32 @@ class _EngineWorker:
                         self._dir_state.reset()
                         self._dwell.reset()
                         continue
+                    if source == "url":
+                        # Tolerate a bounded run of transient network
+                        # hiccups; a stream that never recovers (or closes
+                        # immediately) fails cleanly — no infinite retry.
+                        read_fails += 1
+                        if read_fails < _MAX_STREAM_READ_FAILS:
+                            continue
+                        self.push({
+                            "type": "status",
+                            "note": f"stream unreachable: {source_desc}",
+                        })
+                        return
                     self.push({"type": "status", "note": f"source ended: {source_desc}"})
                     return
+
+                # Burst guard (url only): IP cameras can dump buffered
+                # frames faster than real time — if reads arrive sooner
+                # than 2x the target fps, slow down so the encode/send
+                # loop does not spin the CPU. Live streams block inside
+                # cap.read() and never trigger this.
+                if source == "url":
+                    read_fails = 0
+                    gap = time.monotonic() - last_read_t
+                    if gap < burst_min_s:
+                        time.sleep(burst_min_s - gap)
+                    last_read_t = time.monotonic()
 
                 current = self.get_prompts()
                 fired_events: list[dict] = []
@@ -1328,12 +1434,15 @@ class _EngineWorker:
                 self.push(pack_frame(frame_id, ts_ms, buf.tobytes(), telemetry))
 
                 # ── pace to (roughly) real time ───────────────────────────
-                next_frame_t += frame_interval
-                delay = next_frame_t - time.monotonic()
-                if delay > 0:
-                    time.sleep(delay)
-                else:
-                    next_frame_t = time.monotonic()  # fell behind; drop debt
+                # File/webcam only: url streams are paced by their own
+                # blocking reads plus the burst guard above.
+                if source != "url":
+                    next_frame_t += frame_interval
+                    delay = next_frame_t - time.monotonic()
+                    if delay > 0:
+                        time.sleep(delay)
+                    else:
+                        next_frame_t = time.monotonic()  # fell behind; drop debt
 
                 frame_id += 1
                 fi += 1
