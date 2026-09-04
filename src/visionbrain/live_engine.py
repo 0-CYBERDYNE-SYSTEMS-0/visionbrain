@@ -56,6 +56,16 @@ as an alias for programmatic callers.
         coordinates normalized 0-1, max 8 zones. Accepted before a worker
         exists (held pending, applied on start) and while running (picked up
         under the state lock on the next detect frame).
+    {"type": "add_prompt_box", "box": [x1, y1, x2, y2], "label"?: str}
+        -> add a box-prompted target: a persistent region of interest the
+            engine re-detects every detect frame alongside the text prompts,
+            relabeled "label" (<= 40 chars) or the engine-side default
+            "target N" (N = running per-engine sequence). The box is
+            normalized 0-1 xyxy with x1 < x2 and y1 < y2 (see
+            ``validate_box``). Max 8 concurrent targets. Accepted before a
+            worker exists (held pending, applied on start) and while running
+            (picked up on the next detect frame).
+    {"type": "remove_targets"}           -> clear all box-prompted targets.
     {"type": "set_triggers", "line_cross"?: bool,
      "direction"?: "none"|"any"|"north"|"northeast"|"east"|"southeast"|
      "south"|"southwest"|"west"|"northwest", "dwell_s"?: number >= 0,
@@ -96,6 +106,12 @@ Design notes
   ``post_s``, then writes an mp4 into the clips directory (pruned to the 50
   newest files). Only one capture is pending at a time — further triggers
   still emit events but do not capture.
+* Box targets (``add_prompt_box``) pair the documented ``predict(boxes=…)``
+  API with ROI-containment labeling: the installed mlx_vlm build plumbs the
+  ``boxes`` kwarg but never applies box conditioning (its geometry encoder
+  is never called), so targets track text-prompt detections whose centers
+  fall inside the drawn ROI. Overlapping ROIs can double-count objects in
+  the overlap — see ``_detect_box_targets``.
 * Heavy imports (cv2, PIL, numpy, mlx, mlx_vlm, supervision, sam3_inference)
   happen INSIDE the worker / watcher bodies, so CI — with no mlx and no
   cached weights — can import this module and unit-test the pure helpers.
@@ -105,6 +121,13 @@ Design notes
   any path separator or ``..`` in a file_id is rejected up front, and the
   match must resolve inside the configured directory — path traversal is
   impossible.
+* Token auth: the endpoint honors ``VB_TOKEN`` via the ``?token=`` query
+  parameter (browsers cannot set headers on WebSocket connects). When the
+  shared token is enabled, a connect without the correct token is denied
+  BEFORE ``accept()`` — a pre-accept close, surfacing as handshake denial
+  (close code 4401). Plain ``/api/*`` routes are enforced separately by the
+  ``web_app`` HTTP middleware, which deliberately exempts this WebSocket
+  route — the door check lives here.
 """
 
 from __future__ import annotations
@@ -131,6 +154,8 @@ __all__ = [
     "validate_stream_url",
     "redact_url",
     "validate_zones",
+    "validate_box",
+    "target_label_at",
     "sanitize_clip_name",
     "RectZone",
     "DwellTracker",
@@ -282,6 +307,47 @@ def _point01(value: Any, label: str) -> list[float]:
 
 _MAX_ZONES = 8
 _MAX_ZONE_NAME = 40
+_MAX_TARGETS = 8
+_MAX_TARGET_LABEL = 40
+
+
+def validate_box(box: Any) -> Optional[list[float]]:
+    """Validate a box-prompted target ROI; return floats or None.
+
+    Accepts a list/tuple of exactly 4 real numbers (bools rejected) that are
+    normalized 0-1 and ordered ``x1 < x2``, ``y1 < y2`` — inverted boxes are
+    rejected, consistent with rect zones. Returns ``[x1, y1, x2, y2]`` as
+    floats, else None. Never raises.
+    """
+    if not isinstance(box, (list, tuple)) or len(box) != 4:
+        return None
+    values: list[float] = []
+    for value in box:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        v = float(value)
+        if not 0.0 <= v <= 1.0:
+            return None
+        values.append(v)
+    if not values[0] < values[2] or not values[1] < values[3]:
+        return None
+    return values
+
+
+def target_label_at(cx: float, cy: float, targets: Sequence[dict]) -> Optional[str]:
+    """Return the label of the first target whose rect contains the point.
+
+    Points and target boxes are normalized 0-1; containment is inclusive on
+    every edge (mirrors ``RectZone.contains``). Returns None when no target
+    matches. Never raises.
+    """
+    for target in targets:
+        box = target.get("box") if isinstance(target, dict) else None
+        if not box or len(box) != 4:
+            continue
+        if box[0] <= cx <= box[2] and box[1] <= cy <= box[3]:
+            return str(target.get("label", ""))
+    return None
 
 
 def validate_zones(zones: Any) -> list[dict]:
@@ -517,10 +583,11 @@ def validate_control(msg: Any) -> tuple[str, dict]:
     """Validate one inbound control message.
 
     Returns ``(action, payload)`` where action is one of ``"start"``,
-    ``"set_prompts"``, ``"set_zones"``, ``"set_triggers"``, ``"set_watch"``,
-    ``"stop"``, ``"shutdown"``, ``"ignore"`` (protocol hello) — or
-    ``"unknown"`` with an empty payload for anything invalid. Control key is
-    ``type`` (hub-protocol style) or ``action`` as an alias. Never raises.
+    ``"set_prompts"``, ``"set_zones"``, ``"add_prompt_box"``,
+    ``"remove_targets"``, ``"set_triggers"``, ``"set_watch"``, ``"stop"``,
+    ``"shutdown"``, ``"ignore"`` (protocol hello) — or ``"unknown"`` with an
+    empty payload for anything invalid. Control key is ``type`` (hub-protocol
+    style) or ``action`` as an alias. Never raises.
     """
     if not isinstance(msg, dict):
         return ("unknown", {})
@@ -587,6 +654,25 @@ def validate_control(msg: Any) -> tuple[str, dict]:
         except ValueError:
             return ("unknown", {})
         return ("set_zones", {"zones": zones})
+
+    if action == "add_prompt_box":
+        box = validate_box(msg.get("box"))
+        if box is None:
+            return ("unknown", {})
+        label = msg.get("label")
+        if label is None or (isinstance(label, str) and not label.strip()):
+            label = None  # engine assigns the default "target N"
+        elif not isinstance(label, str) or len(label.strip()) > _MAX_TARGET_LABEL:
+            return ("unknown", {})
+        else:
+            label = label.strip()
+        # Cap the staged targets (the running cap lives on the worker).
+        if len(_pending_targets or []) >= _MAX_TARGETS:
+            return ("unknown", {})
+        return ("add_prompt_box", {"box": box, "label": label})
+
+    if action == "remove_targets":
+        return ("remove_targets", {})
 
     if action == "set_triggers":
         payload = {}
@@ -847,6 +933,7 @@ _HELD_EVERY = 5  # resend held boxes every Nth non-detect frame
 _MAX_RING_FRAMES = 150
 _MAX_CLIPS = 50
 _MAX_STREAM_READ_FAILS = 40  # consecutive url read failures before giving up
+_BOX_NOTE_THROTTLE_S = 30.0  # min gap between box-target error status notes
 
 
 class _EngineWorker:
@@ -855,8 +942,9 @@ class _EngineWorker:
     Holds the stop event, the outbound queue target (event loop captured at
     start), and the current prompts under a small lock so ``set_prompts``
     can retarget detection mid-run from the WS thread. Also owns the shared
-    smart-capture state (zones, triggers, ring buffer, pending capture,
-    latest full frame) guarded by ``_state_lock`` / ``_frame_lock``.
+    smart-capture state (zones, box-prompted targets, triggers, ring buffer,
+    pending capture, latest full frame) guarded by ``_state_lock`` /
+    ``_frame_lock``.
     """
 
     def __init__(
@@ -880,6 +968,9 @@ class _EngineWorker:
         self._rect_zones: list[RectZone] = []   # rebuilt in pixel coords
         self._line_counters: dict[str, Any] = {}   # name -> zones.LineZoneCounter
         self._line_totals: dict[str, int] = {}
+        self._targets: list[dict] = []   # box-prompted targets (normalized)
+        self._target_seq = 0             # running per-engine target sequence
+        self._box_note_ts = 0.0          # monotonic ts of last box-target note
         self._triggers: dict[str, Any] = dict(TRIGGER_DEFAULTS)
         self._ring: deque = deque()
         self._capture: Optional[dict] = None
@@ -906,6 +997,138 @@ class _EngineWorker:
         with self._state_lock:
             self._zones = list(zones)
             self._zones_dirty = True
+
+    def add_target(self, box: Sequence[float], label: Optional[str] = None) -> Optional[int]:
+        """Add a box-prompted target; return its sequence number, or None when full.
+
+        The box is normalized 0-1 xyxy (already validated by
+        ``validate_box``). When ``label`` is missing/empty the engine assigns
+        the default ``"target N"`` from its running per-engine sequence, which
+        is never reset by ``clear_targets``. Thread-safe; picked up on the
+        next detect frame.
+        """
+        with self._state_lock:
+            if len(self._targets) >= _MAX_TARGETS:
+                return None
+            self._target_seq += 1
+            resolved = label if label else f"target {self._target_seq}"
+            self._targets.append({
+                "box": [float(c) for c in box],
+                "label": str(resolved),
+            })
+            return self._target_seq
+
+    def clear_targets(self) -> None:
+        """Drop every box-prompted target (thread-safe; keeps the sequence)."""
+        with self._state_lock:
+            self._targets = []
+
+    def get_targets(self) -> list[dict]:
+        """Return a copy of the active box-prompted targets (thread-safe)."""
+        with self._state_lock:
+            return [dict(t, box=list(t["box"])) for t in self._targets]
+
+    def _note_box_target_error(self, exc: Exception) -> None:
+        """Push a box-target failure note, throttled to one per 30s."""
+        now = time.monotonic()
+        if now - self._box_note_ts < _BOX_NOTE_THROTTLE_S:
+            return
+        self._box_note_ts = now
+        self.push({"type": "status", "note": f"box target error: {exc}"})
+
+    def _detect_box_targets(
+        self,
+        predictor: Any,
+        frame_pil: Any,
+        prompts: list[str],
+        targets: list[dict],
+        result: Any,
+        threshold: float,
+        src_w: int,
+        src_h: int,
+    ) -> Any:
+        """Run box-guided detection per target ROI and merge into ``result``.
+
+        Each target re-detects every detect frame through the documented
+        box-guided API ``Sam3Predictor.predict(image, text_prompt, boxes,
+        score_threshold)`` — ``boxes`` is an ``(N, 4)`` float ndarray of
+        normalized 0-1 xyxy coordinates (the space the predictor's own
+        postprocess scales out of), and the returned ``DetectionResult``
+        carries pixel xyxy boxes, masks and scores without labels.
+
+        IMPORTANT CAVEAT: the installed mlx_vlm build plumbs the ``boxes``
+        kwarg through ``predict`` but never applies box conditioning (the
+        geometry encoder is instantiated but never called), so the geometry
+        itself is inert. The text-prompt detections are therefore assigned
+        to the first target ROI containing their center (persistent ROI
+        semantics) and labeled with that target's label ("target N" when
+        the client omitted one). Overlapping ROIs can double-count an
+        object sitting in the overlap. A per-target failure pushes a
+        throttled status note and skips that target for this frame only —
+        the worker keeps running.
+        """
+        import numpy as np
+
+        try:
+            from mlx_vlm.models.sam3_1.generate import DetectionResult, nms
+        except ImportError:  # older mlx_vlm layout
+            from mlx_vlm.models.sam3.generate import (  # type: ignore[no-redef]
+                DetectionResult,
+                nms,
+            )
+
+        text_prompt = ", ".join(prompts) if prompts else "object"
+        box_parts = [np.asarray(result.boxes)]
+        score_parts = [np.asarray(result.scores)]
+        mask_parts = [np.asarray(result.masks)]
+        label_parts = [list(result.labels or [])]
+        added = 0
+
+        for target in targets:
+            try:
+                roi = np.array([target["box"]], dtype=np.float32)
+                sub = predictor.predict(
+                    frame_pil,
+                    text_prompt=text_prompt,
+                    boxes=roi,
+                    score_threshold=threshold,
+                )
+                if sub is not None and len(getattr(sub, "scores", [])) > 0:
+                    sub = nms(sub)
+            except Exception as exc:  # noqa: BLE001 — never kill the worker
+                self._note_box_target_error(exc)
+                continue
+            if sub is None or len(sub.scores) == 0:
+                continue
+
+            kept_boxes, kept_scores, kept_masks, kept_labels = [], [], [], []
+            for i in range(len(sub.scores)):
+                bx = sub.boxes[i]
+                cx01 = (float(bx[0]) + float(bx[2])) / (2.0 * max(1.0, float(src_w)))
+                cy01 = (float(bx[1]) + float(bx[3])) / (2.0 * max(1.0, float(src_h)))
+                label = target_label_at(cx01, cy01, targets)
+                if label is None:
+                    continue
+                kept_boxes.append(np.asarray(bx, dtype=np.float32))
+                kept_scores.append(float(sub.scores[i]))
+                kept_masks.append(np.asarray(sub.masks[i]))
+                kept_labels.append(label)
+            if not kept_boxes:
+                continue
+            box_parts.append(np.stack(kept_boxes))
+            score_parts.append(np.asarray(kept_scores, dtype=np.float32))
+            mask_parts.append(np.stack(kept_masks))
+            label_parts.append(kept_labels)
+            added += len(kept_boxes)
+
+        if not added:
+            return result
+        return DetectionResult(
+            boxes=np.concatenate(box_parts),
+            masks=np.concatenate(mask_parts),
+            scores=np.concatenate(score_parts),
+            labels=[label for part in label_parts for label in part],
+        )
 
     def set_triggers(self, partial: dict) -> None:
         """Merge trigger keys into the current config (thread-safe)."""
@@ -1327,6 +1550,15 @@ class _EngineWorker:
                     result = _detect_with_backbone(
                         predictor, backbone, current, frame_pil.size, threshold
                     )
+                    # Box-prompted targets re-detect on the SAME frame and
+                    # merge into the SAME result, so they pick up track IDs
+                    # and flow through zones/triggers like text detections.
+                    current_targets = self.get_targets()
+                    if current_targets:
+                        result = self._detect_box_targets(
+                            predictor, frame_pil, current, current_targets,
+                            result, threshold, src_w, src_h,
+                        )
                     latest = tracker.update(result)
 
                     scores = latest.scores
@@ -1460,6 +1692,7 @@ _engine_lock = threading.Lock()
 _worker: Optional[_EngineWorker] = None
 _pending_zones: Optional[list[dict]] = None    # set_zones before a worker exists
 _pending_triggers: Optional[dict] = None       # set_triggers before a worker exists
+_pending_targets: Optional[list[dict]] = None  # add_prompt_box before a worker exists
 
 
 def _alive(worker: Optional[_EngineWorker]) -> bool:
@@ -1493,8 +1726,29 @@ async def _sender(websocket: WebSocket, outbound: "asyncio.Queue[Any]") -> None:
 
 @router.websocket("/api/live/ws")
 async def live_ws(websocket: WebSocket) -> None:
-    """Local live engine — field-hub-compatible wire protocol over WebSocket."""
-    global _worker, _pending_zones, _pending_triggers
+    """Local live engine — field-hub-compatible wire protocol over WebSocket.
+
+    Honors ``VB_TOKEN``: when the shared token is enabled, the client must
+    pass it as ``?token=`` on the connect URL (browsers cannot set headers
+    on WebSocket connects); a missing or wrong token is denied at the
+    handshake before ``accept()``.
+    """
+    global _worker, _pending_zones, _pending_triggers, _pending_targets
+
+    # Token gate at the door, BEFORE accept: a pre-accept close becomes a
+    # handshake denial. ``service`` is stdlib-only but is imported here to
+    # keep the module's lazy-import discipline (web_app's HTTP middleware
+    # deliberately exempts this route — the check lives in the handler).
+    from . import service
+
+    if service.token_enabled() and not service.check_token(
+        websocket.query_params.get("token")
+    ):
+        try:
+            await websocket.close(code=4401)
+        except Exception:  # noqa: BLE001 — denial send failures are fine here
+            pass
+        return
 
     await websocket.accept()
     await _safe_send_json(websocket, {"type": "status", "note": "local engine ready"})
@@ -1534,6 +1788,7 @@ async def live_ws(websocket: WebSocket) -> None:
             created: Optional[_EngineWorker] = None
             pending_zones: Optional[list[dict]] = None
             pending_triggers: Optional[dict] = None
+            pending_targets: Optional[list[dict]] = None
             with _engine_lock:
                 if not _alive(_worker):
                     created = _EngineWorker(payload, loop, outbound)
@@ -1544,8 +1799,10 @@ async def live_ws(websocket: WebSocket) -> None:
                     # Consume any config staged before the worker existed.
                     pending_zones = _pending_zones
                     pending_triggers = _pending_triggers
+                    pending_targets = _pending_targets
                     _pending_zones = None
                     _pending_triggers = None
+                    _pending_targets = None
             if created is None:
                 await _safe_send_json(websocket, {"type": "status", "note": "engine busy — stop first"})
             else:
@@ -1553,6 +1810,11 @@ async def live_ws(websocket: WebSocket) -> None:
                     created.set_zones(pending_zones)
                 if pending_triggers:
                     created.set_triggers(pending_triggers)
+                # Staged targets replay in add order; the label stored at
+                # add time (client-supplied or the engine-side "target N"
+                # sequence) is kept verbatim by add_target.
+                for entry in pending_targets or []:
+                    created.add_target(entry["box"], entry.get("label"))
                 created.thread.start()
 
         elif action == "stop":
@@ -1603,6 +1865,46 @@ async def live_ws(websocket: WebSocket) -> None:
             await _safe_send_json(
                 websocket, {"type": "status", "note": f"zones set ({len(zones)})"}
             )
+
+        elif action == "add_prompt_box":
+            worker = _worker
+            if _alive(worker):
+                number = worker.add_target(payload["box"], payload.get("label"))
+                if number is None:
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "status", "note": f"target limit reached ({_MAX_TARGETS})"},
+                    )
+                else:
+                    await _safe_send_json(
+                        websocket, {"type": "status", "note": f"target added ({number})"}
+                    )
+            else:
+                # No engine yet — stage the target, applied on the next start.
+                with _engine_lock:
+                    staged = list(_pending_targets or [])
+                    if len(staged) >= _MAX_TARGETS:
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "status", "note": f"target limit reached ({_MAX_TARGETS})"},
+                        )
+                    else:
+                        staged.append(payload)
+                        _pending_targets = staged
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "status",
+                             "note": f"target added ({len(staged)}) (starts with the engine)"},
+                        )
+
+        elif action == "remove_targets":
+            worker = _worker
+            if _alive(worker):
+                worker.clear_targets()
+            else:
+                with _engine_lock:
+                    _pending_targets = None
+            await _safe_send_json(websocket, {"type": "status", "note": "targets cleared"})
 
         elif action == "set_triggers":
             worker = _worker

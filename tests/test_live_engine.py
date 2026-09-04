@@ -482,6 +482,211 @@ class TestValidateZones:
         ])[0]["name"] == "gate"
 
 
+class TestValidateBox:
+    def test_valid_boxes(self):
+        import visionbrain.live_engine as le
+
+        assert le.validate_box([0.1, 0.2, 0.3, 0.4]) == [0.1, 0.2, 0.3, 0.4]
+        # Tuples and int coordinates are accepted and floatified.
+        assert le.validate_box((0, 0, 1, 1)) == [0.0, 0.0, 1.0, 1.0]
+        assert le.validate_box([0, 0.5, 0.25, 1]) == [0.0, 0.5, 0.25, 1.0]
+
+    def test_rejects_inverted_boxes(self):
+        import visionbrain.live_engine as le
+
+        # x1 >= x2 or y1 >= y2 — consistent with rect zone ordering.
+        assert le.validate_box([0.5, 0.0, 0.5, 1.0]) is None   # x1 == x2
+        assert le.validate_box([0.9, 0.0, 0.1, 1.0]) is None   # x1 > x2
+        assert le.validate_box([0.0, 0.9, 1.0, 0.1]) is None   # y1 > y2
+        assert le.validate_box([0.0, 0.5, 1.0, 0.5]) is None   # y1 == y2
+
+    def test_rejects_out_of_range(self):
+        import visionbrain.live_engine as le
+
+        assert le.validate_box([-0.1, 0, 0.5, 0.5]) is None
+        assert le.validate_box([0.0, 0.0, 1.0, 1.2]) is None
+        assert le.validate_box([0.0, -1, 1.0, 1]) is None
+
+    def test_rejects_bools(self):
+        import visionbrain.live_engine as le
+
+        # bool is an int subclass — must be rejected explicitly.
+        assert le.validate_box([True, 0, 1, 1]) is None
+        assert le.validate_box([0, 0, False, 1]) is None
+
+    def test_rejects_wrong_arity_and_types(self):
+        import visionbrain.live_engine as le
+
+        for bad in (
+            [0.0, 0.0, 1.0],            # 3 numbers
+            [0.0, 0.0, 1.0, 1.0, 0.5],  # 5 numbers
+            [],                          # empty
+            "0,0,1,1",                   # string
+            {"x1": 0, "y1": 0, "x2": 1, "y2": 1},
+            None, 42,
+            [0.0, 0.0, "1", 1.0],       # non-number entry
+            [0.0, 0.0, None, 1.0],
+        ):
+            assert le.validate_box(bad) is None, bad
+
+
+class TestTargetLabelAt:
+    def test_containment_first_match_wins(self):
+        import visionbrain.live_engine as le
+
+        targets = [
+            {"box": [0.0, 0.0, 0.5, 0.5], "label": "target 1"},
+            {"box": [0.25, 0.25, 0.75, 0.75], "label": "target 2"},
+        ]
+        assert le.target_label_at(0.1, 0.1, targets) == "target 1"
+        # Overlap region resolves to the FIRST matching target.
+        assert le.target_label_at(0.3, 0.3, targets) == "target 1"
+        assert le.target_label_at(0.6, 0.6, targets) == "target 2"
+        assert le.target_label_at(0.9, 0.9, targets) is None
+
+    def test_edges_inclusive_and_malformed_targets(self):
+        import visionbrain.live_engine as le
+
+        targets = [{"box": [0.1, 0.2, 0.3, 0.4], "label": "target 7"}]
+        # Edges are inclusive (mirrors RectZone.contains).
+        assert le.target_label_at(0.1, 0.2, targets) == "target 7"
+        assert le.target_label_at(0.3, 0.4, targets) == "target 7"
+        assert le.target_label_at(0.09, 0.2, targets) is None
+        assert le.target_label_at(0.1, 0.41, targets) is None
+        # Malformed target entries are skipped, never raised on.
+        assert le.target_label_at(0.2, 0.3, [{"nope": 1}, None, {}]) is None
+
+
+class TestValidateTargetControls:
+    def test_add_prompt_box_valid(self, monkeypatch):
+        import visionbrain.live_engine as le
+
+        monkeypatch.setattr(le, "_pending_targets", None)
+        action, payload = le.validate_control({
+            "type": "add_prompt_box", "box": [0.1, 0.2, 0.3, 0.4],
+        })
+        assert action == "add_prompt_box"
+        assert payload == {"box": [0.1, 0.2, 0.3, 0.4], "label": None}
+
+        # "action" alias, explicit label (stripped), int coords floatified.
+        action, payload = le.validate_control({
+            "action": "add_prompt_box", "box": [0, 0, 1, 1], "label": "  gate  ",
+        })
+        assert action == "add_prompt_box"
+        assert payload == {"box": [0.0, 0.0, 1.0, 1.0], "label": "gate"}
+
+    def test_add_prompt_box_missing_or_bad_box(self, monkeypatch):
+        import visionbrain.live_engine as le
+
+        monkeypatch.setattr(le, "_pending_targets", None)
+        bad_boxes = (
+            None,                       # missing
+            "nope", [0, 0, 1],          # wrong type / arity
+            [0.9, 0, 0.1, 1],           # inverted
+            [0, 0, 1.2, 1],             # out of range
+            [True, 0, 1, 1],            # bool coordinate
+        )
+        for box in bad_boxes:
+            action, payload = le.validate_control({
+                "type": "add_prompt_box", "box": box,
+            })
+            assert action == "unknown", box
+            assert payload == {}
+
+    def test_add_prompt_box_label_rules(self, monkeypatch):
+        import visionbrain.live_engine as le
+
+        monkeypatch.setattr(le, "_pending_targets", None)
+        # >40 chars is rejected; non-strings are rejected.
+        action, _ = le.validate_control({
+            "type": "add_prompt_box", "box": [0, 0, 1, 1], "label": "x" * 41,
+        })
+        assert action == "unknown"
+        action, _ = le.validate_control({
+            "type": "add_prompt_box", "box": [0, 0, 1, 1], "label": 7,
+        })
+        assert action == "unknown"
+        # Empty/whitespace labels fall back to the engine-side default.
+        for blank in ("", "   ", None):
+            action, payload = le.validate_control({
+                "type": "add_prompt_box", "box": [0, 0, 1, 1], "label": blank,
+            })
+            assert action == "add_prompt_box"
+            assert payload["label"] is None
+
+    def test_add_prompt_box_pending_cap(self, monkeypatch):
+        import visionbrain.live_engine as le
+
+        eight = [{"box": [0.0, 0.0, 0.1, 0.1], "label": None}] * 8
+        monkeypatch.setattr(le, "_pending_targets", list(eight))
+        action, payload = le.validate_control({
+            "type": "add_prompt_box", "box": [0, 0, 1, 1],
+        })
+        assert action == "unknown"
+        assert payload == {}
+
+        # Seven staged targets still leave room for one more.
+        monkeypatch.setattr(le, "_pending_targets", list(eight[:7]))
+        assert le.validate_control({
+            "type": "add_prompt_box", "box": [0, 0, 1, 1],
+        })[0] == "add_prompt_box"
+
+    def test_remove_targets(self):
+        import visionbrain.live_engine as le
+
+        assert le.validate_control({"type": "remove_targets"}) == ("remove_targets", {})
+        assert le.validate_control({"action": "remove_targets"}) == ("remove_targets", {})
+
+
+class TestWorkerTargets:
+    """Box-target state on the worker — pure (no heavy imports in __init__)."""
+
+    @staticmethod
+    def _worker():
+        import visionbrain.live_engine as le
+
+        return le._EngineWorker(
+            {"source": "webcam", "camera": 0, "prompts": ["person"]}, None, None
+        )
+
+    def test_add_target_default_labels_sequence(self):
+        worker = self._worker()
+        assert worker.add_target([0, 0, 0.5, 0.5]) == 1
+        assert worker.add_target([0.1, 0.1, 0.6, 0.6]) == 2
+        assert worker.get_targets() == [
+            {"box": [0.0, 0.0, 0.5, 0.5], "label": "target 1"},
+            {"box": [0.1, 0.1, 0.6, 0.6], "label": "target 2"},
+        ]
+        # An explicit label wins over the default.
+        assert worker.add_target([0, 0, 1, 1], "gate") == 3
+        assert worker.get_targets()[2]["label"] == "gate"
+
+    def test_add_target_caps_at_eight(self):
+        worker = self._worker()
+        for i in range(8):
+            assert worker.add_target([0, 0, 0.1, 0.1]) == i + 1
+        assert worker.add_target([0, 0, 0.1, 0.1]) is None
+        assert len(worker.get_targets()) == 8
+
+    def test_clear_targets_keeps_sequence(self):
+        worker = self._worker()
+        worker.add_target([0, 0, 0.5, 0.5])
+        worker.clear_targets()
+        assert worker.get_targets() == []
+        # The per-engine sequence keeps running after a clear.
+        assert worker.add_target([0, 0, 0.5, 0.5]) == 2
+        assert worker.get_targets()[0]["label"] == "target 2"
+
+    def test_get_targets_returns_copies(self):
+        worker = self._worker()
+        worker.add_target([0, 0, 0.5, 0.5])
+        snapshot = worker.get_targets()
+        snapshot[0]["box"][0] = 9.9
+        snapshot[0]["label"] = "mutated"
+        assert worker.get_targets()[0]["box"][0] == 0.0
+        assert worker.get_targets()[0]["label"] == "target 1"
+
+
 class TestValidateControlSmartCapture:
     def test_set_zones_valid(self):
         import visionbrain.live_engine as le
@@ -720,3 +925,64 @@ class TestDirectionTriggerState:
         # Track 1 holding its heading stays silent while 2 re-arms via change.
         assert state.update(1, "east", "any", 3.0) is None
         assert state.update(2, "south", "any", 4.0) is not None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# VB_TOKEN auth at the WebSocket door (CI-safe: fastapi only, no MLX/weights)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestLiveEngineAuth:
+    """live_ws honors VB_TOKEN via ``?token=`` (browsers cannot set WS headers).
+
+    With VB_TOKEN set, a connect without (or with a wrong) token is denied
+    at the handshake — live_ws closes pre-accept with code 4401, which the
+    Starlette TestClient surfaces as ``WebSocketDisconnect`` carrying that
+    code (verified against the installed starlette version). With VB_TOKEN
+    unset, no token is needed and the standard "local engine ready" status
+    arrives immediately.
+    """
+
+    @staticmethod
+    def _client():
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        import visionbrain.live_engine as le
+
+        app = FastAPI()
+        app.include_router(le.router)
+        return TestClient(app)
+
+    def test_denied_without_token(self, monkeypatch):
+        from starlette.websockets import WebSocketDisconnect
+
+        monkeypatch.setenv("VB_TOKEN", "sekret")
+        client = self._client()
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            with client.websocket_connect("/api/live/ws"):
+                pass  # never accepted — handshake denied pre-accept
+        assert excinfo.value.code == 4401
+
+    def test_denied_with_wrong_token(self, monkeypatch):
+        from starlette.websockets import WebSocketDisconnect
+
+        monkeypatch.setenv("VB_TOKEN", "sekret")
+        client = self._client()
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            with client.websocket_connect("/api/live/ws?token=wrong"):
+                pass
+        assert excinfo.value.code == 4401
+
+    def test_accepted_with_correct_token(self, monkeypatch):
+        monkeypatch.setenv("VB_TOKEN", "sekret")
+        client = self._client()
+        with client.websocket_connect("/api/live/ws?token=sekret") as ws:
+            msg = json.loads(ws.receive_text())
+        assert msg == {"type": "status", "note": "local engine ready"}
+
+    def test_no_token_needed_when_unset(self, monkeypatch):
+        monkeypatch.delenv("VB_TOKEN", raising=False)
+        client = self._client()
+        with client.websocket_connect("/api/live/ws") as ws:
+            msg = json.loads(ws.receive_text())
+        assert msg == {"type": "status", "note": "local engine ready"}

@@ -497,6 +497,9 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     # ── Step 2 (optional): Falcon Perception key-frame refinement ───────────────
     falcon_summary_parts = []
     crosscheck_results: list = []
+    key_frames: list = []
+    sam_by_frame: dict = {}
+    key_frame_dims: dict = {}
     do_crosscheck = not getattr(args, "no_crosscheck", False)
     if getattr(args, "falcon_refine", False):
         rec = falcon_perception_record()
@@ -585,6 +588,41 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     else:
         step_gemma = f"[2/{total_steps}]"
 
+    # ── Step 2b (optional): LFM grounding third opinion on the same key frames ──
+    # Asks the local LFM2.5-VL where the SAM targets are on each key frame,
+    # parses the boxes from its text reply, and cross-checks them against
+    # SAM's detections at the same frame index. Opt-in via --lfm-ground; a
+    # missing model never fails the pipeline (one warning line, then on).
+    lfm_grounding_results: list = []
+    if getattr(args, "lfm_ground", False):
+        if not key_frames:
+            print("  LFM grounding: no key frames available (needs --falcon-refine); skipping.")
+        else:
+            try:
+                from . import grounding
+                from . import vlm_registry
+
+                vlm_registry.set_model("lfm")
+                grounding_prompt = grounding.build_grounding_prompt(sam_targets)
+                print("  LFM grounding check (SAM vs LFM, IoU ≥ 0.3):")
+                for fi, _ts, pil_frame in key_frames:
+                    reply = vlm_registry.ask(grounding_prompt, image=pil_frame)
+                    lfm_boxes = grounding.parse_grounding_boxes(
+                        reply, pil_frame.size[0], pil_frame.size[1]
+                    )
+                    gc = grounding.grounding_crosscheck(sam_by_frame.get(fi, []), lfm_boxes)
+                    gc.frame_index = fi
+                    lfm_grounding_results.append(gc)
+                    print(f"    frame {fi}: {len(lfm_boxes)} LFM box(es) · matched {gc.matched} · "
+                          f"sam-only {gc.sam_only} · lfm-only {gc.falcon_only} (agreement {gc.agreement:.2f})")
+                agg_lfm = summarize(lfm_grounding_results)
+                print(f"  → LFM grounding aggregate: {agg_lfm['frames']} frames · "
+                      f"agreement {agg_lfm['agreement']*100:.0f}% · {agg_lfm['matched']} matched · "
+                      f"{agg_lfm['sam_only']} SAM-only · {agg_lfm['falcon_only']} lfm-only")
+                print()
+            except Exception as exc:
+                print(f"  LFM grounding unavailable: {exc}")
+
     # Step 3: Remote Gemma 4 reasoning
     if not gemma_available():
         print("WARNING: Gemma 4 server unreachable — detections saved but report not generated.")
@@ -640,6 +678,17 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             )
         except Exception as exc:
             print(f"  WARNING: cross-check summary for Gemma failed: {exc}")
+
+    if lfm_grounding_results:
+        try:
+            agg_lfm = summarize(lfm_grounding_results)
+            summary_parts.append(
+                f"LFM grounding check on {agg_lfm['frames']} key frames: "
+                f"agreement {agg_lfm['agreement']*100:.0f}%, {agg_lfm['matched']} matched, "
+                f"{agg_lfm['sam_only']} SAM-only, {agg_lfm['falcon_only']} lfm-only."
+            )
+        except Exception as exc:
+            print(f"  WARNING: LFM grounding summary for Gemma failed: {exc}")
 
     summary_text = "\n".join(summary_parts)
 
@@ -876,6 +925,8 @@ def main() -> None:
                    help="Number of key frames to analyze with Falcon (default 6)")
     p.add_argument("--no-crosscheck", action="store_true",
                    help="Skip SAM-vs-Falcon cross-validation on key frames")
+    p.add_argument("--lfm-ground", action="store_true",
+                   help="Ask the local LFM VLM to ground targets on key frames and cross-check against SAM")
     # ── Fast-path + adaptive ─────────────────────────────────────
     p.add_argument("--fast", action="store_true",
                    help="Run fast-path Falcon scan first, return quick answer immediately")

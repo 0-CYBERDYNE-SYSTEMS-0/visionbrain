@@ -528,8 +528,11 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
             <button id="live-draw-off" class="btn-browse seg-btn active" onclick="liveSetDrawMode('off')">draw: off</button>
             <button id="live-draw-rect" class="btn-browse seg-btn" onclick="liveSetDrawMode('rect')">draw: rect</button>
             <button id="live-draw-line" class="btn-browse seg-btn" onclick="liveSetDrawMode('line')">draw: line</button>
+            <button id="live-draw-target" class="btn-browse seg-btn" onclick="liveSetDrawMode('target')">draw: target</button>
             <button id="live-zones-clear" class="btn-browse" onclick="liveZonesClear()">clear zones</button>
+            <button id="live-targets-clear" class="btn-browse" onclick="liveTargetsClear()">clear targets</button>
             <span id="live-zones-count" style="font-size:10px;color:var(--ink-3)">0 zones</span>
+            <span id="live-targets-count" style="font-size:10px;color:var(--ink-3)">0 targets</span>
           </div>
         </div>
         <div class="sep"></div>
@@ -809,6 +812,26 @@ const S = {
 };
 
 // ══════════════════════════════════════════════════════
+//  TOKEN AUTH (server sets VB_TOKEN; browser stores it in localStorage)
+// ══════════════════════════════════════════════════════
+function vlmToken(){ try { return localStorage.getItem('vb.token') || ''; } catch(e){ return ''; } }
+function withToken(url){ const t = vlmToken(); if (!t) return url; return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(t); }
+async function authFetch(url, opts){
+  opts = opts || {};
+  const t = vlmToken();
+  if (t) { opts.headers = Object.assign({}, opts.headers, {'X-Auth-Token': t}); }
+  let r = await fetch(url, opts);
+  if (r.status === 401 && t === '') {
+    const tok = prompt('Server requires an access token (VB_TOKEN):');
+    if (tok) {
+      try { localStorage.setItem('vb.token', tok); } catch(e){}
+      return authFetch(url, opts);
+    }
+  }
+  return r;
+}
+
+// ══════════════════════════════════════════════════════
 //  FLEX LAYOUT (draggable splitters + persistence)
 // ══════════════════════════════════════════════════════
 const LAYOUT_KEY = 'vb.layout';
@@ -924,7 +947,7 @@ function switchTab(t) {
 // ══════════════════════════════════════════════════════
 async function checkStatus() {
   try {
-    const r = await fetch('/api/status');
+    const r = await authFetch('/api/status');
     const d = await r.json();
     renderModels(d.models);
     const gr = document.getElementById('gemma-remote');
@@ -963,7 +986,7 @@ async function checkStatus() {
 
 async function checkHealth() {
   try {
-    const r = await fetch('/api/healthz');
+    const r = await authFetch('/api/healthz');
     const d = await r.json();
     if (!d.ok) throw new Error('healthz not ok');
     if (!S.mission.running && S.mission.status !== 'complete' && S.mission.status !== 'error') {
@@ -1007,7 +1030,7 @@ function renderModels(models) {
 // ══════════════════════════════════════════════════════
 async function refreshVlmBackend() {
   try {
-    const r = await fetch('/api/settings');
+    const r = await authFetch('/api/settings');
     if (!r.ok) return;
     const d = await r.json();
     const url = document.getElementById('vlm-url');
@@ -1035,7 +1058,7 @@ async function saveVlmBackend() {
   btn.textContent = 'saving…';
   btn.disabled = true;
   try {
-    const r = await fetch('/api/settings', {
+    const r = await authFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -1094,7 +1117,7 @@ async function uploadFile(tab, file) {
   const fd = new FormData();
   fd.append('file', file);
   try {
-    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    const r = await authFetch('/api/upload', { method: 'POST', body: fd });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
     S.files[tab] = { file_id: d.file_id, name: d.name, size: d.size };
@@ -1161,7 +1184,7 @@ async function startJob(kind, fd, btn, filename) {
 
   log(`launching ${kind} job…`, 'h');
   try {
-    const r = await fetch(`/api/job/${kind}`, { method: 'POST', body: fd });
+    const r = await authFetch(`/api/job/${kind}`, { method: 'POST', body: fd });
     const d = await r.json();
     S.job = d.job_id;
     S.lastJobId = d.job_id;
@@ -1276,7 +1299,7 @@ async function launchInspect() {
 //  SSE STREAMING
 // ══════════════════════════════════════════════════════
 function connectSSE(jid, kind, btn) {
-  const es = new EventSource(`/api/job/${jid}/stream`);
+  const es = new EventSource(withToken(`/api/job/${jid}/stream`));
 
   es.onmessage = (ev) => {
     const d = JSON.parse(ev.data);
@@ -1371,10 +1394,10 @@ async function onJobDone(jid, kind, results) {
     }
   } else if (kind === 'ocr') {
     // Parse OCR from ops log — show last meaningful block
-    const job = await (await fetch(`/api/job/${jid}`)).json();
+    const job = await (await authFetch(`/api/job/${jid}`)).json();
     showOcrOutput(job.output.join('\n'));
   } else if (kind === 'agent') {
-    const job = await (await fetch(`/api/job/${jid}`)).json();
+    const job = await (await authFetch(`/api/job/${jid}`)).json();
     showAgentOutput(job.output.join('\n'));
     if (results && results.image) showImage(`/api/job/${jid}/file/image`);
   }
@@ -1458,7 +1481,7 @@ function showImage(url) {
 
 async function loadDetectionStats(jid) {
   try {
-    const d = await (await fetch(`/api/job/${jid}/detections`)).json();
+    const d = await (await authFetch(`/api/job/${jid}/detections`)).json();
     const totalDets = d.frames ? d.frames.reduce((a,f)=>a+(f.n_detections||0),0) : 0;
     const framesWithDets = d.frames ? d.frames.filter(f=>f.n_detections>0).length : 0;
     const uniqueObjs = new Set();
@@ -1482,7 +1505,7 @@ async function loadDetectionStats(jid) {
 
 async function loadReport(jid) {
   try {
-    const d = await (await fetch(`/api/job/${jid}/report`)).json();
+    const d = await (await authFetch(`/api/job/${jid}/report`)).json();
     S.lastReport = d.text;
     g('rc').innerHTML = renderMarkdown(d.text);
     g('report-panel').style.display = 'flex';
@@ -1491,7 +1514,7 @@ async function loadReport(jid) {
 
 async function loadFastScan(jid) {
   try {
-    const d = await (await fetch(`/api/job/${jid}/fast`)).json();
+    const d = await (await authFetch(`/api/job/${jid}/fast`)).json();
     g('mission-run').style.display = 'none';
     const dzA = g('dz-analyze');
     if (dzA) dzA.style.display = 'flex';
@@ -1742,7 +1765,8 @@ function stopMissionTicker() {
 // ══════════════════════════════════════════════════════
 const LIVE = { ws: null, connected: false, lastDets: [], img: null,
                mode: 'hub', pendingStart: null, engineRunning: false,
-               zones: [], drawMode: 'off', lineStart: null, rectStart: null, zoneSeq: 0 };
+               zones: [], drawMode: 'off', lineStart: null, rectStart: null, zoneSeq: 0,
+               targets: [], targetSeq: 0 };
 
 const LIVE_PALETTE = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6','#bcf60c'];
 
@@ -1822,7 +1846,7 @@ function liveSetMode(m) {
 function liveEngineConnect() {
   let ws;
   try {
-    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/live/ws');
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + withToken('/api/live/ws'));
   } catch (e) { liveStatus('✗ ' + e.message); return; }
   ws.binaryType = 'arraybuffer';
   LIVE.ws = ws;
@@ -1847,7 +1871,7 @@ async function liveUploadFile(file) {
   const fd = new FormData();
   fd.append('file', file);
   try {
-    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    const r = await authFetch('/api/upload', { method: 'POST', body: fd });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
     S.files['live'] = { file_id: d.file_id, name: d.name };
@@ -1990,6 +2014,7 @@ function liveSetDrawMode(m) {
   g('live-draw-off').classList.toggle('active', m === 'off');
   g('live-draw-rect').classList.toggle('active', m === 'rect');
   g('live-draw-line').classList.toggle('active', m === 'line');
+  g('live-draw-target').classList.toggle('active', m === 'target');
 }
 
 function liveZonesCount() {
@@ -2017,6 +2042,34 @@ function liveZoneComplete(z) {
   liveSetDrawMode('off');
   liveSendZones();
   log(`zone added: ${z.name}`, 'i');
+}
+
+// ── Box-prompted targets — a drawn rect the local engine re-detects every
+// detect frame as a labeled "target N" instance alongside the text prompts.
+function liveTargetsCount() {
+  const el = document.getElementById('live-targets-count');
+  if (el) el.textContent = `${LIVE.targets.length} target${LIVE.targets.length === 1 ? '' : 's'}`;
+}
+
+function liveTargetComplete(box) {
+  LIVE.targetSeq += 1;
+  const label = `target ${LIVE.targetSeq}`;
+  LIVE.targets.push({ box: box, label: label });
+  liveSetDrawMode('off');
+  liveTargetsCount();
+  if (LIVE.connected && LIVE.ws && LIVE.ws.readyState === 1) {
+    liveSend({ type: 'add_prompt_box', box: box, label: label });
+  }
+  log(`target added: ${label}`, 'i');
+}
+
+function liveTargetsClear() {
+  LIVE.targets = [];
+  if (LIVE.connected && LIVE.ws && LIVE.ws.readyState === 1) {
+    liveSend({ type: 'remove_targets' });
+  }
+  liveTargetsCount();
+  log('targets cleared', 'i');
 }
 
 // ── Triggers / watch payloads — shared by the apply buttons and START auto-restore ──
@@ -2048,10 +2101,14 @@ function liveApplyWatch() {
   liveStatus('● watch updated');
 }
 
-// START auto-restore — re-assert zones, then triggers, then watch (when armed).
-// The server accepts these while the worker is still spinning up.
+// START auto-restore — re-assert zones, then box targets, then triggers, then
+// watch (when armed). The server accepts these while the worker spins up
+// (labels sent by the client are kept verbatim by the engine).
 function liveRestoreControls() {
   if (LIVE.zones.length) liveSendZones();
+  for (const t of LIVE.targets) {
+    liveSend({ type: 'add_prompt_box', box: t.box, label: t.label });
+  }
   liveSend(liveTriggersPayload());
   if (g('live-watch').checked && g('live-watch-cond').value.trim()) liveSend(liveWatchPayload());
 }
@@ -2099,23 +2156,26 @@ function liveCaptureFeed(clip) {
   log('clip captured: ' + (clip.url || ''), 'h');
 }
 
-// Canvas mouse handlers — attached once at load; do nothing when drawMode is 'off'.
+// Canvas mouse handlers — attached once at load; do nothing when drawMode is
+// 'off'. Rect zones and targets share the press/drag/release gesture; lines
+// use two clicks.
 (function () {
   const cv = document.getElementById('live-canvas');
   if (!cv) return;
   cv.addEventListener('mousedown', (e) => {
-    if (LIVE.drawMode !== 'rect') return;
+    if (LIVE.drawMode !== 'rect' && LIVE.drawMode !== 'target') return;
     LIVE.rectStart = liveCanvasNorm(e);
   });
   cv.addEventListener('mouseup', (e) => {
-    if (LIVE.drawMode !== 'rect' || !LIVE.rectStart) return;
+    if ((LIVE.drawMode !== 'rect' && LIVE.drawMode !== 'target') || !LIVE.rectStart) return;
     const a = LIVE.rectStart;
     const b = liveCanvasNorm(e);
     LIVE.rectStart = null;
     if (Math.hypot((b[0] - a[0]) * cv.width, (b[1] - a[1]) * cv.height) < 4) return;
-    liveZoneComplete({ kind: 'rect',
-                       x1: Math.min(a[0], b[0]), y1: Math.min(a[1], b[1]),
-                       x2: Math.max(a[0], b[0]), y2: Math.max(a[1], b[1]) });
+    const box = [Math.min(a[0], b[0]), Math.min(a[1], b[1]),
+                 Math.max(a[0], b[0]), Math.max(a[1], b[1])];
+    if (LIVE.drawMode === 'target') { liveTargetComplete(box); return; }
+    liveZoneComplete({ kind: 'rect', x1: box[0], y1: box[1], x2: box[2], y2: box[3] });
   });
   cv.addEventListener('click', (e) => {
     if (LIVE.drawMode !== 'line') return;

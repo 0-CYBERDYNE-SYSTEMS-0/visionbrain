@@ -332,6 +332,16 @@ Pure (stdlib + `detection_core.box_iou` only):
 
 `cmd_analyze` runs it automatically on Falcon-refined key frames (unless `--no-crosscheck`), prints a per-frame + aggregate block to the ops log (failures warn and never break the pipeline), and feeds one compact agreement line into Gemma's reasoning context.
 
+### `grounding.py` — LFM Grounding Third Opinion
+
+Pure (stdlib only; module imports with no MLX/PIL):
+- `build_grounding_prompt(targets)` — demands one line per instance: `<box>x1,y1,x2,y2</box> label` with integer 0–1000 coordinates, exactly `NONE` when nothing found
+- `parse_grounding_boxes(text, width, height) -> list[dict]` — tolerant parser (canonical `<box>` tags, parenthesized `(a,b),(c,d)`, JSON arrays) with a per-box scale heuristic (≤1.5 → 0-1, ≤100 → 0-100, else 0-1000); clamps to image bounds, orders corners, `[]` on NONE
+- `grounding_crosscheck(sam_dets, boxes, *, iou_threshold=0.3)` — `crosscheck.crosscheck` wrapper at the looser VLM-appropriate threshold (VLM boxes are coarse)
+- `python -m visionbrain.grounding <image> <target>…` — probe block printing the raw model reply next to the parsed boxes (human verifies format)
+
+`cmd_analyze --lfm-ground` (opt-in, default off) asks the local LFM VLM to ground the SAM targets on the Falcon key frames, cross-checks against SAM, prints the ops-log block, and appends one agreement line to Gemma's context; any failure degrades to a single warning line.
+
 ### `live_tracking.py` — Stateful Live SAM 3.1 Tracker
 
 **Public API:**
@@ -345,7 +355,7 @@ ViT backbone cached across frames (recompute every `backbone_every`); between de
 
 Lets VisionBrain itself play the field-hub server role: one worker streams SAM 3.1 over `WS /api/live/ws` in the exact hub binary format (`>III` header + JPEG + `>I` + telemetry JSON), so the unmodified browser client renders it. `configure(uploads_dir, clips_dir=None)` pins the upload resolution dir and the clip output dir (created when missing; `None` disables capture).
 
-**Controls** (inbound JSON; key `"type"`, `"action"` accepted as alias): `start` (file/webcam/url + optional `threshold`/`detect_every`/`resolution`), `set_prompts`, `set_zones`, `set_triggers`, `set_watch`, `stop`, `shutdown`; `hello` → ignored. Anything invalid → `("unknown", {})` + status note, never an exception. `url` sources (`rtsp://`, `rtsps://`, `http://`, `https://` only) are gated by `validate_stream_url()` and always rendered via `redact_url()` (userinfo → `user:***@`) in status notes; a stream that fails to open (or 40 consecutive read failures) fails cleanly with `engine_stopped` — no auto-retry in the first cut.
+**Controls** (inbound JSON; key `"type"`, `"action"` accepted as alias): `start` (file/webcam/url + optional `threshold`/`detect_every`/`resolution`), `set_prompts`, `add_prompt_box` (draw a rectangle on the canvas → a persistent ROI "target N" tracked every detect frame alongside text prompts; ≤8, pending before a worker like zones; NOTE: the installed mlx_vlm build plumbs the `boxes` kwarg but never applies box conditioning — targets work as ROI-labeled tracking until the lib calls its geometry encoder), `remove_targets`, `set_zones`, `set_triggers`, `set_watch`, `stop`, `shutdown`; `hello` → ignored. Anything invalid → `("unknown", {})` + status note, never an exception. `url` sources (`rtsp://`, `rtsps://`, `http://`, `https://` only) are gated by `validate_stream_url()` and always rendered via `redact_url()` (userinfo → `user:***@`) in status notes; a stream that fails to open (or 40 consecutive read failures) fails cleanly with `engine_stopped` — no auto-retry in the first cut. **Auth:** when `VB_TOKEN` is set, the WS requires `?token=` (checked before accept, close 4401) — HTTP middleware never sees WebSocket scopes, so the gate lives in the handler.
 - `{"type":"set_zones","zones":[...]}` — REPLACES the set: `{"kind":"line","name"?,"a":[x,y],"b":[x,y]}` or `{"kind":"rect","name"?,"x1","y1","x2","y2"}`, normalized 0-1 (rect needs `x1<x2`, `y1<y2`), ≤ 40-char names (default `"zone N"`), max 8 — `validate_zones()`. Accepted before a worker exists (held pending, applied on start) and while running (rebuilt under the state lock on the next detect frame, which resets line counters). Ack `zones set (N)`.
 - `{"type":"set_triggers","line_cross"?,"direction"?,"dwell_s"?,"clip"?,"pre_s"?,"post_s"?}` — partial merge over defaults (False / `"none"` / 0=off / True / 6 / 4); `direction` ∈ none|any|8-way compass. Ack `triggers set`.
 - `{"type":"set_watch","enabled"?,"condition"?,"interval_s"? (1-30, default 4),"model"? ("lfm"|"lfm3b")}` — Ack `watch on`/`watch off`.

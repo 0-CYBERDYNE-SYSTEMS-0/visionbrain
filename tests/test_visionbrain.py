@@ -452,6 +452,17 @@ class TestCLI:
         assert "--hold-seconds" in result.stdout
         assert "--still-dir" in result.stdout
 
+    def test_analyze_help_lfm_ground(self):
+        import subprocess
+        import sys
+        result = subprocess.run(
+            [sys.executable, "-m", "visionbrain", "analyze", "--help"],
+            capture_output=True, text=True,
+            cwd=str(Path(__file__).parent.parent / "src"),
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "--lfm-ground" in result.stdout
+
 
 class TestWebApp:
     def test_job_result_json_endpoints(self, tmp_path):
@@ -798,6 +809,198 @@ class TestCrosscheck:
 
         agg = summarize([])
         assert agg == {"frames": 0, "matched": 0, "sam_only": 0, "falcon_only": 0, "agreement": 0.0}
+
+
+class TestGrounding:
+    # ── build_grounding_prompt ────────────────────────────────────────────────
+
+    def test_prompt_lists_targets_and_canonical_format(self):
+        from visionbrain.grounding import build_grounding_prompt
+
+        prompt = build_grounding_prompt(["boat", "swimmer"])
+        assert "boat" in prompt
+        assert "swimmer" in prompt
+        assert "<box>x1,y1,x2,y2</box>" in prompt
+        assert "NONE" in prompt
+        # The example line shows the canonical integer 0-1000 format.
+        assert "<box>120,340,480,760</box>" in prompt
+
+    def test_prompt_ignores_blank_targets(self):
+        from visionbrain.grounding import build_grounding_prompt
+
+        prompt = build_grounding_prompt(["", "  ", None])  # type: ignore[list-item]
+        assert "objects" in prompt  # neutral fallback wording
+
+    # ── parse_grounding_boxes: canonical <box> tags ───────────────────────────
+
+    def test_parse_canonical_zero_to_1000_ints(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<box>100,200,500,800</box> boat", 500, 250)
+        assert len(boxes) == 1
+        assert boxes[0]["label"] == "boat"
+        x1, y1, x2, y2 = boxes[0]["bbox_xyxy"]
+        assert x1 == pytest.approx(100 / 1000 * 500)
+        assert y1 == pytest.approx(200 / 1000 * 250)
+        assert x2 == pytest.approx(500 / 1000 * 500)
+        assert y2 == pytest.approx(800 / 1000 * 250)
+
+    def test_parse_zero_to_one_floats(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<box>0.1,0.2,0.5,0.8</box> car", 400, 200)
+        assert len(boxes) == 1
+        x1, y1, x2, y2 = boxes[0]["bbox_xyxy"]
+        assert x1 == pytest.approx(40.0)
+        assert y1 == pytest.approx(40.0)
+        assert x2 == pytest.approx(200.0)
+        assert y2 == pytest.approx(160.0)
+
+    def test_parse_zero_to_100_values(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<box>10,20,50,80</box> person", 200, 100)
+        assert len(boxes) == 1
+        x1, y1, x2, y2 = boxes[0]["bbox_xyxy"]
+        assert x1 == pytest.approx(20.0)
+        assert y1 == pytest.approx(20.0)
+        assert x2 == pytest.approx(100.0)
+        assert y2 == pytest.approx(80.0)
+
+    def test_parse_optional_spaces_and_float_values(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<box> 100 , 200.5 , 500 , 800 </box>", 1000, 1000)
+        assert len(boxes) == 1
+        assert boxes[0]["bbox_xyxy"] == [100.0, 200.5, 500.0, 800.0]
+
+    def test_parse_tag_case_insensitive(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<BOX>100,200,500,800</BOX> boat", 1000, 1000)
+        assert len(boxes) == 1
+        assert boxes[0]["label"] == "boat"
+
+    def test_parse_label_stripped_and_empty_ok(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<box>100,200,500,800</box>  red sailboat ", 1000, 1000)
+        assert boxes[0]["label"] == "red sailboat"
+        boxes = parse_grounding_boxes("<box>100,200,500,800</box>", 1000, 1000)
+        assert boxes[0]["label"] == ""
+
+    def test_parse_multiple_boxes_with_labels(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        text = "<box>100,200,500,800</box> boat\n<box>600,100,900,400</box> kayak"
+        boxes = parse_grounding_boxes(text, 1000, 1000)
+        assert [b["label"] for b in boxes] == ["boat", "kayak"]
+        assert boxes[1]["bbox_xyxy"][0] == pytest.approx(600.0)
+
+    def test_parse_unsorted_swapped_corners_ordered(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<box>500,800,100,200</box> boat", 500, 250)
+        x1, y1, x2, y2 = boxes[0]["bbox_xyxy"]
+        assert x1 < x2 and y1 < y2
+        assert x1 == pytest.approx(50.0) and x2 == pytest.approx(250.0)
+        assert y1 == pytest.approx(50.0) and y2 == pytest.approx(200.0)
+
+    def test_parse_clamps_out_of_range_to_image_bounds(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        # x1,y1,x2,y2 = -50,1200,600,900 on a 0-1000 scale over 500x500:
+        # raw pixels (-25, 600, 300, 450) → clamp → (0, 500, 300, 450) → order.
+        boxes = parse_grounding_boxes("<box>-50,1200,600,900</box> wreck", 500, 500)
+        x1, y1, x2, y2 = boxes[0]["bbox_xyxy"]
+        assert x1 == 0.0  # -25 clamped to left edge
+        assert x2 == pytest.approx(300.0)
+        assert y1 == pytest.approx(450.0)
+        assert y2 == 500.0  # 600 clamped to bottom edge, then ordered below 450
+        assert x1 < x2 and y1 < y2
+
+    # ── parse_grounding_boxes: fallbacks and empty replies ────────────────────
+
+    def test_parse_parenthesized_fallback(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("(120,340),(480,760) boat", 500, 500)
+        assert len(boxes) == 1
+        x1, y1, x2, y2 = boxes[0]["bbox_xyxy"]
+        assert x1 == pytest.approx(60.0)
+        assert y1 == pytest.approx(170.0)
+        assert x2 == pytest.approx(240.0)
+        assert y2 == pytest.approx(380.0)
+        assert boxes[0]["label"] == ""  # no tag → no label
+
+    def test_parse_json_nested_array_fallback(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("[[100,200,500,800],[20,40,60,80]]", 500, 250)
+        assert len(boxes) == 2
+        # First box is 0-1000 scale, second is 0-100 scale (heuristic per box).
+        assert boxes[0]["bbox_xyxy"] == pytest.approx([50.0, 50.0, 250.0, 200.0])
+        assert boxes[1]["bbox_xyxy"] == pytest.approx([100.0, 100.0, 300.0, 200.0])
+
+    def test_parse_json_flat_array_fallback(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("Here: [100,200,500,800] as requested", 1000, 1000)
+        assert len(boxes) == 1
+        assert boxes[0]["bbox_xyxy"] == [100.0, 200.0, 500.0, 800.0]
+
+    def test_parse_json_pair_arrays_are_not_boxes(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        # Corners as coordinate pairs must not be double-parsed as boxes.
+        boxes = parse_grounding_boxes("[[120,340],[480,760]]", 500, 500)
+        assert boxes == []
+
+    def test_parse_none_reply_returns_empty(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        assert parse_grounding_boxes("NONE", 500, 500) == []
+        assert parse_grounding_boxes("none.", 500, 500) == []
+        assert parse_grounding_boxes("", 500, 500) == []
+        assert parse_grounding_boxes("   \n  ", 500, 500) == []
+
+    def test_parse_prose_without_boxes_returns_empty(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        assert parse_grounding_boxes("I cannot see any boats in this image.", 500, 500) == []
+
+    # ── grounding_crosscheck ──────────────────────────────────────────────────
+
+    def test_grounding_crosscheck_perfect_match(self):
+        from visionbrain.grounding import grounding_crosscheck
+
+        sam = [{"label": "boat", "score": 0.9, "bbox_xyxy": [10.0, 10.0, 50.0, 50.0], "track_id": 3}]
+        boxes = [{"bbox_xyxy": [10.0, 10.0, 50.0, 50.0], "label": "boat"}]
+        res = grounding_crosscheck(sam, boxes)
+        assert res.matched == 1
+        assert res.sam_only == 0 and res.falcon_only == 0
+        assert res.agreement == 1.0
+        assert res.matches[0]["iou"] == 1.0
+        assert res.matches[0]["sam_track_id"] == 3
+
+    def test_grounding_crosscheck_loose_default_accepts_coarse_box(self):
+        from visionbrain.crosscheck import crosscheck
+        from visionbrain.grounding import grounding_crosscheck
+
+        # Coarse VLM box: IoU = 0.4 — too loose for the Falcon threshold (0.5),
+        # matched by the grounding default (0.3).
+        sam = [{"label": "boat", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]}]
+        boxes = [{"bbox_xyxy": [0.0, 0.0, 10.0, 4.0], "label": "boat"}]
+        assert grounding_crosscheck(sam, boxes).matched == 1
+        assert crosscheck(sam, boxes, iou_threshold=0.5).matched == 0
+
+    def test_grounding_crosscheck_empty_inputs(self):
+        from visionbrain.grounding import grounding_crosscheck
+
+        res = grounding_crosscheck([], [])
+        assert res.matched == 0
+        assert res.agreement == 0.0
+        assert res.frame_index == -1  # caller sets it when the frame is known
 
 
 class TestModelHost:
