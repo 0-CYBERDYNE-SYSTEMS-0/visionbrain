@@ -151,6 +151,7 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
 .dz-file{font-family:var(--font-mono);font-size:10.5px;color:var(--accent);padding:3px 12px;border:1px solid var(--accent-deep);background:rgba(212,181,114,.05);border-radius:2px;max-width:90%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .btn-browse{font-family:var(--font-mono);font-size:10px;font-weight:500;letter-spacing:.12em;text-transform:lowercase;padding:5px 12px;background:transparent;border:1px solid var(--rule-strong);color:var(--ink-3);cursor:pointer;border-radius:2px;transition:all 120ms var(--ease)}
 .btn-browse:hover{border-color:var(--accent);color:var(--accent)}
+.seg-btn.active{border-color:var(--accent);color:var(--accent)}
 
 #media-zone{flex:1;min-height:0;display:flex;flex-direction:column;position:relative}
 .video-wrap{flex:1;min-height:0;position:relative;background:var(--surface-2);overflow:hidden}
@@ -369,6 +370,15 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
       <span id="gemma-remote" style="font-size:9px;font-family:var(--font-mono);color:var(--ok)">● online</span>
     </div>
 
+    <div class="ph">VLM BACKEND</div>
+    <div style="padding:8px 12px;display:flex;flex-direction:column;gap:6px">
+      <input type="text" id="vlm-url" placeholder="openai-compatible base url" style="font-family:var(--font-mono);font-size:11px;background:var(--surface-3);border:1px solid var(--rule);color:var(--ink-1);padding:3px 8px;border-radius:2px;outline:none;width:100%;height:24px">
+      <input type="text" id="vlm-model" placeholder="model id (e.g. gpt-4o, qwen2.5-vl)" style="font-family:var(--font-mono);font-size:11px;background:var(--surface-3);border:1px solid var(--rule);color:var(--ink-1);padding:3px 8px;border-radius:2px;outline:none;width:100%;height:24px">
+      <input type="text" id="vlm-key" placeholder="api key — blank keeps saved key" style="font-family:var(--font-mono);font-size:11px;background:var(--surface-3);border:1px solid var(--rule);color:var(--ink-1);padding:3px 8px;border-radius:2px;outline:none;width:100%;height:24px;-webkit-text-security:disc">
+      <button class="btn-browse" style="width:100%;text-align:left" id="btn-vlm-save" onclick="saveVlmBackend()">save backend</button>
+      <span id="vlm-active" style="font-size:9px;font-family:var(--font-mono);color:var(--warn)">active: none</span>
+    </div>
+
     <div class="ph">LAST MISSION</div>
     <div class="stat-grid" id="mission-stats">
       <div class="sg-cell"><div class="sg-lbl">FRAMES</div><div class="sg-val dim" id="st-frames">—</div></div>
@@ -468,14 +478,55 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
       </div>
     </div>
 
-    <!-- ■ LIVE TAB (field hub: ws relay + detections HUD) -->
+    <!-- ■ LIVE TAB (local engine or field hub: ws relay + detections HUD) -->
     <div class="tab-pane" id="tab-live" style="flex-direction:column;gap:10px;padding:14px">
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <div style="display:flex;gap:6px;align-items:center">
+        <button id="live-mode-local" class="btn-browse seg-btn" onclick="liveSetMode('local')">local engine</button>
+        <button id="live-mode-hub" class="btn-browse seg-btn active" onclick="liveSetMode('hub')">field hub</button>
+      </div>
+      <div id="live-hub-row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <button id="live-connect" class="btn-browse" onclick="liveToggle()">connect to hub</button>
         <span id="live-status" style="font-size:11px;color:var(--ink-2)">ws://127.0.0.1:8765</span>
       </div>
+      <div id="live-local-panel" style="display:none;flex-direction:column;gap:10px">
+        <div class="cf"><label>SOURCE</label>
+          <select id="live-src" onchange="liveSrcChange(this.value)">
+            <option value="file" selected>VIDEO FILE</option>
+            <option value="webcam">WEBCAM 0</option>
+          </select>
+        </div>
+        <div class="cf" id="live-file-row">
+          <label>FILE</label>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-width:0">
+            <button class="btn-browse" onclick="g('fi-live').click()">browse…</button>
+            <span id="live-file-name" style="font-size:10px;color:var(--ink-3)">no file loaded</span>
+          </div>
+        </div>
+        <div class="cf" id="live-cam-row" style="display:none">
+          <label>CAMERA</label>
+          <select id="live-cam"><option value="0" selected>CAMERA 0</option><option value="1">CAMERA 1</option><option value="2">CAMERA 2</option></select>
+        </div>
+        <div class="sep"></div>
+        <div class="cf"><label>PROMPTS</label><input type="text" id="live-prompts" value="person" placeholder="boat person kayak…"></div>
+        <div class="cf">
+          <label>THRESHOLD</label>
+          <div class="range-row"><input type="range" id="live-thresh" min="0.01" max="0.5" step="0.01" value="0.15" oninput="document.getElementById('live-threshv').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="live-threshv">0.15</span></div>
+        </div>
+        <div class="cf"><label>RES</label>
+          <select id="live-res"><option value="224" selected>224 (fast)</option><option value="512">512</option><option value="1008">1008</option></select>
+        </div>
+        <div class="cf"><label>DETECT EVERY</label>
+          <select id="live-every"><option value="1">1F</option><option value="5">5F</option><option value="10" selected>10F</option><option value="15">15F</option></select>
+        </div>
+        <div class="sep"></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn-browse" id="btn-live-start" onclick="liveStartToggle()">▶ start</button>
+          <button class="btn-browse" id="btn-live-apply" onclick="liveApplyPrompts()">apply prompts</button>
+          <button class="btn-browse" id="btn-live-free" onclick="liveEngineFree()">✕ free model</button>
+        </div>
+      </div>
       <div style="position:relative;flex:1;min-height:0;border:1px solid var(--rule);background:#000">
-        <canvas id="live-canvas" width="1280" height="720" style="width:100%;height:100%;object-fit:contain"></canvas>
+        <canvas id="live-canvas" width="1280" height="720" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></canvas>
         <div class="ph" id="live-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border:none">no feed — connect, or start a cockpit/scout stream</div>
       </div>
       <pre id="live-ask-out" style="display:none;font-family:var(--font-mono);font-size:11px;color:var(--ink-1);white-space:pre-wrap;max-height:120px;overflow-y:auto;border-top:1px solid var(--rule);padding-top:8px"></pre>
@@ -484,6 +535,7 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
     <!-- Hidden file inputs -->
     <input type="file" id="fi-analyze" accept="video/*" hidden onchange="fileChosen('analyze',this)">
     <input type="file" id="fi-inspect" accept="image/*" hidden onchange="fileChosen('inspect',this)">
+    <input type="file" id="fi-live" accept="video/*" hidden onchange="liveFileChosen(this)">
 
   </main>
 
@@ -524,7 +576,37 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
         </div>
         <div class="togs">
           <label class="tog"><input type="checkbox" id="c-report" checked><span>REPORT</span></label>
-          <label class="tog"><input type="checkbox" id="c-falcon"><span>FALCON+</span></label>
+          <label class="tog"><input type="checkbox" id="c-falcon" onchange="document.getElementById('row-falcon-frames').style.display=this.checked?'':'none'"><span>FALCON+</span></label>
+        </div>
+        <div class="sep"></div>
+        <div class="togs">
+          <label class="tog"><input type="checkbox" id="c-fast"><span>FASTSCAN PRE-PASS</span></label>
+          <label class="tog"><input type="checkbox" id="c-adaptive" onchange="document.getElementById('row-mthr').style.display=this.checked?'':'none'"><span>ADAPTIVE</span></label>
+          <label class="tog"><input type="checkbox" id="c-relevance"><span>RELEVANCE FILTER</span></label>
+        </div>
+        <div class="cf" id="row-mthr" style="display:none">
+          <label>MOTION THR</label>
+          <div class="range-row"><input type="range" id="c-mthr" min="0.005" max="0.1" step="0.005" value="0.03" oninput="document.getElementById('c-mthrv').textContent=parseFloat(this.value).toFixed(3)"><span class="rv" id="c-mthrv">0.03</span></div>
+        </div>
+        <div class="cf" id="row-falcon-frames" style="display:none">
+          <label>FALCON FRAMES</label>
+          <input type="number" id="c-falcon-frames" value="6" min="1" max="24">
+        </div>
+        <div class="cf"><label>PROPAGATE</label>
+          <select id="c-propagate"><option value="0" selected>OFF</option><option value="2">2F</option><option value="4">4F</option><option value="8">8F</option></select>
+        </div>
+        <div class="cf"><label>BACKBONE</label>
+          <select id="c-backbone"><option value="1" selected>1</option><option value="2">2</option><option value="4">4</option></select>
+        </div>
+        <div class="cf">
+          <label>OPACITY</label>
+          <div class="range-row"><input type="range" id="c-opacity" min="0.1" max="0.9" step="0.05" value="0.6" oninput="document.getElementById('c-opacityv').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-opacityv">0.6</span></div>
+        </div>
+        <div class="cf"><label>QUESTION (OPTIONAL)</label>
+          <input type="text" id="c-question" placeholder="ask gemma something specific…">
+        </div>
+        <div class="cf"><label>CHUNK S (0=AUTO)</label>
+          <input type="number" id="c-chunk" value="0" min="0" max="600">
         </div>
       </div>
 
@@ -535,10 +617,30 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
           <div class="range-row"><input type="range" id="c-trk-thresh" min="0.01" max="0.5" step="0.01" value="0.15" oninput="document.getElementById('c-trk-tv').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-trk-tv">0.15</span></div>
         </div>
         <div class="cf"><label>RES</label>
-          <select id="c-trk-res"><option value="512">512</option><option value="756">756</option><option value="1008" selected>1008</option></select>
+          <select id="c-trk-res"><option value="224">224 (fast)</option><option value="512">512</option><option value="756">756</option><option value="1008" selected>1008</option></select>
         </div>
         <div class="cf"><label>EVERY</label>
           <select id="c-trk-every"><option value="1">1F</option><option value="2" selected>2F</option><option value="3">3F</option><option value="5">5F</option></select>
+        </div>
+        <div class="cf">
+          <label>OPACITY</label>
+          <div class="range-row"><input type="range" id="c-trk-opacity" min="0.1" max="0.9" step="0.05" value="0.6" oninput="document.getElementById('c-trk-ov').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="c-trk-ov">0.6</span></div>
+        </div>
+        <div class="cf"><label>BACKBONE</label>
+          <select id="c-trk-backbone"><option value="1" selected>1</option><option value="2">2</option><option value="4">4</option></select>
+        </div>
+        <div class="cf"><label>PROPAGATE</label>
+          <select id="c-trk-propagate"><option value="0" selected>OFF</option><option value="2">2F</option><option value="4">4F</option><option value="8">8F</option></select>
+        </div>
+        <div class="togs">
+          <label class="tog"><input type="checkbox" id="c-trk-json" checked><span>JSON</span></label>
+          <label class="tog"><input type="checkbox" id="c-trk-super"><span>SUPERVISION</span></label>
+          <label class="tog"><input type="checkbox" id="c-trk-pids"><span>PERSISTENT IDS</span></label>
+        </div>
+        <label class="tog"><input type="checkbox" id="c-trk-adaptive" onchange="document.getElementById('row-trk-mthr').style.display=this.checked?'':'none'"><span>ADAPTIVE</span></label>
+        <div class="cf" id="row-trk-mthr" style="display:none">
+          <label>MOTION THR</label>
+          <div class="range-row"><input type="range" id="c-trk-mthr" min="0.005" max="0.1" step="0.005" value="0.03" oninput="document.getElementById('c-trk-mthrv').textContent=parseFloat(this.value).toFixed(3)"><span class="rv" id="c-trk-mthrv">0.03</span></div>
         </div>
       </div>
 
@@ -561,9 +663,15 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
           <option value="segment">SEGMENT</option>
           <option value="sam3">SAM-3</option>
           <option value="ocr">OCR</option>
+          <option value="agent">AGENT (VLM)</option>
         </select>
       </div>
       <div class="cf" id="row-insp-q"><label>EXPRESSION</label><input type="text" id="c-insp-q" value="person" placeholder="describe what to find…"></div>
+      <div id="row-agent-cfg" style="display:none">
+        <div class="cf"><label>AGENT MODEL</label><input type="text" id="c-agent-model" placeholder="gpt-4o"></div>
+        <div class="cf"><label>API KEY</label><input type="text" id="c-agent-key" placeholder="blank = saved VLM backend"></div>
+        <div class="cf"><label>BASE URL</label><input type="text" id="c-agent-base" placeholder="optional OpenAI-compatible URL"></div>
+      </div>
 
       <div id="task-sam3" style="display:none">
         <div class="cf"><label>SAM PROMPTS</label><input type="text" id="c-sam-prompts" value="person" placeholder="person car bicycle…"></div>
@@ -600,7 +708,7 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
       <div class="cf"><label>ASK</label><input type="text" id="live-q" value="what do you see?" placeholder="ask about the live view…"></div>
       <div class="sep"></div>
       <button class="btn-launch" onclick="liveApply()">apply to hub</button>
-      <button class="btn-launch" style="margin-top:6px;background:var(--ink-1);color:var(--bg)" onclick="liveAsk()">ask</button>
+      <button class="btn-launch" style="margin-top:6px;background:var(--ink-1);color:var(--canvas)" onclick="liveAsk()">ask</button>
       <button class="btn-launch" style="margin-top:6px" onclick="liveReport()">report</button>
       <button class="btn-launch" id="live-rec-btn" style="margin-top:6px;background:#a33;color:#fff" onclick="liveRecToggle()">● record</button>
     </div>
@@ -752,6 +860,7 @@ function initSplitters() {
 document.addEventListener('DOMContentLoaded', () => {
   initSplitters();
   checkStatus();
+  refreshVlmBackend();
   checkHealth();
   log('aerial intel ground control · ready', 'h');
   log('all models initializing — awaiting status check…', 'i');
@@ -788,6 +897,19 @@ async function checkStatus() {
     } else {
       gr.textContent = '○ offline';
       gr.style.color = 'var(--err)';
+    }
+    // VLM backend status (older servers without d.vlm are skipped silently)
+    if (d.vlm) {
+      const va = document.getElementById('vlm-active');
+      if (va) {
+        if (d.vlm.backend) {
+          va.textContent = `active: ${d.vlm.backend}`;
+          va.style.color = 'var(--ok)';
+        } else {
+          va.textContent = 'active: none';
+          va.style.color = 'var(--warn)';
+        }
+      }
     }
     const allReady = d.models.every(m => m.ready);
     const dot = document.getElementById('conn-dot');
@@ -841,6 +963,56 @@ function renderModels(models) {
       </div>
     </div>`;
   }).join('');
+}
+
+// ══════════════════════════════════════════════════════
+//  VLM BACKEND (custom openai-compatible settings)
+// ══════════════════════════════════════════════════════
+async function refreshVlmBackend() {
+  try {
+    const r = await fetch('/api/settings');
+    if (!r.ok) return;
+    const d = await r.json();
+    const url = document.getElementById('vlm-url');
+    const model = document.getElementById('vlm-model');
+    const key = document.getElementById('vlm-key');
+    if (!url || !model || !key) return;
+    url.value = d.base_url || '';
+    model.value = d.model || '';
+    key.value = '';
+    key.placeholder = d.has_key ? 'api key — saved ✓' : 'api key — blank keeps saved key';
+  } catch (e) { /* older server without /api/settings — skip silently */ }
+}
+
+async function saveVlmBackend() {
+  const url = document.getElementById('vlm-url');
+  const model = document.getElementById('vlm-model');
+  const key = document.getElementById('vlm-key');
+  const btn = document.getElementById('btn-vlm-save');
+  if (!url || !model || !key || !btn) return;
+  const body = {};
+  if (url.value.trim()) body.base_url = url.value.trim();
+  if (model.value.trim()) body.model = model.value.trim();
+  if (key.value.trim()) body.api_key = key.value.trim();
+  const prev = btn.textContent;
+  btn.textContent = 'saving…';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    key.value = '';
+    log('VLM backend saved.', 'h');
+    await checkStatus();
+  } catch (e) {
+    log(`VLM backend save FAILED: ${e.message}`, 'e');
+  } finally {
+    btn.textContent = prev;
+    btn.disabled = false;
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -901,7 +1073,7 @@ async function uploadFile(tab, file) {
   } finally {
     S.uploading[tab] = false;
     if (launchBtn) {
-      if (tab === 'analyze') switchMode(S.mode);
+      if (tab === 'analyze') { switchMode(S.mode); resetBtn(launchBtn, S.mode); }
       else resetBtn(launchBtn, tab);
     }
   }
@@ -912,7 +1084,7 @@ async function uploadFile(tab, file) {
 //  and inspect pane (auto-routed image tasks)
 // ══════════════════════════════════════════════════════
 const FAMILY = { analyze:'analyze', track:'analyze', fastscan:'analyze',
-                 detect:'inspect', segment:'inspect', sam3:'inspect', ocr:'inspect' };
+                 detect:'inspect', segment:'inspect', sam3:'inspect', ocr:'inspect', agent:'inspect' };
 
 function switchMode(m) {
   S.mode = m;
@@ -926,7 +1098,9 @@ function switchMode(m) {
 
 function switchTask(v) {
   g('row-insp-q').style.display = v === 'ocr' ? 'none' : '';
+  g('row-insp-q').querySelector('label').textContent = v==='agent' ? 'QUESTION' : 'EXPRESSION';
   g('task-sam3').style.display  = v === 'sam3' ? '' : 'none';
+  g('row-agent-cfg').style.display = v === 'agent' ? '' : 'none';
 }
 
 // AUTO task routing for the inspect pane — text-y queries go to OCR,
@@ -995,11 +1169,29 @@ async function launchVideo() {
     fd.append('report',       g('c-report').checked ? 'true' : 'false');
     fd.append('report_type',  g('c-rtype').value);
     fd.append('falcon_refine',g('c-falcon').checked ? 'true' : 'false');
+    fd.append('opacity', g('c-opacity').value);
+    fd.append('backbone_every', g('c-backbone').value);
+    fd.append('propagate', g('c-propagate').value);
+    fd.append('fast', g('c-fast').checked ? 'true' : 'false');
+    fd.append('adaptive', g('c-adaptive').checked ? 'true' : 'false');
+    fd.append('relevance_filter', g('c-relevance').checked ? 'true' : 'false');
+    fd.append('motion_threshold', g('c-mthr').value);
+    fd.append('falcon_frames', g('c-falcon-frames').value);
+    fd.append('chunk_duration', g('c-chunk').value);
+    if (g('c-question').value.trim()) fd.append('question', g('c-question').value.trim());
   } else if (kind === 'track') {
     fd.append('prompts',    g('c-trk-prompts').value);
     fd.append('threshold',  g('c-trk-thresh').value);
     fd.append('resolution', g('c-trk-res').value);
     fd.append('every',      g('c-trk-every').value);
+    fd.append('opacity', g('c-trk-opacity').value);
+    fd.append('backbone_every', g('c-trk-backbone').value);
+    fd.append('json_output', g('c-trk-json').checked ? 'true' : 'false');
+    fd.append('supervision', g('c-trk-super').checked ? 'true' : 'false');
+    fd.append('persistent_ids', g('c-trk-pids').checked ? 'true' : 'false');
+    fd.append('adaptive_motion', g('c-trk-adaptive').checked ? 'true' : 'false');
+    fd.append('motion_threshold', g('c-trk-mthr').value);
+    fd.append('propagate', g('c-trk-propagate').value);
   } else { // fastscan
     fd.append('query',         g('c-query').value);
     fd.append('every',         '5.0');
@@ -1034,6 +1226,11 @@ async function launchInspect() {
     fd.append('threshold',  g('c-sam-thresh').value);
     fd.append('resolution', g('c-sam-res').value);
     fd.append('task',       g('c-sam-task').value);
+  } else if (kind === 'agent') {
+    fd.append('question', g('c-insp-q').value);
+    if (g('c-agent-model').value.trim()) fd.append('model', g('c-agent-model').value.trim());
+    if (g('c-agent-key').value.trim()) fd.append('api_key', g('c-agent-key').value.trim());
+    if (g('c-agent-base').value.trim()) fd.append('base_url', g('c-agent-base').value.trim());
   } // ocr: backend default question applies
   await startJob(kind, fd, btn, finfo.name);
 }
@@ -1139,6 +1336,10 @@ async function onJobDone(jid, kind, results) {
     // Parse OCR from ops log — show last meaningful block
     const job = await (await fetch(`/api/job/${jid}`)).json();
     showOcrOutput(job.output.join('\n'));
+  } else if (kind === 'agent') {
+    const job = await (await fetch(`/api/job/${jid}`)).json();
+    showAgentOutput(job.output.join('\n'));
+    if (results && results.image) showImage(`/api/job/${jid}/file/image`);
   }
 }
 
@@ -1288,6 +1489,9 @@ function renderMarkdown(md) {
 }
 
 function showOcrOutput(text) {
+  // Restore the panel header in case an agent run retitled it to "AGENT ANSWER".
+  const ocrPh = g('ocr-output').querySelector('.ph');
+  if (ocrPh) ocrPh.textContent = 'EXTRACTED TEXT';
   // cmd_ocr prints a known marker line, then the extracted text, then Region stats.
   const marker = 'Extracted markup:';
   const mi = text.indexOf(marker);
@@ -1304,6 +1508,22 @@ function showOcrOutput(text) {
       .join('\n').trim();
   }
   g('ocr-text').textContent = out || '(no text extracted)';
+  g('ocr-output').style.display = 'block';
+  const dz = g('dz-inspect');
+  if (dz) dz.style.display = 'none';
+}
+
+function showAgentOutput(text) {
+  // Agent log — show from the last "Answer:" line to the end, else the whole log.
+  const lines = text.split('\n');
+  let start = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].startsWith('Answer:')) { start = i; break; }
+  }
+  const out = (start !== -1 ? lines.slice(start).join('\n') : text).trim();
+  const ph = g('ocr-output').querySelector('.ph');
+  if (ph) ph.textContent = 'AGENT ANSWER';
+  g('ocr-text').textContent = out || '(no answer)';
   g('ocr-output').style.display = 'block';
   const dz = g('dz-inspect');
   if (dz) dz.style.display = 'none';
@@ -1428,7 +1648,7 @@ function g(id) { return document.getElementById(id); }
 
 function resetBtn(btn, kind) {
   const labels = {analyze:'▶ launch',track:'▶ track',fastscan:'▶ fastscan',
-                  detect:'▶ run',segment:'▶ run',sam3:'▶ run',ocr:'▶ run',inspect:'▶ run'};
+                  detect:'▶ run',segment:'▶ run',sam3:'▶ run',ocr:'▶ run',inspect:'▶ run',agent:'▶ run'};
   btn.disabled = false;
   btn.classList.remove('running');
   btn.textContent = labels[kind] || '▶ RUN';
@@ -1483,25 +1703,30 @@ function stopMissionTicker() {
 // ══════════════════════════════════════════════════════
 //  LIVE HUB (field bridge ws://…:8765 — observer relay)
 // ══════════════════════════════════════════════════════
-const LIVE = { ws: null, connected: false, lastDets: [], img: null };
+const LIVE = { ws: null, connected: false, lastDets: [], img: null,
+               mode: 'hub', pendingStart: null, engineRunning: false };
 
 const LIVE_PALETTE = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6','#bcf60c'];
 
 function liveToggle() { LIVE.connected ? liveDisconnect() : liveConnect(); }
 
-function liveConnect() {
-  const url = 'ws://127.0.0.1:8765';
+// Shared socket wiring — used by BOTH the field-hub connection (liveConnect)
+// and the local engine connection (liveEngineConnect).
+function wireSocket(ws) {
   const btn = document.getElementById('live-connect');
-  let ws;
-  try { ws = new WebSocket(url); } catch (e) { liveStatus('✗ ' + e.message); return; }
-  ws.binaryType = 'arraybuffer';
-  LIVE.ws = ws;
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: 'hello', role: 'dashboard' }));
     LIVE.connected = true;
     btn.textContent = 'disconnect';
-    liveStatus('● connected');
+    liveStatus(LIVE.mode === 'local' ? '● local engine connected' : '● connected');
     document.getElementById('live-empty').style.display = 'none';
+    // Local engine: a START press before the socket opened parks its payload here.
+    if (LIVE.mode === 'local' && LIVE.pendingStart) {
+      const payload = LIVE.pendingStart;
+      LIVE.pendingStart = null;
+      liveSend(payload);
+      liveSetRunning(true);
+    }
   };
   ws.onmessage = (ev) => {
     if (ev.data instanceof ArrayBuffer) { liveDrawFrame(ev.data); return; }
@@ -1511,9 +1736,127 @@ function liveConnect() {
     else if (msg.type === 'ask_ack') { liveOut('thinking… [' + (msg.model || 'vlm') + ']'); }
     else if (msg.type === 'report_result') { liveOut('REPORT\n' + (msg.text || '')); }
     else if (msg.type === 'status') { liveStatus('● ' + (msg.note || 'ok')); }
+    else if (msg.type === 'engine_stopped') { liveSetRunning(false); liveStatus('engine stopped'); }
   };
-  ws.onclose = () => { LIVE.connected = false; btn.textContent = 'connect to hub'; liveStatus('— disconnected'); const le = g('live-empty'); if (le) le.style.display = 'flex'; };
-  ws.onerror = () => liveStatus('✗ hub unreachable');
+  ws.onclose = () => {
+    LIVE.connected = false;
+    btn.textContent = 'connect to hub';
+    liveStatus('— disconnected');
+    liveSetRunning(false);
+    const le = g('live-empty');
+    if (le) le.style.display = 'flex';
+  };
+  ws.onerror = () => liveStatus(LIVE.mode === 'local' ? '✗ engine unreachable' : '✗ hub unreachable');
+}
+
+function liveConnect() {
+  let ws;
+  try { ws = new WebSocket('ws://127.0.0.1:8765'); } catch (e) { liveStatus('✗ ' + e.message); return; }
+  ws.binaryType = 'arraybuffer';
+  LIVE.ws = ws;
+  wireSocket(ws);
+}
+
+// ── LOCAL ENGINE mode — the dashboard streams SAM 3.1 itself via /api/live/ws ──
+function liveSetMode(m) {
+  if (LIVE.mode === m) return;
+  // Hub and local engine are mutually exclusive — drop any existing socket.
+  if (LIVE.ws) {
+    const old = LIVE.ws;
+    LIVE.ws = null;
+    old.onopen = old.onmessage = old.onclose = old.onerror = null;
+    old.close();
+  }
+  LIVE.connected = false;
+  LIVE.pendingStart = null;
+  liveSetRunning(false);
+  LIVE.mode = m;
+  g('live-mode-local').classList.toggle('active', m === 'local');
+  g('live-mode-hub').classList.toggle('active', m === 'hub');
+  g('live-local-panel').style.display = m === 'local' ? 'flex' : 'none';
+  g('live-hub-row').style.display = m === 'hub' ? 'flex' : 'none';
+  liveStatus(m === 'local' ? 'local engine · not started' : 'ws://127.0.0.1:8765');
+}
+
+function liveEngineConnect() {
+  let ws;
+  try {
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/live/ws');
+  } catch (e) { liveStatus('✗ ' + e.message); return; }
+  ws.binaryType = 'arraybuffer';
+  LIVE.ws = ws;
+  wireSocket(ws);
+}
+
+function liveSrcChange(v) {
+  g('live-file-row').style.display = v === 'file' ? '' : 'none';
+  g('live-cam-row').style.display = v === 'webcam' ? '' : 'none';
+}
+
+function liveFileChosen(input) {
+  const f = input.files && input.files[0];
+  if (f) liveUploadFile(f);
+}
+
+async function liveUploadFile(file) {
+  const label = g('live-file-name');
+  label.textContent = `Uploading: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`;
+  log(`Uploading ${file.name}…`, 'i');
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch('/api/upload', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    S.files['live'] = { file_id: d.file_id, name: d.name };
+    label.textContent = `▸ ${d.name} (${(d.size / 1024 / 1024).toFixed(1)} MB)`;
+    log(`Upload OK · ${d.name} · ${(d.size / 1024 / 1024).toFixed(1)} MB`, 'h');
+  } catch (e) {
+    delete S.files['live'];
+    label.textContent = 'no file loaded';
+    log(`Upload FAILED: ${e.message}`, 'e');
+  }
+}
+
+function liveSetRunning(run) {
+  LIVE.engineRunning = !!run;
+  const b = g('btn-live-start');
+  if (b) b.textContent = run ? '■ stop' : '▶ start';
+}
+
+function liveStartToggle() {
+  if (LIVE.engineRunning) { liveSend({ type: 'stop' }); return; }
+  const source = g('live-src').value;
+  if (source === 'file' && !S.files['live']) { log('Load a video file first.', 'w'); return; }
+  const prompts = g('live-prompts').value.trim().split(/\s+/).filter(Boolean);
+  if (!prompts.length) { log('Enter at least one prompt.', 'w'); return; }
+  const payload = {
+    type: 'start',
+    source: source,
+    prompts: prompts,
+    resolution: parseInt(g('live-res').value, 10),
+    threshold: parseFloat(g('live-thresh').value),
+    detect_every: parseInt(g('live-every').value, 10),
+  };
+  if (source === 'file') payload.file_id = S.files['live'].file_id;
+  else payload.camera = parseInt(g('live-cam').value, 10);
+  if (LIVE.connected && LIVE.ws && LIVE.ws.readyState === 1) {
+    liveSend(payload);
+    liveSetRunning(true);
+  } else {
+    LIVE.pendingStart = payload;
+    liveEngineConnect();
+  }
+}
+
+function liveApplyPrompts() {
+  const prompts = g('live-prompts').value.trim().split(/\s+/).filter(Boolean);
+  if (!prompts.length) { liveStatus('✗ no prompts'); return; }
+  if (!liveSend({ type: 'set_prompts', prompts })) liveStatus('✗ not connected');
+}
+
+function liveEngineFree() {
+  if (!liveSend({ type: 'shutdown' })) liveStatus('✗ not connected');
 }
 
 function liveDisconnect() { if (LIVE.ws) LIVE.ws.close(); }
@@ -1544,7 +1887,8 @@ function liveBox(ctx, d, W, H) {
   const color = LIVE_PALETTE[(d.color_id ?? d.track_id ?? 0) % 8];
   ctx.strokeStyle = color; ctx.lineWidth = 2;
   ctx.strokeRect(x1, y1, w, h);
-  const label = `${d.label}${d.track_state === 'predicted' ? ' ·held' : ''} ${Math.round((d.score||0)*100)}%`;
+  let label = `${d.label}${d.track_state === 'predicted' ? ' ·held' : ''} ${Math.round((d.score||0)*100)}%`;
+  if (d.direction && d.direction !== 'unknown' && d.direction !== 'stationary') label += ' · ' + d.direction;
   ctx.font = '12px monospace';
   const tw = ctx.measureText(label).width + 8;
   ctx.fillStyle = color; ctx.fillRect(x1, Math.max(0,y1-16), tw, 16);

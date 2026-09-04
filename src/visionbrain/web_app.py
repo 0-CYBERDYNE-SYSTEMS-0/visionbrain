@@ -36,6 +36,11 @@ for d in (WORK_DIR, UPLOADS, RESULTS):
 PYTHON     = sys.executable          # same env that launched us
 STATIC_DIR = Path(__file__).parent / "static"
 
+# ── Local live engine (SAM 3.1 streamed over /api/live/ws) ────────────────────
+from .live_engine import configure as _live_configure, router as _live_router
+_live_configure(UPLOADS)
+app.include_router(_live_router)
+
 # ── Job store ──────────────────────────────────────────────────────────────────
 _jobs: dict[str, dict] = {}
 
@@ -99,12 +104,21 @@ async def _exec(job: dict, cmd: list[str], outputs: dict[str, str]) -> None:
 @app.get("/api/status")
 async def api_status():
     from .loader import all_records
-    from .gemma_inference import gemma_available
-    # all_records() stats multi-GB model dirs; gemma_available() does a network
-    # probe. Both are blocking — keep them off the event loop.
-    recs, gemma_ok = await asyncio.gather(
+    from .gemma_inference import available_backend, custom_backend_configured
+
+    # all_records() stats multi-GB model dirs; available_backend() does network
+    # probes. Both are blocking — keep them off the event loop. One
+    # available_backend() call feeds both the gemma flag and the vlm dict.
+    def _backend_status() -> tuple[bool, dict]:
+        backend = available_backend()
+        return (
+            backend is not None,
+            {"backend": backend or "none", "custom_configured": custom_backend_configured()},
+        )
+
+    recs, (gemma_ok, vlm) = await asyncio.gather(
         asyncio.to_thread(all_records),
-        asyncio.to_thread(gemma_available),
+        asyncio.to_thread(_backend_status),
     )
     return {
         "models": [
@@ -114,6 +128,7 @@ async def api_status():
             for r in recs
         ],
         "gemma_remote": gemma_ok,
+        "vlm": vlm,
     }
 
 @app.get("/api/healthz")
@@ -126,6 +141,57 @@ async def api_healthz():
         "uptime_s": round(now - app.state.started_at, 3),
         "running_jobs": running_jobs,
     }
+
+
+# ── VLM settings (custom OpenAI-compatible backend) ───────────────────────────
+def _settings_payload() -> dict:
+    """Redacted view of the saved VLM settings — the api_key never leaves here."""
+    from .gemma_inference import custom_backend_configured, load_vlm_settings
+
+    settings = load_vlm_settings()
+    return {
+        "configured": custom_backend_configured(),
+        "base_url": settings["base_url"],
+        "model": settings["model"],
+        "has_key": bool(settings["api_key"]),
+    }
+
+
+@app.get("/api/settings")
+async def api_get_settings():
+    return _settings_payload()
+
+
+@app.post("/api/settings")
+async def api_set_settings(request: Request):
+    from .gemma_inference import save_vlm_settings
+
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(400, "JSON body must be an object")
+
+    fields = {
+        "base_url": body.get("base_url", ""),
+        "model": body.get("model", ""),
+        "api_key": body.get("api_key", ""),
+    }
+    for name, value in fields.items():
+        if not isinstance(value, str):
+            raise HTTPException(400, f"'{name}' must be a string")
+    clear_key = body.get("clear_key", False)
+    if not isinstance(clear_key, bool):
+        raise HTTPException(400, "'clear_key' must be a boolean")
+
+    save_vlm_settings(
+        base_url=fields["base_url"],
+        model=fields["model"],
+        api_key=fields["api_key"],
+        clear_key=clear_key,
+    )
+    return _settings_payload()
 
 
 # ── File upload ────────────────────────────────────────────────────────────────
@@ -151,6 +217,7 @@ def _find_upload(fid: str) -> Path:
 async def job_analyze(
     file_id:        str   = Form(...),
     query:          str   = Form("people and vehicles"),
+    question:       str   = Form(""),
     prompts:        str   = Form("person vehicle animal"),
     threshold:      float = Form(0.05),
     resolution:     int   = Form(512),
@@ -217,6 +284,8 @@ async def job_analyze(
         cmd.append("--relevance-filter")
     if not parallel_falcon:
         cmd.append("--sequential-falcon")
+    if question.strip():
+        cmd += ["--question", question]
     if chunk_duration != 0:
         cmd += ["--chunk-duration", str(chunk_duration)]
     if chunk_overlap != 3:
@@ -309,17 +378,25 @@ async def job_ocr(
 # ── Track ──────────────────────────────────────────────────────────────────────
 @app.post("/api/job/track")
 async def job_track(
-    file_id:    str   = Form(...),
-    prompts:    str   = Form("person"),
-    threshold:  float = Form(0.15),
-    every:      int   = Form(2),
-    resolution: int   = Form(1008),
-    opacity:    float = Form(0.6),
+    file_id:          str   = Form(...),
+    prompts:          str   = Form("person"),
+    threshold:        float = Form(0.15),
+    every:            int   = Form(2),
+    resolution:       int   = Form(1008),
+    opacity:          float = Form(0.6),
+    backbone_every:   int   = Form(1),
+    json_output:      bool  = Form(False),
+    supervision:      bool  = Form(False),
+    persistent_ids:   bool  = Form(False),
+    adaptive_motion:  bool  = Form(False),
+    motion_threshold: float = Form(0.03),
+    propagate:        int   = Form(0),
 ):
     src = _find_upload(file_id)
     job = _new_job("track")
     jid = job["id"]
     out = str(RESULTS / f"{jid}_tracked.mp4")
+    out_j = str(RESULTS / f"{jid}_detections.json")
     cmd = [PYTHON, "-u", "-m", "visionbrain", "track",
            "--video", str(src),
            "--prompts", *prompts.split(),
@@ -327,8 +404,21 @@ async def job_track(
            "--threshold", str(threshold),
            "--every", str(every),
            "--resolution", str(resolution),
-           "--opacity", str(opacity)]
-    asyncio.create_task(_exec(job, cmd, {"video": out}))
+           "--opacity", str(opacity),
+           "--backbone-every", str(backbone_every)]
+    if json_output:
+        cmd += ["--json-output", out_j]
+    if supervision:
+        cmd.append("--supervision")
+    if persistent_ids:
+        cmd.append("--persistent-ids")
+    if adaptive_motion:
+        cmd.append("--adaptive-motion")
+        if motion_threshold != 0.03:
+            cmd += ["--motion-threshold", str(motion_threshold)]
+    if propagate > 0:
+        cmd += ["--propagate", str(propagate)]
+    asyncio.create_task(_exec(job, cmd, {"video": out, "json": out_j if json_output else ""}))
     return {"job_id": jid, "created_at": job["ts"]}
 
 
@@ -352,6 +442,40 @@ async def job_sam3(
            "--threshold", str(threshold),
            "--resolution", str(resolution),
            "--output", out]
+    asyncio.create_task(_exec(job, cmd, {"image": out}))
+    return {"job_id": jid, "created_at": job["ts"]}
+
+
+# ── Agent ──────────────────────────────────────────────────────────────────────
+@app.post("/api/job/agent")
+async def job_agent(
+    file_id:  str = Form(...),
+    question: str = Form("what do you see?"),
+    api_key:  str = Form(""),
+    model:    str = Form(""),
+    base_url: str = Form(""),
+):
+    src = _find_upload(file_id)
+    job = _new_job("agent")
+    jid = job["id"]
+    out = str(RESULTS / f"{jid}_agent.jpg")
+    # Form fields override saved settings; read the settings file only when a
+    # form field is empty.
+    if not (api_key and model and base_url):
+        from .gemma_inference import load_vlm_settings
+
+        stored = load_vlm_settings()
+        api_key = api_key or stored["api_key"]
+        model = model or stored["model"]
+        base_url = base_url or stored["base_url"]
+    cmd = [PYTHON, "-u", "-m", "visionbrain", "agent",
+           "--image", str(src), "--question", question, "--output", out]
+    if api_key:
+        cmd += ["--api-key", api_key]
+    if model:
+        cmd += ["--model", model]
+    if base_url:
+        cmd += ["--base-url", base_url]
     asyncio.create_task(_exec(job, cmd, {"image": out}))
     return {"job_id": jid, "created_at": job["ts"]}
 

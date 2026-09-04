@@ -51,6 +51,30 @@ class TestLoader:
         # is_cached=True only if >0.5 GB downloaded
         print(f"\n  SAM 3.1: cached={rec.is_cached} ({rec.disk_gb} GB), can_load={rec.can_load}, note={rec.note}")
 
+    def test_falcon_ocr_record(self):
+        from visionbrain.loader import falcon_ocr_record, FALCON_OCR_HF_REPO, HF_CACHE
+        rec = falcon_ocr_record()
+        assert rec.hf_id == FALCON_OCR_HF_REPO == "tiiuae/Falcon-OCR"
+        assert rec.cache_dir == HF_CACHE / "models--tiiuae--Falcon-OCR"
+        # Registry-only entry: no MLX inference path for Falcon-OCR, ever.
+        assert rec.can_load is False
+        if rec.is_cached:
+            assert "vLLM/CUDA" in rec.note
+        else:
+            # CI runners have no cached weights; the note must be actionable.
+            assert rec.is_cached is False
+            assert "huggingface-cli download tiiuae/Falcon-OCR" in rec.note
+        print(f"\n  Falcon OCR: cached={rec.is_cached} ({rec.disk_gb} GB), can_load={rec.can_load}, note={rec.note}")
+
+    def test_all_records_includes_falcon_ocr(self):
+        from visionbrain import loader
+        recs = loader.all_records()
+        ids = [r.hf_id for r in recs]
+        assert loader.FALCON_OCR_HF_REPO in ids
+        assert loader.falcon_perception_record().hf_id in ids
+        assert loader.sam31_record().hf_id in ids
+        assert len(ids) == 4
+
     def test_falcon_repo_accessible(self):
         from visionbrain.loader import FALCON_REPO, falcon_repo
         if not FALCON_REPO.exists():
@@ -463,6 +487,87 @@ class TestWebApp:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Prompt router tests (no MLX required — pure Python)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestPromptRouter:
+    def test_basic_partition(self):
+        from visionbrain.prompt_router import route
+        res = route("boats and people near the pier")
+        assert "boats" in res.segment_targets
+        assert "people" in res.segment_targets
+        assert "pier" in res.segment_targets
+        assert res.semantic_query == "boats and people near the pier"
+
+    def test_multiword_phrase_keeps_verb_attachment(self):
+        from visionbrain.prompt_router import route
+        res = route("trucks blocking the north access road")
+        assert res.segment_targets == ["trucks blocking", "north access road"]
+        assert res.semantic_query == "trucks blocking the north access road"
+
+    def test_adjective_phrase_stays_whole(self):
+        from visionbrain.prompt_router import route
+        res = route("yellow school bus")
+        assert res.segment_targets == ["yellow school bus"]
+
+    def test_open_vocab_pass_through(self):
+        # Words like these were throttled by the old concrete-noun whitelist.
+        from visionbrain.prompt_router import route
+        res = route("kayak and buoy near the crane")
+        assert res.segment_targets == ["kayak", "buoy", "crane"]
+
+    def test_stopword_only_query_has_no_targets(self):
+        from visionbrain.prompt_router import route
+        q = "find all of that here"
+        res = route(q)
+        assert res.segment_targets == []
+        assert res.semantic_query == res.original_query == q
+        assert "No trackable phrases" in res.routed_from
+
+    def test_content_phrase_passes_through_to_sam(self):
+        # "suspicious activity" is content under open-vocab pass-through:
+        # only stopword-only queries produce empty targets.
+        from visionbrain.prompt_router import route
+        res = route("find any suspicious activity")
+        assert res.segment_targets == ["suspicious activity"]
+        assert res.semantic_query == "find any suspicious activity"
+
+    def test_cap_at_eight_targets(self):
+        from visionbrain.prompt_router import route
+        res = route("kayak and canoe and buoy and crane and barge and ferry "
+                    "and tug and sailboat and trawler and dinghy and skiff and yacht")
+        assert len(res.segment_targets) == 8
+        assert res.segment_targets[0] == "kayak"
+
+    def test_dedupe_case_insensitive_preserves_order(self):
+        from visionbrain.prompt_router import route
+        res = route("Boats and boats and BOATS near the dock")
+        assert res.segment_targets == ["Boats", "dock"]
+
+    def test_pure_numbers_dropped(self):
+        from visionbrain.prompt_router import route
+        res = route("3 trucks and 12 near the gate")
+        # "3 trucks" is a content phrase; the standalone number "12" is dropped.
+        assert res.segment_targets == ["3 trucks", "gate"]
+
+    def test_routed_from_format(self):
+        from visionbrain.prompt_router import route
+        res = route("boats and people")
+        assert res.routed_from == "SAM phrases: ['boats', 'people'] | Gemma: full query"
+
+    def test_empty_query(self):
+        from visionbrain.prompt_router import route
+        res = route("")
+        assert res.segment_targets == []
+        assert res.semantic_query == ""
+        assert res.original_query == ""
+
+    def test_route_fallback_defaults(self):
+        from visionbrain.prompt_router import route_fallback
+        assert route_fallback("anything at all") == ["person", "vehicle", "building", "animal"]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Shared detection-core tests (no MLX required — pure Python)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -618,6 +723,166 @@ class TestVLMRegistry:
               "centroid_norm": {"x": 0.2, "y": 0.2}, "source": "sam"}]
         )
         assert out == "- cow, 87% confidence, upper left of frame [sam]"
+
+
+class TestVLMSettings:
+    """Custom OpenAI-compatible backend settings store (CI-safe — no network)."""
+
+    def test_save_load_roundtrip(self, tmp_path):
+        import json
+        from visionbrain import gemma_inference as gi
+
+        p = tmp_path / "settings.json"
+        saved = gi.save_vlm_settings(
+            base_url="http://localhost:1234/v1",
+            model="test-model",
+            api_key="sk-secret",
+            path=p,
+        )
+        # save() redacts the key in its return value...
+        assert saved == {"base_url": "http://localhost:1234/v1", "model": "test-model", "api_key": ""}
+        # ...but the key material persists on disk, in a 0600 file
+        assert json.loads(p.read_text())["api_key"] == "sk-secret"
+        assert (p.stat().st_mode & 0o777) == 0o600
+
+        loaded = gi.load_vlm_settings(path=p)
+        assert loaded == {
+            "base_url": "http://localhost:1234/v1",
+            "model": "test-model",
+            "api_key": "sk-secret",
+        }
+
+    def test_missing_or_corrupt_file_yields_empty_settings(self, tmp_path):
+        from visionbrain import gemma_inference as gi
+
+        assert gi.load_vlm_settings(path=tmp_path / "absent.json") == {
+            "base_url": "", "model": "", "api_key": "",
+        }
+        corrupt = tmp_path / "corrupt.json"
+        corrupt.write_text("{not valid json")
+        assert gi.load_vlm_settings(path=corrupt) == {
+            "base_url": "", "model": "", "api_key": "",
+        }
+
+    def test_save_empty_preserves_and_clear_key_wipes_only_key(self, tmp_path):
+        from visionbrain import gemma_inference as gi
+
+        p = tmp_path / "settings.json"
+        gi.save_vlm_settings(base_url="http://x/v1", model="m1", api_key="k1", path=p)
+
+        saved = gi.save_vlm_settings(path=p)  # all-empty: nothing overwritten
+        assert saved["base_url"] == "http://x/v1"
+        assert saved["model"] == "m1"
+        assert gi.load_vlm_settings(path=p)["api_key"] == "k1"
+
+        saved = gi.save_vlm_settings(model="m2", clear_key=True, path=p)
+        assert saved["model"] == "m2"
+        assert gi.load_vlm_settings(path=p) == {
+            "base_url": "http://x/v1", "model": "m2", "api_key": "",
+        }
+
+    def test_custom_backend_configured_requires_base_url_and_model(self, tmp_path, monkeypatch):
+        from visionbrain import gemma_inference as gi
+
+        p = tmp_path / "settings.json"
+        monkeypatch.setattr(gi, "settings_path", lambda: p)
+
+        assert gi.custom_backend_configured() is False  # no file yet
+        gi.save_vlm_settings(base_url="http://x/v1", path=p)
+        assert gi.custom_backend_configured() is False  # base_url only
+        gi.save_vlm_settings(model="m", path=p)
+        assert gi.custom_backend_configured() is True
+        gi.save_vlm_settings(clear_key=True, path=p)
+        assert gi.custom_backend_configured() is True   # api_key is irrelevant
+
+    def test_available_backend_custom_first(self, monkeypatch):
+        from visionbrain import gemma_inference as gi
+
+        def no_network(*args, **kwargs):
+            raise AssertionError("network probe attempted")
+
+        monkeypatch.setattr(gi.urllib.request, "urlopen", no_network)
+        monkeypatch.setattr(gi, "custom_backend_configured", lambda: True)
+        assert gi.available_backend() == "custom"
+
+        monkeypatch.setattr(gi, "custom_backend_configured", lambda: False)
+        assert gi.available_backend() != "custom"
+
+    def test_custom_chat_request_shape(self, monkeypatch):
+        import json
+        from visionbrain import gemma_inference as gi
+
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "choices": [{"message": {"content": "answer from custom"}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 7},
+                }).encode("utf-8")
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.headers)
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse()
+
+        monkeypatch.setattr(gi.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(gi, "load_vlm_settings", lambda path=None: {
+            "base_url": "http://example.test:1234/v1", "model": "test-model", "api_key": ""})
+
+        text, raw, latency_s = gi._custom_chat(
+            [{"role": "user", "content": "hi"}], max_tokens=64, temperature=0.1
+        )
+        assert text == "answer from custom"
+        assert raw["usage"]["completion_tokens"] == 7
+        assert latency_s >= 0.0
+        assert captured["url"] == "http://example.test:1234/v1/chat/completions"
+        assert "Authorization" not in captured["headers"]  # no key → no header
+        assert captured["payload"]["model"] == "test-model"
+        assert captured["payload"]["max_tokens"] == 64
+        assert captured["payload"]["temperature"] == 0.1
+        assert captured["payload"]["messages"] == [{"role": "user", "content": "hi"}]
+
+        # With a saved api key, a Bearer Authorization header is sent
+        monkeypatch.setattr(gi, "load_vlm_settings", lambda path=None: {
+            "base_url": "http://example.test:1234/v1/", "model": "test-model",
+            "api_key": "sk-test"})
+        captured.clear()
+        gi._custom_chat([{"role": "user", "content": "hi"}], max_tokens=64, temperature=0.1)
+        assert captured["headers"]["Authorization"] == "Bearer sk-test"
+        assert captured["url"] == "http://example.test:1234/v1/chat/completions"  # trailing / stripped
+
+    def test_custom_chat_unconfigured_or_malformed_raises(self, monkeypatch, tmp_path):
+        import json
+        from visionbrain import gemma_inference as gi
+
+        monkeypatch.setattr(gi, "load_vlm_settings", lambda path=None: {
+            "base_url": "", "model": "", "api_key": ""})
+        with pytest.raises(RuntimeError, match="not configured"):
+            gi._custom_chat([{"role": "user", "content": "hi"}], max_tokens=8, temperature=0.1)
+
+        class BadResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps({"choices": "nope"}).encode("utf-8")
+
+        monkeypatch.setattr(gi.urllib.request, "urlopen", lambda req, timeout=None: BadResponse())
+        monkeypatch.setattr(gi, "load_vlm_settings", lambda path=None: {
+            "base_url": "http://example.test", "model": "m", "api_key": ""})
+        with pytest.raises(RuntimeError, match="Malformed response"):
+            gi._custom_chat([{"role": "user", "content": "hi"}], max_tokens=8, temperature=0.1)
 
 
 class TestMlxCompat:

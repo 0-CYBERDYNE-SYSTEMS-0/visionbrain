@@ -1,25 +1,34 @@
-"""Prompt router — splits a user query into concrete SAM targets and semantic reasoning questions.
+"""Prompt router — splits a user query into open-vocabulary SAM targets and a semantic question.
 
 VisionBrain uses two types of AI models with different capabilities:
-- SAM 3.1: handles concrete, segmentable objects (person, car, roof, building).
-  It cannot reason about abstract concepts like "damage", "opportunity", or "condition".
+- SAM 3.1: open-vocabulary text prompts. Any noun phrase can be segmented and
+  tracked — "kayak", "buoy", "crane", "yellow school bus" — with no built-in
+  vocabulary. Plurals and multi-word phrases are handled by SAM natively.
 - Falcon Perception + Gemma 4: reason about semantics — what the detections mean,
   whether something is damaged, what action to take.
 
 This module routes a user query to the appropriate model(s) by splitting it into:
-  - segment_targets: concrete nouns SAM can find and track
-  - semantic_query: the abstract question Falcon/Gemma should answer
+  - segment_targets: trackable noun phrases for SAM's multi-prompt detector
+  - semantic_query: the original query, passed through unchanged (Gemma reasons
+    over the full ask)
+
+Routing is pure partitioning: the token stream is split into phrases at generic
+stopwords (articles, conjunctions, prepositions, auxiliaries, filler verbs), so
+this module contains NO domain vocabulary — every non-stopword phrase passes
+through to SAM. Phrases are deduped case-insensitively (first-seen order) and
+capped at 8 prompts (SAM multiplex sanity limit: more prompts than that degrade
+detection quality and latency).
 
 Example:
+    route("boats and people near the pier")
+    -> PromptResult(
+        segment_targets=["boats", "people", "pier"],
+        semantic_query="boats and people near the pier",
+    )
     route("trucks blocking the north access road")
     -> PromptResult(
-        segment_targets=["truck"],
-        semantic_query="blocking the north access road"
-    )
-    route("person acting suspiciously near the gate")
-    -> PromptResult(
-        segment_targets=["person"],
-        semantic_query="acting suspiciously near the gate"
+        segment_targets=["trucks blocking", "north access road"],
+        semantic_query="trucks blocking the north access road",
     )
 """
 
@@ -28,85 +37,35 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-
 # ──────────────────────────────────────────────────────────────────────────────
-# Concrete nouns that SAM 3.1 can segment — these are things SAM has
-# been shown examples of and can detect with bounding boxes + masks.
+# Generic closed-class words only — articles, conjunctions, prepositions,
+# auxiliaries, and imperative/filler words. Deliberately contains NO domain
+# nouns: SAM 3.1 is open-vocabulary, so every other phrase is a valid target.
 # ──────────────────────────────────────────────────────────────────────────────
 
-CONCRETE_NOUNS: set[str] = {
-    # People
-    "person", "people", "pedestrian", "worker", "crowd", "child", "adult",
-    # Vehicles & transport
-    "car", "truck", "pickup", "van", "bus", "suv", "motorcycle", "bicycle",
-    "bike", "trailer", "tractor", "vehicle", "boat", "ship", "train",
-    "aircraft", "airplane", "helicopter", "drone",
-    # Animals (livestock and wildlife)
-    "cow", "cattle", "bull", "steer", "heifer", "calf", "calves",
-    "sheep", "lamb", "ewe", "ram",
-    "goat", "kid", "nanny", "billy",
-    "horse", "mare", "stallion", "gelding", "foal", "pony",
-    "pig", "sow", "boar", "piglet", "hog",
-    "chicken", "hen", "rooster", "poultry", "duck", "goose", "turkey",
-    "llama", "alpaca", "donkey", "mule",
-    "dog", "cat", "bird", "deer", "elk", "bear", "animal",
-    # Structures & infrastructure
-    "fence", "post", "rail", "gate", "barn", "shed", "structure",
-    "building", "house", "silo", "roof", "shingles", "wall", "road",
-    "bridge", "tower", "pole", "panel", "sign", "barrier", "container",
-    "tank", "pond", "cistern", "corral", "pen", "enclosure",
-    "hay", "bale", "stack",
-    # Vegetation & terrain
-    "crop", "row", "plant", "tree", "bush", "hedge",
-    "grass", "weed", "brush", "scrub", "rock", "boulder",
-    "stream", "creek", "river", "drainage", "ditch", "lake",
-    "mud", "puddle", "flood", "erosion",
-    # Equipment & objects
-    "feeder", "bunk", "equipment", "machine", "dumpster", "pile",
-    "camera", "sensor", "solar panel",
-}
+STOPWORDS: frozenset[str] = frozenset({
+    # Articles
+    "a", "an", "the",
+    # Conjunctions
+    "and", "or", "but",
+    # Prepositions
+    "in", "on", "at", "by", "near", "of", "to", "from", "with", "over",
+    "under", "along", "across", "behind", "beside", "between", "around",
+    "into", "onto", "off", "out", "up", "down", "through", "during",
+    "before", "after", "against", "beyond", "within",
+    # Auxiliaries / filler
+    "is", "are", "was", "were", "be", "been", "being", "am",
+    "do", "does", "did",
+    "please", "find", "show", "look", "detect", "track", "count", "watch",
+    "me", "my", "we", "our", "all", "any", "some", "every",
+    "that", "this", "these", "those", "it", "its", "there", "here",
+})
 
-# Abstract/behavioral terms that SAM cannot segment — these are for Falcon/Gemma
-ABSTRACT_TERMS: set[str] = {
-    # Damage / health
-    "damage", "damaged", "broken", "cracked", "leak", "leaking",
-    "injury", "injured", "wound", "lame", "limping",
-    "sick", "ill", "diseased", "infection", "infected",
-    "dead", "dying", "carcass",
-    # Condition / state
-    "condition", "state", "status", "quality",
-    "healthy", "unhealthy", "distressed", "stressed",
-    "missing", "absent", "gone", "disappeared",
-    "overgrown", "undergrown", "thin", "fat",
-    # Anomaly / concern
-    "anomaly", "unusual", "abnormal", "out of place",
-    "opportunity", "concern", "issue", "problem",
-    "risk", "threat", "danger", "dangerous",
-    "predator", "intruder",
-    # Behavior
-    "behavior", "behaviour", "movement", "moving", "still",
-    "grouped", "isolated", "alone", "separated",
-    "grazing", "resting", "running", "fighting",
-    "eating", "drinking",
-    # Activity & behavior
-    "parked", "moving", "stopped", "queued",
-    "gathered", "scattered", "loitering", "wandering",
-    # Site / environmental concerns
-    "overgrown", "eroded", "flooded", "waterlogged",
-    "bare patch", "bare ground", "mud hole",
-    "litter", "debris", "spill",
-}
+# Maximum SAM prompts per query — more than this degrades the multiplex detector.
+MAX_TARGETS: int = 8
 
-# Multi-word compounds — match as a unit for SAM targeting.
-# (compound_label, set of surface forms)
-COMPOUND_MAP: list[tuple[str, set[str]]] = [
-    ("trough", {"water trough", "feeding trough", "water tank", "feeding tank"}),
-    ("fence", {"fence down", "fence damage", "fence broken", "fence breach", "fence gap"}),
-    ("pasture", {"bare pasture", "overgrazed pasture"}),
-    ("bare ground", {"bare patch", "bare ground", "bare spot", "bare area"}),
-    ("water", {"standing water", "flooded area", "water puddle"}),
-    ("vehicle", {"parked car", "parked truck", "moving vehicle", "stalled vehicle"}),
-]
+_PUNCT_RE = re.compile(r'[.,;:!?"\'()]')
+_NUMBER_RE = re.compile(r"[0-9.]+")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -118,13 +77,14 @@ class PromptResult:
     """Result of routing a user query.
 
     Attributes:
-        segment_targets: concrete nouns SAM 3.1 can detect and track.
-                         These labels are passed to SAM's multi-prompt detector.
-                         Empty list means no concrete objects in the query.
-        semantic_query: the abstract reasoning question for Falcon Perception
-                        and Gemma 4. This is the "why" behind the search —
-                        what the user wants to understand about the footage.
-        original_query: the unmodified query (for logging/debugging).
+        segment_targets: open-vocabulary noun phrases for SAM 3.1's
+                         multi-prompt detector, as typed and in first-seen
+                         order, capped at MAX_TARGETS. Empty list means the
+                         query was empty or stopword-only (caller should
+                         handle fallback via route_fallback()).
+        semantic_query: the original query, unchanged — Falcon Perception and
+                        Gemma 4 reason over the full ask.
+        original_query: the stripped query (for logging/debugging).
         routed_from: description of how the routing happened (for debugging).
     """
     segment_targets: list[str]
@@ -137,143 +97,76 @@ class PromptResult:
 # Routing logic
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _extract_compound_labels(query_lower: str) -> tuple[set[str], set[int]]:
-    """Find all matched compound patterns.
+def _is_pure_number(phrase: str) -> bool:
+    """True when a phrase contains only digits and decimal points."""
+    return bool(_NUMBER_RE.fullmatch(phrase.replace(" ", "")))
 
-    Returns:
-        (set of canonical labels, set of word positions that are part of compounds)
+
+def _extract_phrases(query: str) -> list[str]:
+    """Partition a query into noun phrases at stopwords.
+
+    Phrases keep their original casing and token spelling (no stemming — SAM
+    handles plurals and multi-word noun phrases natively). Empty phrases and
+    pure numbers are dropped; the rest are deduped case-insensitively in
+    first-seen order and capped at MAX_TARGETS.
     """
-    labels: set[str] = set()
-    skip_words: set[int] = set()
+    # Lowercasing never introduces or removes whitespace, so this single
+    # token list preserves the original casing while remaining comparable
+    # against the lowercase stopword set.
+    tokens = _PUNCT_RE.sub(" ", query).split()
 
-    for label, forms in COMPOUND_MAP:
-        for form in forms:
-            words = form.split()
-            pattern = r'\b' + r'\s+'.join(re.escape(w) for w in words) + r'\b'
-            if re.search(pattern, query_lower):
-                labels.add(label)
-                # Mark all words in the compound as "skip" for further extraction
-                # (we'll figure out positions from the full query split)
-                for w in words:
-                    skip_words.add(w)  # type: ignore[arg-type]
+    phrases: list[str] = []
+    seen: set[str] = set()
+    current: list[str] = []
 
-    return labels, skip_words
+    def _flush() -> None:
+        if not current:
+            return
+        phrase = " ".join(current)
+        key = phrase.lower()
+        if key not in seen and not _is_pure_number(phrase):
+            seen.add(key)
+            phrases.append(phrase)
+        current.clear()
+
+    for tok in tokens:
+        if tok.lower() in STOPWORDS:
+            _flush()
+        else:
+            current.append(tok)
+    _flush()
+
+    return phrases[:MAX_TARGETS]
 
 
 def route(query: str) -> PromptResult:
-    """Split a user query into SAM targets and semantic questions.
+    """Split a user query into open-vocabulary SAM targets and a semantic question.
+
+    The token stream is partitioned into noun phrases at generic stopwords and
+    every phrase is passed to SAM 3.1 as typed (open-vocabulary pass-through,
+    capped at MAX_TARGETS = 8 prompts). The semantic query is the full
+    original text, unchanged.
 
     Args:
         query: natural-language query, e.g.
-               "person acting suspiciously near the gate"
+               "boats and people near the pier"
 
     Returns:
-        PromptResult with concrete SAM targets and the semantic reasoning question.
-        If no concrete objects are found, segment_targets will be empty and
-        semantic_query will be the original query (caller should handle fallback).
+        PromptResult with SAM phrases and the full query for Falcon/Gemma.
+        If no trackable phrases are found, segment_targets will be empty
+        (caller should handle fallback via route_fallback()).
     """
     original = query.strip()
-    if not original:
-        return PromptResult(
-            segment_targets=[],
-            semantic_query="",
-            original_query=original,
-            routed_from="empty query",
-        )
+    segment_targets = _extract_phrases(original)
 
-    q_lower = original.lower()
-
-    # ── Step 1: Extract compound patterns ─────────────────────────────────────
-    compound_labels: set[str] = set()
-    # Collect all words that are part of compounds so we can skip them later
-    compound_word_set: set[str] = set()
-    for label, forms in COMPOUND_MAP:
-        for form in forms:
-            words = form.split()
-            pattern = r'\b' + r'\s+'.join(re.escape(w) for w in words) + r'\b'
-            if re.search(pattern, q_lower):
-                compound_labels.add(label)
-                compound_word_set.update(words)
-
-    # ── Step 2: Find which compound forms actually appear in the query ─────────
-    # and record their word positions for removal
-    matched_compound_words: list[str] = []
-    for label, forms in COMPOUND_MAP:
-        for form in forms:
-            pattern = r'\b' + r'\s+'.join(re.escape(w) for w in form.split()) + r'\b'
-            if re.search(pattern, q_lower):
-                matched_compound_words.extend(form.split())
-    matched_compound_word_set = set(matched_compound_words)
-
-    # ── Step 3: Extract concrete nouns ─────────────────────────────────────────
-    found_concrete: set[str] = set()
-    words_original = original.split()
-    words_lower = [w.lower().rstrip(".,!?") for w in words_original]
-
-    for i, (wl, w) in enumerate(zip(words_lower, words_original)):
-        # Skip words that are part of a matched compound
-        if w.lower().rstrip(".,!?") in matched_compound_word_set:
-            continue
-
-        # Match against CONCRETE_NOUNS (allow 's'/'es' plural suffix)
-        for noun in CONCRETE_NOUNS:
-            if wl == noun or wl == noun + "s" or wl == noun + "es":
-                # Don't add "field" as a SAM target in most contexts
-                # (it's usually a location, not a segmentable object in queries)
-                if noun not in ("field",):
-                    found_concrete.add(noun)
-                break
-
-    # Combine compound labels and found concrete nouns
-    all_targets = compound_labels | found_concrete
-    segment_targets = sorted(all_targets)
-
-    # ── Step 4: Build semantic query ───────────────────────────────────────────
-    # Remove concrete noun words and compound words from original query.
-    # Keep abstract terms and key content words.
-    skip_lower = matched_compound_word_set | {
-        noun
-        for noun in CONCRETE_NOUNS
-        if noun not in ("field",)
-    }
-    skip_plurals = {noun + "s" for noun in skip_lower} | {noun + "es" for noun in skip_lower}
-
-    semantic_parts = []
-    for wl, w in zip(words_lower, words_original):
-        # Skip if word is a concrete noun (or its plural)
-        if wl in skip_lower or wl in skip_plurals:
-            continue
-        # Keep the original word casing
-        semantic_parts.append(w)
-
-    semantic_query = " ".join(semantic_parts).strip()
-
-    # If semantic query is mostly stopwords, use the abstract terms we found instead
-    if len(semantic_query) < 3 or not re.search(r'[a-z]{3,}', semantic_query):
-        abstract_parts = []
-        for term in ABSTRACT_TERMS:
-            pattern = rf"\b{re.escape(term)}(s?ed)?(?![a-z])"
-            if re.search(pattern, q_lower):
-                # Extract the matching text
-                m = re.search(pattern, q_lower)
-                if m:
-                    abstract_parts.append(m.group(0))
-        if abstract_parts:
-            semantic_query = " ".join(abstract_parts)
-        else:
-            semantic_query = original
-
-    # ── Step 5: Determine routing explanation ──────────────────────────────────
-    if segment_targets and semantic_query:
-        routed_from = f"SAM: {segment_targets} | Falcon/Gemma: {semantic_query}"
-    elif segment_targets:
-        routed_from = f"SAM only: {segment_targets}"
+    if segment_targets:
+        routed_from = f"SAM phrases: {segment_targets} | Gemma: full query"
     else:
-        routed_from = "No concrete targets — pass to Falcon/Gemma as-is"
+        routed_from = "No trackable phrases — pass to Falcon/Gemma as-is"
 
     return PromptResult(
         segment_targets=segment_targets,
-        semantic_query=semantic_query,
+        semantic_query=original,
         original_query=original,
         routed_from=routed_from,
     )
@@ -282,8 +175,8 @@ def route(query: str) -> PromptResult:
 def route_fallback(query: str) -> list[str]:
     """Return a default list of SAM prompts if route() produces no segment_targets.
 
-    Used when the user query is purely abstract (e.g. "anomalies on the site")
-    and no concrete objects can be extracted. Falls back to common general-purpose
+    Used when the user query is empty or stopword-only and no trackable
+    phrases can be extracted. Falls back to common general-purpose
     objects that cover the most ground.
     """
     return ["person", "vehicle", "building", "animal"]

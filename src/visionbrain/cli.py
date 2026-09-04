@@ -193,13 +193,39 @@ def cmd_sam3_detect(args: argparse.Namespace) -> None:
 def cmd_track(args: argparse.Namespace) -> None:
     """Track objects in a video file using SAM 3.1."""
     from .loader import sam31_record
-    from .sam3_inference import track_video, sam31_available
+    from .sam3_inference import track_video, track_video_with_json, sam31_available
 
     if not sam31_available():
         rec = sam31_record()
         print(f"ERROR: SAM 3.1 not ready — {rec.note}", file=sys.stderr)
         print("Run: huggingface-cli download facebook/sam3.1", file=sys.stderr)
         sys.exit(1)
+
+    if args.json_output:
+        print(f"Tracking {args.prompts} in {args.video}...")
+        stats, _ = track_video_with_json(
+            args.video,
+            args.prompts,
+            output_path=args.output,
+            json_path=args.json_output,
+            threshold=args.threshold,
+            every_n_frames=args.every,
+            backbone_every=args.backbone_every,
+            resolution=args.resolution,
+            opacity=args.opacity,
+            use_supervision=args.supervision,
+            track_persistent_ids=args.persistent_ids,
+            adaptive_motion=args.adaptive_motion,
+            motion_threshold=args.motion_threshold,
+            propagate_frames=args.propagate,
+        )
+
+        print(f"\nDone. JSON detections: {args.json_output}")
+        print(f"  {stats.processed_frames}/{stats.total_frames} frames processed")
+        print(f"  {stats.unique_objects} object types tracked")
+        if stats.output_path:
+            print(f"  Output: {stats.output_path}")
+        return
 
     print(f"Tracking {args.prompts} in {args.video}...")
     stats = track_video(
@@ -764,6 +790,17 @@ def main() -> None:
     p.add_argument("--backbone-every", type=int, default=1, help="Re-run ViT every N detections")
     p.add_argument("--resolution", type=int, default=1008)
     p.add_argument("--opacity", type=float, default=0.6)
+    p.add_argument("--json-output", help="Also write per-frame detections JSON at this path")
+    p.add_argument("--supervision", action="store_true",
+                   help="Render with supervision annotators (mask/box/label)")
+    p.add_argument("--persistent-ids", action="store_true",
+                   help="ByteTrack persistent tracker IDs across occlusions")
+    p.add_argument("--adaptive-motion", action="store_true",
+                   help="Skip detection on low-motion frames")
+    p.add_argument("--motion-threshold", type=float, default=0.03,
+                   help="Grey-delta threshold for adaptive motion skip")
+    p.add_argument("--propagate", type=int, default=0,
+                   help="Propagate last detection forward N frames after each detect")
 
     # analyze
     p = sub.add_parser("analyze", help="Full pipeline: SAM 3.1 track → Gemma 4 reasoning → report")

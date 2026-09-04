@@ -6,7 +6,7 @@
 
 ## Architecture
 
-**Three-model backend design** — Gemma 4 is auto-selected from Ollama → remote → local MLX based on availability.
+**Three-model backend design** — Gemma 4 is auto-selected from custom → Ollama → remote → local MLX based on availability (custom = any user-configured OpenAI-compatible VLM endpoint).
 
 ```
 THIS MAC MINI (100.72.41.118, Mac Mini M4 16GB)
@@ -18,7 +18,8 @@ THIS MAC MINI (100.72.41.118, Mac Mini M4 16GB)
            │  Structured detection JSON + semantic question
            ▼
   GEMMA BACKEND (auto-selected by available_backend()):
-    Ollama (localhost:11434) — gemma4:e2b, 7.2GB — preferred
+    Custom (user-configured OpenAI-compatible endpoint) — ~/.visionbrain/settings.json
+    OR Ollama (localhost:11434) — gemma4:e2b, 7.2GB — preferred
     OR Remote (http://100.72.41.118:8080) — mlx-community/gemma-4-26b-a4b-it-4bit
     OR Local MLX — mlx-community/gemma-4-26b-a4b-it-4bit, ~32GB RAM
   └── Field reports, Q&A, anomaly detection
@@ -102,7 +103,8 @@ VisionBrain/
 **Public API:**
 - `falcon_perception_record() -> ModelRecord`
 - `sam31_record() -> ModelRecord`
-- `all_records() -> list[ModelRecord]`
+- `falcon_ocr_record() -> ModelRecord` — registry-only entry for `tiiuae/Falcon-OCR` (0.3B OCR companion: text, tables, formulas); `can_load` is always False — upstream serving is vLLM/CUDA, no MLX inference path in VisionBrain yet
+- `all_records() -> list[ModelRecord]` — 4 entries: Falcon Perception, SAM 3.1, Ollama Gemma, Falcon-OCR
 - `print_status()`
 - `falcon_repo() -> Path`
 - `sam31_cache_path() -> Path | None`
@@ -110,6 +112,7 @@ VisionBrain/
 **Model variants:**
 - SAM 3.1 uses `mlx-community/sam3.1-bf16` — public MLX-community conversion, no gated access needed
 - Gemma 4 e2b uses `gemma4:e2b` via Ollama — 7.2 GB, managed by Ollama (no HuggingFace cache needed)
+- Falcon-OCR uses `tiiuae/Falcon-OCR` — OCR companion (text, tables, formulas); registry-only, served upstream via vLLM/CUDA
 
 ---
 
@@ -163,24 +166,31 @@ VisionBrain/
 
 ### `gemma_inference.py` — Gemma 4 Reasoning Layer (Consolidated)
 
-**Backends:** Ollama → Remote server → Local MLX (auto-selected by availability)
+**Backends:** Custom → Ollama → Remote server → Local MLX (auto-selected by availability)
+
+**Custom backend settings store:** `~/.visionbrain/settings.json` (schema `{"base_url": str, "model": str, "api_key": str}`, written with 0600 permissions) — lets ask/report use any OpenAI-compatible endpoint (LM Studio, vLLM, OpenRouter, OpenAI) via `POST {base_url}/chat/completions`. `api_key` is never included in API responses or `save_vlm_settings()`'s return value.
 
 **Public API:**
-- `available_backend() -> str | None` — 'ollama' | 'remote' | 'local' | None
+- `available_backend() -> str | None` — 'custom' | 'ollama' | 'remote' | 'local' | None
+- `settings_path() -> Path` — settings file location (`~/.visionbrain/settings.json`)
+- `load_vlm_settings(path=None) -> dict` — `{"base_url", "model", "api_key"}`; missing/corrupt file → all empty strings; never raises
+- `save_vlm_settings(base_url="", model="", api_key="", clear_key=False, path=None) -> dict` — overwrites only provided non-empty values; `clear_key=True` wipes only the key; best-effort write (never raises); returns the stored settings with `api_key` redacted
+- `custom_backend_configured() -> bool` — True when both base_url and model are set
 - `gemma_available() -> bool` — True if any backend is available
 - `ask(question, *, detections, frame_history, image_path, max_tokens, temperature, kv_bits, kv_quant_scheme) -> GemmaResponse`
 - `generate_report(summary_text, *, report_type, max_tokens, temperature, kv_bits, kv_quant_scheme) -> GemmaResponse`
 - `unload_gemma() -> None` — releases local MLX weights from cache
-- `test_connection() -> dict` — smoke test the active backend
+- `test_connection() -> dict` — smoke test the active backend (the custom branch reports the saved settings summary without a network probe)
 
 **GemmaResponse fields:** `text` (str), `stats` (GemmaStats)
 
 **GemmaStats fields:** `prompt_tokens`, `generation_tokens`, `prompt_tps`, `generation_tps`, `decode_ms`
 
 **Backend priority:**
-1. **Ollama** (`gemma4:e2b`, 7.2GB) — localhost:11434, preferred for local Mac
-2. **Remote** (`mlx-community/gemma-4-26b-a4b-it-4bit`) — http://100.72.41.118:8080
-3. **Local MLX** (`gemma-4-26b-a4b-it-4bit`) — requires ~32GB RAM
+1. **Custom** — user-configured OpenAI-compatible endpoint; `Authorization: Bearer` sent only when an api_key is saved
+2. **Ollama** (`gemma4:e2b`, 7.2GB) — localhost:11434, preferred for local Mac
+3. **Remote** (`mlx-community/gemma-4-26b-a4b-it-4bit`) — http://100.72.41.118:8080
+4. **Local MLX** (`gemma-4-26b-a4b-it-4bit`) — requires ~32GB RAM
 
 **Note:** Ollama gemma4:e2b requires `max_tokens >= 200` for structured reasoning.
 
@@ -279,6 +289,28 @@ visionbrain analyze --video drone.mp4 --query "person" --adaptive --propagate 5 
 --sequential-falcon  Disable parallel Falcon processing
 ```
 
+#### `track` command
+
+```bash
+visionbrain track --video drone.mp4 --prompts person car --output tracked.mp4
+
+# Options
+--video             Input video (required)
+--prompts           SAM 3.1 text prompts to track (required)
+--output            Output video path
+--threshold         Detection confidence (default 0.15)
+--every             Run detection every N frames (default 2)
+--backbone-every    Re-run ViT every N detections (default 1)
+--resolution        SAM input resolution (default 1008)
+--opacity           Mask overlay opacity (default 0.6)
+--json-output       Also write per-frame detections JSON at this path (uses track_video_with_json)
+--supervision       Render with supervision annotators (mask/box/label)
+--persistent-ids    ByteTrack persistent tracker IDs across occlusions
+--adaptive-motion   Skip detection on low-motion frames
+--motion-threshold  Grey-delta threshold for adaptive motion skip (default 0.03)
+--propagate         Propagate last detection forward N frames after each detect (default 0)
+```
+
 ### `detection_core.py` — Shared Detection Primitives
 
 **Public API:**
@@ -322,15 +354,17 @@ ViT backbone cached across frames (recompute every `backbone_every`); between de
 ### `prompt_router.py` — Query Routing
 
 **Public API:**
-- `route(query: str) -> PromptResult` — splits a user query into SAM targets and semantic question
+- `route(query: str) -> PromptResult` — splits a user query into open-vocabulary SAM targets and the semantic question
 - `route_fallback(query: str) -> list[str]` — returns default SAM prompts if route() produces no targets
 - `PromptResult` dataclass: `segment_targets: list[str]`, `semantic_query: str`, `original_query: str`, `routed_from: str`
+- `STOPWORDS: frozenset[str]` — generic closed-class words only (articles, conjunctions, prepositions, auxiliaries, filler verbs); the module contains no domain vocabulary
+- `MAX_TARGETS: int = 8` — cap on SAM prompts per query (multiplex sanity limit)
 
-**Routing logic:**
-- Concrete nouns (people, vehicles, structures, animals, terrain) → SAM segment targets
-- Abstract terms (damage, injury, condition, anomaly) → semantic query for Falcon/Gemma
-- Multi-word compounds ("fence down", "water trough") → single SAM target
-- Pure abstract queries (no concrete nouns) → empty segment_targets, full query goes to semantic layer
+**Routing logic (open-vocabulary pass-through):**
+- SAM 3.1 is open-vocab: the token stream is partitioned into noun phrases at stopwords, and every phrase is passed through as typed — no whitelist, no stemming (plurals and multi-word phrases like "yellow school bus" work natively)
+- Phrases are deduped case-insensitively (first-seen order) and capped at `MAX_TARGETS` (8); empty phrases and pure numbers are dropped
+- `semantic_query` is the full original query — Gemma reasons over the complete ask (no word-stripping)
+- Empty or stopword-only queries → empty `segment_targets` (caller falls back via `route_fallback`); `routed_from` records how the split happened
 
 **Usage:** `cmd_analyze` calls `route(args.query)` and passes `segment_targets` to SAM, `semantic_query` to Falcon/Gemma.
 
@@ -355,9 +389,10 @@ visionbrain fastscan --video drone.mp4 --query "person"
 FastAPI app serving the single-page Ground Control dashboard (`static/index.html`) on port 7860. Launch with `visionbrain ui`.
 
 **API surface:**
-- `GET /api/status` — model registry + cache status; `GET /api/healthz` — Gemma backend health
+- `GET /api/status` — model registry + cache status, `gemma_remote` availability flag, and `vlm` `{backend, custom_configured}` (one blocking backend probe feeds all three); `GET /api/healthz` — Gemma backend health
+- `GET /api/settings` — saved custom VLM endpoint as `{configured, base_url, model, has_key}` (the api_key itself is never returned); `POST /api/settings` — JSON body `{base_url?, model?, api_key?, clear_key?}` → same shape as GET (bad JSON → 400)
 - `POST /api/upload` — upload media, returns `file_id`
-- `POST /api/job/{kind}` — start a job (`analyze`, `fastscan`, `detect`, `segment`, `ocr`, `track`, `sam3`); each spawns the CLI as a subprocess and returns `{job_id}`
+- `POST /api/job/{kind}` — start a job (`analyze`, `fastscan`, `detect`, `segment`, `ocr`, `track`, `sam3`, `agent`); each spawns the CLI as a subprocess and returns `{job_id}`. `agent` accepts optional `question`/`api_key`/`model`/`base_url` form fields (empty fields fall back to the saved VLM settings); `track` accepts optional `json_output`/`supervision`/`persistent_ids`/`adaptive_motion`/`motion_threshold`/`propagate`; `analyze` accepts optional `question` (forwarded to Gemma)
 - `GET /api/job/{jid}` — job state + streamed output; `GET /api/job/{jid}/stream` — SSE stream (phase, heartbeat, progress)
 - `GET /api/job/{jid}/detections|report|fast|file/{kind}` — result artifacts
 

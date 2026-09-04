@@ -22,6 +22,8 @@ SAM31_HF_ID = "mlx-community--sam3.1-bf16"
 SAM31_HF_REPO = "mlx-community/sam3.1-bf16"
 GEMMA4_HF_ID = "mlx-community--gemma-4-26b-a4b-it-4bit"
 GEMMA4_HF_REPO = "mlx-community/gemma-4-26b-a4b-it-4bit"
+FALCON_OCR_HF_ID = "tiiuae--Falcon-OCR"
+FALCON_OCR_HF_REPO = "tiiuae/Falcon-OCR"
 OLLAMA_GEMMA_MODEL = "gemma4:e2b"
 OLLAMA_BASE_URL = "http://localhost:11434"
 
@@ -127,6 +129,27 @@ def sam31_record() -> ModelRecord:
     )
 
 
+def falcon_ocr_record() -> ModelRecord:
+    """Status of Falcon-OCR weights (registry-only; no MLX inference path yet)."""
+    cached = HF_CACHE / f"models--{FALCON_OCR_HF_ID.replace('/', '--')}"
+    size = _cache_size(cached)
+    # Registry entry only: Falcon-OCR is served upstream via vLLM/CUDA and has
+    # no MLX inference path in VisionBrain, so can_load stays False regardless
+    # of MLX availability.
+    has_weights = cached.exists() and size > 0.1
+    return ModelRecord(
+        hf_id=FALCON_OCR_HF_REPO,
+        cache_dir=cached,
+        disk_gb=round(size, 2),
+        is_cached=has_weights,
+        can_load=False,
+        note="0.3B OCR companion (text, tables, formulas). Upstream serving is "
+             "vLLM/CUDA; not wired to VisionBrain MLX inference yet."
+             if has_weights else
+             "Run: huggingface-cli download tiiuae/Falcon-OCR",
+    )
+
+
 def gemma4_record() -> ModelRecord:
     """Status of Gemma 4 26B weights."""
     cached = HF_CACHE / f"models--{GEMMA4_HF_ID.replace('/', '--')}"
@@ -177,7 +200,12 @@ def ollama_gemma_record() -> ModelRecord:
 
 
 def all_records() -> list[ModelRecord]:
-    return [falcon_perception_record(), sam31_record(), ollama_gemma_record()]
+    return [
+        falcon_perception_record(),
+        sam31_record(),
+        ollama_gemma_record(),
+        falcon_ocr_record(),
+    ]
 
 
 def print_status() -> None:
