@@ -17,24 +17,67 @@ import uuid
 from pathlib import Path
 from typing import AsyncGenerator, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+from . import service
+from .live_engine import (
+    configure as _live_configure,
+    router as _live_router,
+    sanitize_clip_name as _sanitize_clip_name,
+)
 
 app = FastAPI(title="VisionBrain — Aerial Ground Control", docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.state.started_at = time.time()
 
+
+# ── Shared-token auth (VB_TOKEN; off by default) ──────────────────────────────
+@app.middleware("http")
+async def _token_auth(request: Request, call_next) -> Response:
+    """Enforce the shared token on /api/* (except /api/healthz) when enabled.
+
+    Token sources, in order: the X-Auth-Token header, then the ?token= query
+    parameter. WebSocket scopes never pass through HTTP middleware, so the
+    live WebSocket route enforces the same token in-handler (?token=,
+    close 4401 before accept) — see DEPLOY.md ("Auth (shared token)").
+    """
+    if service.token_enabled():
+        path = request.url.path
+        if path.startswith("/api/") and path != "/api/healthz":
+            provided = request.headers.get("x-auth-token") or request.query_params.get("token")
+            if not service.check_token(provided):
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
+# ── Job queue (VB_MAX_JOBS heavy-subprocess slot limiter) ─────────────────────
+_job_queue: Optional[service.JobQueue] = None
+
+
+def _queue() -> service.JobQueue:
+    """Lazily-built queue singleton so VB_MAX_JOBS is read at first use."""
+    global _job_queue
+    if _job_queue is None:
+        _job_queue = service.JobQueue(service.max_jobs())
+    return _job_queue
+
 # ── Directories ────────────────────────────────────────────────────────────────
 WORK_DIR   = Path(tempfile.gettempdir()) / "visionbrain_ui"
 UPLOADS    = WORK_DIR / "uploads"
 RESULTS    = WORK_DIR / "results"
-for d in (WORK_DIR, UPLOADS, RESULTS):
+CLIPS      = WORK_DIR / "clips"
+for d in (WORK_DIR, UPLOADS, RESULTS, CLIPS):
     d.mkdir(exist_ok=True)
 
 PYTHON     = sys.executable          # same env that launched us
 STATIC_DIR = Path(__file__).parent / "static"
+
+# ── Local live engine (SAM 3.1 streamed over /api/live/ws) ────────────────────
+_live_configure(UPLOADS, CLIPS)
+app.include_router(_live_router)
 
 # ── Job store ──────────────────────────────────────────────────────────────────
 _jobs: dict[str, dict] = {}
@@ -95,16 +138,60 @@ async def _exec(job: dict, cmd: list[str], outputs: dict[str, str]) -> None:
         job["error"] = f"exit {proc.returncode}"
 
 
+async def _run_queued(job: dict, cmd: list[str], outputs: dict[str, str]) -> int:
+    """Acquire a queue slot for *job*, then run its subprocess in background.
+
+    The handler awaits this only until a slot is granted, so the launch
+    response can report the submit-time queue position (returned); the
+    subprocess itself keeps running via create_task and releases the slot
+    in a done-callback, so a client disconnect never leaks the slot.
+    """
+    queue = _queue()
+    job["phase"] = "queued"
+    position = await queue.acquire(job["id"])
+    job["queue_position"] = position
+    task = asyncio.create_task(_exec(job, cmd, outputs))
+    task.add_done_callback(lambda _t: queue.release(job["id"]))
+    return position
+
+
+def _launch_payload(job: dict, position: int) -> dict:
+    """Standard response body for a job-launch endpoint."""
+    return {"job_id": job["id"], "created_at": job["ts"],
+            "queued": position > 0, "queue_position": position}
+
+
+def _job_queue_position(job: dict) -> Optional[int]:
+    """Live line spot while *job* still waits, else its submit-time position.
+
+    While queued the recorded submit-time value goes stale as jobs ahead
+    finish, so poll the queue; once a slot is granted the recorded value
+    is returned (real _exec flips the phase to running immediately).
+    """
+    if job.get("phase") == "queued" and job.get("queue_position") is None:
+        return _queue().wait_position(job["id"])
+    return job.get("queue_position")
+
+
 # ── Status ─────────────────────────────────────────────────────────────────────
 @app.get("/api/status")
 async def api_status():
     from .loader import all_records
-    from .gemma_inference import gemma_available
-    # all_records() stats multi-GB model dirs; gemma_available() does a network
-    # probe. Both are blocking — keep them off the event loop.
-    recs, gemma_ok = await asyncio.gather(
+    from .gemma_inference import available_backend, custom_backend_configured
+
+    # all_records() stats multi-GB model dirs; available_backend() does network
+    # probes. Both are blocking — keep them off the event loop. One
+    # available_backend() call feeds both the gemma flag and the vlm dict.
+    def _backend_status() -> tuple[bool, dict]:
+        backend = available_backend()
+        return (
+            backend is not None,
+            {"backend": backend or "none", "custom_configured": custom_backend_configured()},
+        )
+
+    recs, (gemma_ok, vlm) = await asyncio.gather(
         asyncio.to_thread(all_records),
-        asyncio.to_thread(gemma_available),
+        asyncio.to_thread(_backend_status),
     )
     return {
         "models": [
@@ -114,6 +201,7 @@ async def api_status():
             for r in recs
         ],
         "gemma_remote": gemma_ok,
+        "vlm": vlm,
     }
 
 @app.get("/api/healthz")
@@ -126,6 +214,57 @@ async def api_healthz():
         "uptime_s": round(now - app.state.started_at, 3),
         "running_jobs": running_jobs,
     }
+
+
+# ── VLM settings (custom OpenAI-compatible backend) ───────────────────────────
+def _settings_payload() -> dict:
+    """Redacted view of the saved VLM settings — the api_key never leaves here."""
+    from .gemma_inference import custom_backend_configured, load_vlm_settings
+
+    settings = load_vlm_settings()
+    return {
+        "configured": custom_backend_configured(),
+        "base_url": settings["base_url"],
+        "model": settings["model"],
+        "has_key": bool(settings["api_key"]),
+    }
+
+
+@app.get("/api/settings")
+async def api_get_settings() -> dict:
+    return _settings_payload()
+
+
+@app.post("/api/settings")
+async def api_set_settings(request: Request) -> dict:
+    from .gemma_inference import save_vlm_settings
+
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(400, "JSON body must be an object")
+
+    fields = {
+        "base_url": body.get("base_url", ""),
+        "model": body.get("model", ""),
+        "api_key": body.get("api_key", ""),
+    }
+    for name, value in fields.items():
+        if not isinstance(value, str):
+            raise HTTPException(400, f"'{name}' must be a string")
+    clear_key = body.get("clear_key", False)
+    if not isinstance(clear_key, bool):
+        raise HTTPException(400, "'clear_key' must be a boolean")
+
+    save_vlm_settings(
+        base_url=fields["base_url"],
+        model=fields["model"],
+        api_key=fields["api_key"],
+        clear_key=clear_key,
+    )
+    return _settings_payload()
 
 
 # ── File upload ────────────────────────────────────────────────────────────────
@@ -151,6 +290,7 @@ def _find_upload(fid: str) -> Path:
 async def job_analyze(
     file_id:        str   = Form(...),
     query:          str   = Form("people and vehicles"),
+    question:       str   = Form(""),
     prompts:        str   = Form("person vehicle animal"),
     threshold:      float = Form(0.05),
     resolution:     int   = Form(512),
@@ -217,14 +357,16 @@ async def job_analyze(
         cmd.append("--relevance-filter")
     if not parallel_falcon:
         cmd.append("--sequential-falcon")
+    if question.strip():
+        cmd += ["--question", question]
     if chunk_duration != 0:
         cmd += ["--chunk-duration", str(chunk_duration)]
     if chunk_overlap != 3:
         cmd += ["--chunk-overlap", str(chunk_overlap)]
 
-    asyncio.create_task(_exec(job, cmd, {"video": out_v, "json": out_j, "report": out_r,
-                                          "fast_json": out_f if out_f else ""}))
-    return {"job_id": jid, "created_at": job["ts"]}
+    position = await _run_queued(job, cmd, {"video": out_v, "json": out_j, "report": out_r,
+                                            "fast_json": out_f if out_f else ""})
+    return _launch_payload(job, position)
 
 
 # ── FastScan ──────────────────────────────────────────────────────────────────
@@ -251,8 +393,8 @@ async def job_fastscan(
            "--min-relevance", str(min_relevance),
            "--output", out]
 
-    asyncio.create_task(_exec(job, cmd, {"fast_json": out}))
-    return {"job_id": jid, "created_at": job["ts"]}
+    position = await _run_queued(job, cmd, {"fast_json": out})
+    return _launch_payload(job, position)
 
 
 # ── Detect ─────────────────────────────────────────────────────────────────────
@@ -309,17 +451,25 @@ async def job_ocr(
 # ── Track ──────────────────────────────────────────────────────────────────────
 @app.post("/api/job/track")
 async def job_track(
-    file_id:    str   = Form(...),
-    prompts:    str   = Form("person"),
-    threshold:  float = Form(0.15),
-    every:      int   = Form(2),
-    resolution: int   = Form(1008),
-    opacity:    float = Form(0.6),
+    file_id:          str   = Form(...),
+    prompts:          str   = Form("person"),
+    threshold:        float = Form(0.15),
+    every:            int   = Form(2),
+    resolution:       int   = Form(1008),
+    opacity:          float = Form(0.6),
+    backbone_every:   int   = Form(1),
+    json_output:      bool  = Form(False),
+    supervision:      bool  = Form(False),
+    persistent_ids:   bool  = Form(False),
+    adaptive_motion:  bool  = Form(False),
+    motion_threshold: float = Form(0.03),
+    propagate:        int   = Form(0),
 ):
     src = _find_upload(file_id)
     job = _new_job("track")
     jid = job["id"]
     out = str(RESULTS / f"{jid}_tracked.mp4")
+    out_j = str(RESULTS / f"{jid}_detections.json")
     cmd = [PYTHON, "-u", "-m", "visionbrain", "track",
            "--video", str(src),
            "--prompts", *prompts.split(),
@@ -327,9 +477,22 @@ async def job_track(
            "--threshold", str(threshold),
            "--every", str(every),
            "--resolution", str(resolution),
-           "--opacity", str(opacity)]
-    asyncio.create_task(_exec(job, cmd, {"video": out}))
-    return {"job_id": jid, "created_at": job["ts"]}
+           "--opacity", str(opacity),
+           "--backbone-every", str(backbone_every)]
+    if json_output:
+        cmd += ["--json-output", out_j]
+    if supervision:
+        cmd.append("--supervision")
+    if persistent_ids:
+        cmd.append("--persistent-ids")
+    if adaptive_motion:
+        cmd.append("--adaptive-motion")
+        if motion_threshold != 0.03:
+            cmd += ["--motion-threshold", str(motion_threshold)]
+    if propagate > 0:
+        cmd += ["--propagate", str(propagate)]
+    position = await _run_queued(job, cmd, {"video": out, "json": out_j if json_output else ""})
+    return _launch_payload(job, position)
 
 
 # ── SAM-3 ──────────────────────────────────────────────────────────────────────
@@ -356,13 +519,50 @@ async def job_sam3(
     return {"job_id": jid, "created_at": job["ts"]}
 
 
+# ── Agent ──────────────────────────────────────────────────────────────────────
+@app.post("/api/job/agent")
+async def job_agent(
+    file_id:  str = Form(...),
+    question: str = Form("what do you see?"),
+    api_key:  str = Form(""),
+    model:    str = Form(""),
+    base_url: str = Form(""),
+) -> dict:
+    src = _find_upload(file_id)
+    job = _new_job("agent")
+    jid = job["id"]
+    out = str(RESULTS / f"{jid}_agent.jpg")
+    # Form fields override saved settings; read the settings file only when a
+    # form field is empty.
+    if not (api_key and model and base_url):
+        from .gemma_inference import load_vlm_settings
+
+        stored = load_vlm_settings()
+        api_key = api_key or stored["api_key"]
+        model = model or stored["model"]
+        base_url = base_url or stored["base_url"]
+    cmd = [PYTHON, "-u", "-m", "visionbrain", "agent",
+           "--image", str(src), "--question", question, "--output", out]
+    if api_key:
+        cmd += ["--api-key", api_key]
+    if model:
+        cmd += ["--model", model]
+    if base_url:
+        cmd += ["--base-url", base_url]
+    position = await _run_queued(job, cmd, {"image": out})
+    return _launch_payload(job, position)
+
+
 # ── Job query & SSE ────────────────────────────────────────────────────────────
 @app.get("/api/job/{jid}")
 async def get_job(jid: str):
     job = _jobs.get(jid)
     if not job:
         raise HTTPException(404)
-    return {k: v for k, v in job.items() if k != "_proc"}
+    payload = {k: v for k, v in job.items() if k != "_proc"}
+    payload["queue_position"] = _job_queue_position(job)
+    payload["queued"] = job.get("phase") == "queued"
+    return payload
 
 
 def _result_path(jid: str, kind: str) -> Path:
@@ -424,6 +624,8 @@ async def stream_job(jid: str, request: Request):
                     "type": "heartbeat",
                     "status": job["status"],
                     "phase": job.get("phase", "running"),
+                    "queue_position": _job_queue_position(job),
+                    "queued": job.get("phase") == "queued",
                     "ts": now,
                     "last_heartbeat_at": job.get("last_heartbeat_at", now),
                     "last_output_at": job.get("last_output_at"),
@@ -452,6 +654,19 @@ async def serve_upload(fid: str):
     if not matches:
         raise HTTPException(404)
     return FileResponse(str(matches[0]))
+
+
+@app.get("/api/clips/{name}")
+async def serve_clip(name: str) -> FileResponse:
+    # sanitize_clip_name allows only [A-Za-z0-9_.-] + ".mp4" — no path
+    # separators, no traversal; anything else is a 404.
+    clean = _sanitize_clip_name(name)
+    if clean is None:
+        raise HTTPException(404)
+    path = CLIPS / clean
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(str(path))
 
 
 # ── Static + root ──────────────────────────────────────────────────────────────

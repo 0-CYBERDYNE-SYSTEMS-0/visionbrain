@@ -6,7 +6,7 @@
 
 ## Architecture
 
-**Three-model backend design** — Gemma 4 is auto-selected from Ollama → remote → local MLX based on availability.
+**Three-model backend design** — Gemma 4 is auto-selected from custom → Ollama → remote → local MLX based on availability (custom = any user-configured OpenAI-compatible VLM endpoint).
 
 ```
 THIS MAC MINI (100.72.41.118, Mac Mini M4 16GB)
@@ -18,7 +18,8 @@ THIS MAC MINI (100.72.41.118, Mac Mini M4 16GB)
            │  Structured detection JSON + semantic question
            ▼
   GEMMA BACKEND (auto-selected by available_backend()):
-    Ollama (localhost:11434) — gemma4:e2b, 7.2GB — preferred
+    Custom (user-configured OpenAI-compatible endpoint) — ~/.visionbrain/settings.json
+    OR Ollama (localhost:11434) — gemma4:e2b, 7.2GB — preferred
     OR Remote (http://100.72.41.118:8080) — mlx-community/gemma-4-26b-a4b-it-4bit
     OR Local MLX — mlx-community/gemma-4-26b-a4b-it-4bit, ~32GB RAM
   └── Field reports, Q&A, anomaly detection
@@ -102,7 +103,8 @@ VisionBrain/
 **Public API:**
 - `falcon_perception_record() -> ModelRecord`
 - `sam31_record() -> ModelRecord`
-- `all_records() -> list[ModelRecord]`
+- `falcon_ocr_record() -> ModelRecord` — registry-only entry for `tiiuae/Falcon-OCR` (0.3B OCR companion: text, tables, formulas); `can_load` is always False — upstream serving is vLLM/CUDA, no MLX inference path in VisionBrain yet
+- `all_records() -> list[ModelRecord]` — 4 entries: Falcon Perception, SAM 3.1, Ollama Gemma, Falcon-OCR
 - `print_status()`
 - `falcon_repo() -> Path`
 - `sam31_cache_path() -> Path | None`
@@ -110,6 +112,7 @@ VisionBrain/
 **Model variants:**
 - SAM 3.1 uses `mlx-community/sam3.1-bf16` — public MLX-community conversion, no gated access needed
 - Gemma 4 e2b uses `gemma4:e2b` via Ollama — 7.2 GB, managed by Ollama (no HuggingFace cache needed)
+- Falcon-OCR uses `tiiuae/Falcon-OCR` — OCR companion (text, tables, formulas); registry-only, served upstream via vLLM/CUDA
 
 ---
 
@@ -163,24 +166,31 @@ VisionBrain/
 
 ### `gemma_inference.py` — Gemma 4 Reasoning Layer (Consolidated)
 
-**Backends:** Ollama → Remote server → Local MLX (auto-selected by availability)
+**Backends:** Custom → Ollama → Remote server → Local MLX (auto-selected by availability)
+
+**Custom backend settings store:** `~/.visionbrain/settings.json` (schema `{"base_url": str, "model": str, "api_key": str}`, written with 0600 permissions) — lets ask/report use any OpenAI-compatible endpoint (LM Studio, vLLM, OpenRouter, OpenAI) via `POST {base_url}/chat/completions`. `api_key` is never included in API responses or `save_vlm_settings()`'s return value.
 
 **Public API:**
-- `available_backend() -> str | None` — 'ollama' | 'remote' | 'local' | None
+- `available_backend() -> str | None` — 'custom' | 'ollama' | 'remote' | 'local' | None
+- `settings_path() -> Path` — settings file location (`~/.visionbrain/settings.json`)
+- `load_vlm_settings(path=None) -> dict` — `{"base_url", "model", "api_key"}`; missing/corrupt file → all empty strings; never raises
+- `save_vlm_settings(base_url="", model="", api_key="", clear_key=False, path=None) -> dict` — overwrites only provided non-empty values; `clear_key=True` wipes only the key; best-effort write (never raises); returns the stored settings with `api_key` redacted
+- `custom_backend_configured() -> bool` — True when both base_url and model are set
 - `gemma_available() -> bool` — True if any backend is available
 - `ask(question, *, detections, frame_history, image_path, max_tokens, temperature, kv_bits, kv_quant_scheme) -> GemmaResponse`
 - `generate_report(summary_text, *, report_type, max_tokens, temperature, kv_bits, kv_quant_scheme) -> GemmaResponse`
 - `unload_gemma() -> None` — releases local MLX weights from cache
-- `test_connection() -> dict` — smoke test the active backend
+- `test_connection() -> dict` — smoke test the active backend (the custom branch reports the saved settings summary without a network probe)
 
 **GemmaResponse fields:** `text` (str), `stats` (GemmaStats)
 
 **GemmaStats fields:** `prompt_tokens`, `generation_tokens`, `prompt_tps`, `generation_tps`, `decode_ms`
 
 **Backend priority:**
-1. **Ollama** (`gemma4:e2b`, 7.2GB) — localhost:11434, preferred for local Mac
-2. **Remote** (`mlx-community/gemma-4-26b-a4b-it-4bit`) — http://100.72.41.118:8080
-3. **Local MLX** (`gemma-4-26b-a4b-it-4bit`) — requires ~32GB RAM
+1. **Custom** — user-configured OpenAI-compatible endpoint; `Authorization: Bearer` sent only when an api_key is saved
+2. **Ollama** (`gemma4:e2b`, 7.2GB) — localhost:11434, preferred for local Mac
+3. **Remote** (`mlx-community/gemma-4-26b-a4b-it-4bit`) — http://100.72.41.118:8080
+4. **Local MLX** (`gemma-4-26b-a4b-it-4bit`) — requires ~32GB RAM
 
 **Note:** Ollama gemma4:e2b requires `max_tokens >= 200` for structured reasoning.
 
@@ -279,6 +289,28 @@ visionbrain analyze --video drone.mp4 --query "person" --adaptive --propagate 5 
 --sequential-falcon  Disable parallel Falcon processing
 ```
 
+#### `track` command
+
+```bash
+visionbrain track --video drone.mp4 --prompts person car --output tracked.mp4
+
+# Options
+--video             Input video (required)
+--prompts           SAM 3.1 text prompts to track (required)
+--output            Output video path
+--threshold         Detection confidence (default 0.15)
+--every             Run detection every N frames (default 2)
+--backbone-every    Re-run ViT every N detections (default 1)
+--resolution        SAM input resolution (default 1008)
+--opacity           Mask overlay opacity (default 0.6)
+--json-output       Also write per-frame detections JSON at this path (uses track_video_with_json)
+--supervision       Render with supervision annotators (mask/box/label)
+--persistent-ids    ByteTrack persistent tracker IDs across occlusions
+--adaptive-motion   Skip detection on low-motion frames
+--motion-threshold  Grey-delta threshold for adaptive motion skip (default 0.03)
+--propagate         Propagate last detection forward N frames after each detect (default 0)
+```
+
 ### `detection_core.py` — Shared Detection Primitives
 
 **Public API:**
@@ -291,6 +323,25 @@ visionbrain analyze --video drone.mp4 --query "person" --adaptive --propagate 5 
 
 Pure Python, no MLX — canonical for web app, CLI, and the live bridge hub.
 
+### `crosscheck.py` — SAM-vs-Falcon Cross-Engine Validation
+
+Pure (stdlib + `detection_core.box_iou` only):
+- `crosscheck(sam_dets, falcon_dets, *, iou_threshold=0.5) -> CrosscheckResult` — greedy highest-IoU-first one-to-one matching between two detection lists (`{"bbox_xyxy", "label", "score"?}`); a pair matches when `iou >= threshold` (labels are reported per pair but not required to agree, so disagreement stays visible). `CrosscheckResult`: `frame_index, matched, sam_only, falcon_only, agreement, matches` — agreement = `matched / max(1, max(len(sam), len(falcon)))`
+- `falcon_to_dets(detection_results, orig_w, orig_h)` — Falcon normalized `cx/cy/h/w` → pixel `bbox_xyxy` dicts
+- `summarize(results) -> dict` — aggregate `{frames, matched, sam_only, falcon_only, agreement}` (mean per-frame agreement; 0.0 when empty)
+
+`cmd_analyze` runs it automatically on Falcon-refined key frames (unless `--no-crosscheck`), prints a per-frame + aggregate block to the ops log (failures warn and never break the pipeline), and feeds one compact agreement line into Gemma's reasoning context.
+
+### `grounding.py` — LFM Grounding Third Opinion
+
+Pure (stdlib only; module imports with no MLX/PIL):
+- `build_grounding_prompt(targets)` — demands one line per instance: `<box>x1,y1,x2,y2</box> label` with integer 0–1000 coordinates, exactly `NONE` when nothing found
+- `parse_grounding_boxes(text, width, height) -> list[dict]` — tolerant parser (canonical `<box>` tags, parenthesized `(a,b),(c,d)`, JSON arrays) with a per-box scale heuristic (≤1.5 → 0-1, ≤100 → 0-100, else 0-1000); clamps to image bounds, orders corners, `[]` on NONE
+- `grounding_crosscheck(sam_dets, boxes, *, iou_threshold=0.3)` — `crosscheck.crosscheck` wrapper at the looser VLM-appropriate threshold (VLM boxes are coarse)
+- `python -m visionbrain.grounding <image> <target>…` — probe block printing the raw model reply next to the parsed boxes (human verifies format)
+
+`cmd_analyze --lfm-ground` (opt-in, default off) asks the local LFM VLM to ground the SAM targets on the Falcon key frames, cross-checks against SAM, prints the ops-log block, and appends one agreement line to Gemma's context; any failure degrades to a single warning line.
+
 ### `live_tracking.py` — Stateful Live SAM 3.1 Tracker
 
 **Public API:**
@@ -300,9 +351,40 @@ Pure Python, no MLX — canonical for web app, CLI, and the live bridge hub.
 
 ViT backbone cached across frames (recompute every `backbone_every`); between detects the last items are re-emitted held with `track_state="predicted"` and honest `stale_ms`. Loader and all three compute hooks are injectable → unit-testable without mlx_vlm or weights.
 
+### `live_engine.py` — Local Live Engine (field-hub WS + smart capture)
+
+Lets VisionBrain itself play the field-hub server role: one worker streams SAM 3.1 over `WS /api/live/ws` in the exact hub binary format (`>III` header + JPEG + `>I` + telemetry JSON), so the unmodified browser client renders it. `configure(uploads_dir, clips_dir=None)` pins the upload resolution dir and the clip output dir (created when missing; `None` disables capture).
+
+**Controls** (inbound JSON; key `"type"`, `"action"` accepted as alias): `start` (file/webcam/url + optional `threshold`/`detect_every`/`resolution`), `set_prompts`, `add_prompt_box` (draw a rectangle on the canvas → a persistent ROI "target N" tracked every detect frame alongside text prompts; ≤8, pending before a worker like zones; NOTE: the installed mlx_vlm build plumbs the `boxes` kwarg but never applies box conditioning — targets work as ROI-labeled tracking until the lib calls its geometry encoder), `remove_targets`, `set_zones`, `set_triggers`, `set_watch`, `stop`, `shutdown`; `hello` → ignored. Anything invalid → `("unknown", {})` + status note, never an exception. `url` sources (`rtsp://`, `rtsps://`, `http://`, `https://` only) are gated by `validate_stream_url()` and always rendered via `redact_url()` (userinfo → `user:***@`) in status notes; a stream that fails to open (or 40 consecutive read failures) fails cleanly with `engine_stopped` — no auto-retry in the first cut. **Auth:** when `VB_TOKEN` is set, the WS requires `?token=` (checked before accept, close 4401) — HTTP middleware never sees WebSocket scopes, so the gate lives in the handler.
+- `{"type":"set_zones","zones":[...]}` — REPLACES the set: `{"kind":"line","name"?,"a":[x,y],"b":[x,y]}` or `{"kind":"rect","name"?,"x1","y1","x2","y2"}`, normalized 0-1 (rect needs `x1<x2`, `y1<y2`), ≤ 40-char names (default `"zone N"`), max 8 — `validate_zones()`. Accepted before a worker exists (held pending, applied on start) and while running (rebuilt under the state lock on the next detect frame, which resets line counters). Ack `zones set (N)`.
+- `{"type":"set_triggers","line_cross"?,"direction"?,"dwell_s"?,"clip"?,"pre_s"?,"post_s"?}` — partial merge over defaults (False / `"none"` / 0=off / True / 6 / 4); `direction` ∈ none|any|8-way compass. Ack `triggers set`.
+- `{"type":"set_watch","enabled"?,"condition"?,"interval_s"? (1-30, default 4),"model"? ("lfm"|"lfm3b")}` — Ack `watch on`/`watch off`.
+
+**New outbound JSON:** `{"type":"event","event":{kind: line_cross|direction|dwell|watch|zone_enter|zone_exit, zone, direction, track_id|null, ts, frame_id, detail}}` and `{"type":"capture","clip":{name, url:"/api/clips/<name>", kind}}`. Rect zones fire enter/exit per track transition (`RectZone`); line zones run `zones.LineZoneCounter` per detect frame on pixel boxes (totals increment → `line_cross`); `DirectionTriggerState` fires once per (track, heading) and re-arms on heading change (`"any"` = any real heading); `DwellTracker` fires once per stationary stretch after `dwell_s`.
+
+**Clips:** the worker rings the same encoded JPEGs it streams (`maxlen = min(pre_s·fps or 30, 150)`); a fired trigger snapshots pre-roll, accumulates until `trigger_ts + post_s`, writes `clips_dir/clip_<ts>_<kind>.mp4` (cv2/`mp4v`), announces it, and prunes the dir to the 50 newest files. One pending capture at a time — later triggers still emit events. `web_app` serves `GET /api/clips/{name}` after `sanitize_clip_name()` (alnum/`_.-` + `.mp4` only; else 404).
+
+**Design:** single instance per process (module handle + `_engine_lock`); worker + watcher are daemon threads pushing onto an `asyncio.Queue` drained by a sender task. `vlm_registry` (and all heavy deps) import inside thread bodies, so CI imports the module and tests the pure helpers (`pack_frame`, `make_item`, `validate_control`, `validate_zones`, `sanitize_clip_name`, `validate_stream_url`, `redact_url`, `RectZone`, `DwellTracker`, `DirectionTriggerState`) with no MLX/weights. The watch thread sleeps `interval_s`, skips ticks when the worker is idle/busy, asks the local VLM `"…Answer with exactly YES or NO. Condition: …"` on the latest full-res frame, fires a `watch` event (+capture) on YES; errors → status notes throttled to 1/30s, and a model that never loads disables the watch with one note.
+
+### `service.py` — Shared-Token Auth + Job-Slot Queue
+
+Pure asyncio/stdlib primitives for LAN/business deployments (no fastapi or MLX imports — importable anywhere):
+- `token_enabled() / check_token(provided)` — VB_TOKEN env (read at call time); constant-time compare via `hmac.compare_digest`; unset/empty disables auth entirely
+- `max_jobs() -> int` — `VB_MAX_JOBS` clamped to 1..4 (default 1); invalid → default
+- `JobQueue` — asyncio FIFO slot limiter: `acquire(key) -> position` (0 = started immediately, 1 = first in line…), `release(key)`, `queued_count`, `wait_position(key)` (live line spot: 0 when running, 1-based while waiting); deque-of-futures so there is no busy waiting, and a waiter cancelled while queued is skipped cleanly and never consumes a slot
+
+`web_app.py` wiring: when `VB_TOKEN` is set, every `/api/*` path except `/api/healthz` requires the token via the `X-Auth-Token` header or `?token=` query (401 JSON otherwise). WebSocket scopes never pass through HTTP middleware, so the live WebSocket enforces the same token in-handler via `?token=` (checked before accept, close 4401). The heavy subprocess endpoints (`analyze`, `fastscan`, `track`, `agent`) run through a shared `JobQueue`; light image jobs (`detect`, `segment`, `sam3`, `ocr`) bypass it. Job dicts carry `queue_position`/`queued`, launch responses gain `{queued, queue_position}` (submit-time), and job state + SSE heartbeats report the live line position while a job still waits.
+
 ### `model_host.py` — Refcounted MLX Checkpoint Residency
 
 - `HOST.acquire(key, loader) / HOST.release(key) / HOST.resident()` — payload-agnostic refcount cache; entry freed + `mx.clear_cache()` when the last holder releases. Lets engine and VLM share one LFM checkpoint.
+
+### `mlx_compat.py` — mlx_vlm Load Compatibility Shims
+
+- `apply_all()` — idempotent, thread-safe shims called before any `mlx_vlm.utils.load` (wired into `vlm_registry._load_checkpoint`, `gemma_inference._ensure_local_gemma`, and the bridge's `lfm._load_checkpoint`):
+  - gemma 4: mlx_vlm 0.4.4's `ScaledLinear` gets a `to_quantized()` (→ `QuantizedScaledLinear` re-applying the scalar) so the quantized `per_layer_model_projection` loads; `Attention` stops allocating dead `k_norm/k_proj/v_proj` for KV-shared layers (checkpoints omit them).
+  - LFM2.5-VL: wraps `load_config` to force `projector_use_layernorm=true` only when the checkpoint's weight index actually ships `multi_modal_projector.layer_norm` (checkpoint configs claim false).
+  - No-ops permanently once mlx_vlm ships equivalent support. NOTE: LFM loads additionally require torch+torchvision for the image processor; without them the LFM engine cannot load regardless.
 
 ### `vlm_registry.py` — Hot-Swappable Local VLMs (ask/report)
 
@@ -315,15 +397,17 @@ ViT backbone cached across frames (recompute every `backbone_every`); between de
 ### `prompt_router.py` — Query Routing
 
 **Public API:**
-- `route(query: str) -> PromptResult` — splits a user query into SAM targets and semantic question
+- `route(query: str) -> PromptResult` — splits a user query into open-vocabulary SAM targets and the semantic question
 - `route_fallback(query: str) -> list[str]` — returns default SAM prompts if route() produces no targets
 - `PromptResult` dataclass: `segment_targets: list[str]`, `semantic_query: str`, `original_query: str`, `routed_from: str`
+- `STOPWORDS: frozenset[str]` — generic closed-class words only (articles, conjunctions, prepositions, auxiliaries, filler verbs); the module contains no domain vocabulary
+- `MAX_TARGETS: int = 8` — cap on SAM prompts per query (multiplex sanity limit)
 
-**Routing logic:**
-- Concrete nouns (people, vehicles, structures, animals, terrain) → SAM segment targets
-- Abstract terms (damage, injury, condition, anomaly) → semantic query for Falcon/Gemma
-- Multi-word compounds ("fence down", "water trough") → single SAM target
-- Pure abstract queries (no concrete nouns) → empty segment_targets, full query goes to semantic layer
+**Routing logic (open-vocabulary pass-through):**
+- SAM 3.1 is open-vocab: the token stream is partitioned into noun phrases at stopwords, and every phrase is passed through as typed — no whitelist, no stemming (plurals and multi-word phrases like "yellow school bus" work natively)
+- Phrases are deduped case-insensitively (first-seen order) and capped at `MAX_TARGETS` (8); empty phrases and pure numbers are dropped
+- `semantic_query` is the full original query — Gemma reasons over the complete ask (no word-stripping)
+- Empty or stopword-only queries → empty `segment_targets` (caller falls back via `route_fallback`); `routed_from` records how the split happened
 
 **Usage:** `cmd_analyze` calls `route(args.query)` and passes `segment_targets` to SAM, `semantic_query` to Falcon/Gemma.
 
@@ -348,11 +432,15 @@ visionbrain fastscan --video drone.mp4 --query "person"
 FastAPI app serving the single-page Ground Control dashboard (`static/index.html`) on port 7860. Launch with `visionbrain ui`.
 
 **API surface:**
-- `GET /api/status` — model registry + cache status; `GET /api/healthz` — Gemma backend health
+- `GET /api/status` — model registry + cache status, `gemma_remote` availability flag, and `vlm` `{backend, custom_configured}` (one blocking backend probe feeds all three); `GET /api/healthz` — Gemma backend health
+- `GET /api/settings` — saved custom VLM endpoint as `{configured, base_url, model, has_key}` (the api_key itself is never returned); `POST /api/settings` — JSON body `{base_url?, model?, api_key?, clear_key?}` → same shape as GET (bad JSON → 400)
 - `POST /api/upload` — upload media, returns `file_id`
-- `POST /api/job/{kind}` — start a job (`analyze`, `fastscan`, `detect`, `segment`, `ocr`, `track`, `sam3`); each spawns the CLI as a subprocess and returns `{job_id}`
+- `POST /api/job/{kind}` — start a job (`analyze`, `fastscan`, `detect`, `segment`, `ocr`, `track`, `sam3`, `agent`); each spawns the CLI as a subprocess and returns `{job_id}`. `agent` accepts optional `question`/`api_key`/`model`/`base_url` form fields (empty fields fall back to the saved VLM settings); `track` accepts optional `json_output`/`supervision`/`persistent_ids`/`adaptive_motion`/`motion_threshold`/`propagate`; `analyze` accepts optional `question` (forwarded to Gemma)
 - `GET /api/job/{jid}` — job state + streamed output; `GET /api/job/{jid}/stream` — SSE stream (phase, heartbeat, progress)
 - `GET /api/job/{jid}/detections|report|fast|file/{kind}` — result artifacts
+- `GET /api/clips/{name}` — serve smart-capture clips (name sanitized; traversal/bad extensions → 404)
+
+**Auth + concurrency (service.py):** set `VB_TOKEN` to require the token (X-Auth-Token header or `?token=`) on all `/api/*` except `/api/healthz` — off by default; the live WebSocket is covered too (enforced in-handler, close 4401 before accept). `VB_MAX_JOBS` (1..4, default 1) caps concurrent heavy jobs via a FIFO queue with `queue_position`/`queued` visible in job state, launch responses, and SSE heartbeats (live line position while queued). See DEPLOY.md.
 
 **UI layout:**
 - Header: logo, mode tabs (analyze / detect / segment / track / sam-3 / ocr), connection status

@@ -7,6 +7,7 @@ Run with:
 from __future__ import annotations
 
 import sys
+import types
 from pathlib import Path
 
 # Ensure visionbrain is importable
@@ -50,6 +51,30 @@ class TestLoader:
         assert rec.cache_dir == HF_CACHE / "models--mlx-community--sam3.1-bf16"
         # is_cached=True only if >0.5 GB downloaded
         print(f"\n  SAM 3.1: cached={rec.is_cached} ({rec.disk_gb} GB), can_load={rec.can_load}, note={rec.note}")
+
+    def test_falcon_ocr_record(self):
+        from visionbrain.loader import falcon_ocr_record, FALCON_OCR_HF_REPO, HF_CACHE
+        rec = falcon_ocr_record()
+        assert rec.hf_id == FALCON_OCR_HF_REPO == "tiiuae/Falcon-OCR"
+        assert rec.cache_dir == HF_CACHE / "models--tiiuae--Falcon-OCR"
+        # Registry-only entry: no MLX inference path for Falcon-OCR, ever.
+        assert rec.can_load is False
+        if rec.is_cached:
+            assert "vLLM/CUDA" in rec.note
+        else:
+            # CI runners have no cached weights; the note must be actionable.
+            assert rec.is_cached is False
+            assert "huggingface-cli download tiiuae/Falcon-OCR" in rec.note
+        print(f"\n  Falcon OCR: cached={rec.is_cached} ({rec.disk_gb} GB), can_load={rec.can_load}, note={rec.note}")
+
+    def test_all_records_includes_falcon_ocr(self):
+        from visionbrain import loader
+        recs = loader.all_records()
+        ids = [r.hf_id for r in recs]
+        assert loader.FALCON_OCR_HF_REPO in ids
+        assert loader.falcon_perception_record().hf_id in ids
+        assert loader.sam31_record().hf_id in ids
+        assert len(ids) == 4
 
     def test_falcon_repo_accessible(self):
         from visionbrain.loader import FALCON_REPO, falcon_repo
@@ -427,6 +452,17 @@ class TestCLI:
         assert "--hold-seconds" in result.stdout
         assert "--still-dir" in result.stdout
 
+    def test_analyze_help_lfm_ground(self):
+        import subprocess
+        import sys
+        result = subprocess.run(
+            [sys.executable, "-m", "visionbrain", "analyze", "--help"],
+            capture_output=True, text=True,
+            cwd=str(Path(__file__).parent.parent / "src"),
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "--lfm-ground" in result.stdout
+
 
 class TestWebApp:
     def test_job_result_json_endpoints(self, tmp_path):
@@ -460,6 +496,87 @@ class TestWebApp:
         assert client.get(f"/api/job/{jid}/fast").json()["quick_answer"].startswith("No roof")
 
         web_app._jobs.pop(jid, None)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Prompt router tests (no MLX required — pure Python)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestPromptRouter:
+    def test_basic_partition(self):
+        from visionbrain.prompt_router import route
+        res = route("boats and people near the pier")
+        assert "boats" in res.segment_targets
+        assert "people" in res.segment_targets
+        assert "pier" in res.segment_targets
+        assert res.semantic_query == "boats and people near the pier"
+
+    def test_multiword_phrase_keeps_verb_attachment(self):
+        from visionbrain.prompt_router import route
+        res = route("trucks blocking the north access road")
+        assert res.segment_targets == ["trucks blocking", "north access road"]
+        assert res.semantic_query == "trucks blocking the north access road"
+
+    def test_adjective_phrase_stays_whole(self):
+        from visionbrain.prompt_router import route
+        res = route("yellow school bus")
+        assert res.segment_targets == ["yellow school bus"]
+
+    def test_open_vocab_pass_through(self):
+        # Words like these were throttled by the old concrete-noun whitelist.
+        from visionbrain.prompt_router import route
+        res = route("kayak and buoy near the crane")
+        assert res.segment_targets == ["kayak", "buoy", "crane"]
+
+    def test_stopword_only_query_has_no_targets(self):
+        from visionbrain.prompt_router import route
+        q = "find all of that here"
+        res = route(q)
+        assert res.segment_targets == []
+        assert res.semantic_query == res.original_query == q
+        assert "No trackable phrases" in res.routed_from
+
+    def test_content_phrase_passes_through_to_sam(self):
+        # "suspicious activity" is content under open-vocab pass-through:
+        # only stopword-only queries produce empty targets.
+        from visionbrain.prompt_router import route
+        res = route("find any suspicious activity")
+        assert res.segment_targets == ["suspicious activity"]
+        assert res.semantic_query == "find any suspicious activity"
+
+    def test_cap_at_eight_targets(self):
+        from visionbrain.prompt_router import route
+        res = route("kayak and canoe and buoy and crane and barge and ferry "
+                    "and tug and sailboat and trawler and dinghy and skiff and yacht")
+        assert len(res.segment_targets) == 8
+        assert res.segment_targets[0] == "kayak"
+
+    def test_dedupe_case_insensitive_preserves_order(self):
+        from visionbrain.prompt_router import route
+        res = route("Boats and boats and BOATS near the dock")
+        assert res.segment_targets == ["Boats", "dock"]
+
+    def test_pure_numbers_dropped(self):
+        from visionbrain.prompt_router import route
+        res = route("3 trucks and 12 near the gate")
+        # "3 trucks" is a content phrase; the standalone number "12" is dropped.
+        assert res.segment_targets == ["3 trucks", "gate"]
+
+    def test_routed_from_format(self):
+        from visionbrain.prompt_router import route
+        res = route("boats and people")
+        assert res.routed_from == "SAM phrases: ['boats', 'people'] | Gemma: full query"
+
+    def test_empty_query(self):
+        from visionbrain.prompt_router import route
+        res = route("")
+        assert res.segment_targets == []
+        assert res.semantic_query == ""
+        assert res.original_query == ""
+
+    def test_route_fallback_defaults(self):
+        from visionbrain.prompt_router import route_fallback
+        assert route_fallback("anything at all") == ["person", "vehicle", "building", "animal"]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -557,6 +674,335 @@ class TestDetectionCore:
         assert len(overlay) == 2 and stats["agree"] == 0
 
 
+class TestCrosscheck:
+    def test_falcon_to_dets_center_size_to_pixel_corners(self):
+        from visionbrain.crosscheck import falcon_to_dets
+
+        det = types.SimpleNamespace(
+            label="cow", score=0.9, cx=0.5, cy=0.25, h=0.5, w=0.5
+        )
+        dets = falcon_to_dets([det], orig_w=200, orig_h=100)
+        assert len(dets) == 1
+        box = dets[0]["bbox_xyxy"]
+        # corners: (0.5±0.25)*200, (0.25±0.25)*100
+        assert abs(box[0] - 50.0) < 0.2
+        assert abs(box[1] - 0.0) < 0.2
+        assert abs(box[2] - 150.0) < 0.2
+        assert abs(box[3] - 50.0) < 0.2
+        assert dets[0]["label"] == "cow"
+        assert dets[0]["score"] == 0.9
+
+    def test_falcon_to_dets_accepts_dicts(self):
+        from visionbrain.crosscheck import falcon_to_dets
+
+        dets = falcon_to_dets(
+            [{"label": "car", "score": 0.5, "cx": 0.5, "cy": 0.5, "h": 1.0, "w": 1.0}],
+            orig_w=100, orig_h=100,
+        )
+        assert dets[0]["bbox_xyxy"] == [0.0, 0.0, 100.0, 100.0]
+
+    def test_crosscheck_perfect_match_agreement_one(self):
+        from visionbrain.crosscheck import crosscheck
+
+        sam = [{"label": "cow", "score": 0.9, "bbox_xyxy": [10.0, 10.0, 50.0, 50.0], "track_id": 3}]
+        fal = [{"label": "cow", "score": 0.8, "bbox_xyxy": [10.0, 10.0, 50.0, 50.0]}]
+        res = crosscheck(sam, fal)
+        assert res.matched == 1
+        assert res.sam_only == 0 and res.falcon_only == 0
+        assert res.agreement == 1.0
+        assert res.matches[0]["sam_track_id"] == 3
+        assert res.matches[0]["iou"] == 1.0
+
+    def test_crosscheck_disjoint_boxes_match_nothing(self):
+        from visionbrain.crosscheck import crosscheck
+
+        sam = [{"label": "cow", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]}]
+        fal = [{"label": "cow", "score": 0.8, "bbox_xyxy": [100.0, 100.0, 120.0, 120.0]}]
+        res = crosscheck(sam, fal)
+        assert res.matched == 0
+        assert res.agreement == 0.0
+        assert res.sam_only == 1 and res.falcon_only == 1
+        assert res.matches == []
+
+    def test_crosscheck_overlap_below_threshold_no_match(self):
+        from visionbrain.crosscheck import crosscheck
+
+        # IoU = 0.4 / 1.0 = 0.4 < 0.5
+        sam = [{"label": "cow", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]}]
+        fal = [{"label": "cow", "score": 0.8, "bbox_xyxy": [0.0, 0.0, 10.0, 4.0]}]
+        res = crosscheck(sam, fal)
+        assert res.matched == 0
+        assert res.agreement == 0.0
+
+    def test_crosscheck_iou_at_threshold_matches(self):
+        from visionbrain.crosscheck import crosscheck
+
+        # IoU = 0.5 / 1.0 = 0.5 → >= threshold matches
+        sam = [{"label": "cow", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]}]
+        fal = [{"label": "cow", "score": 0.8, "bbox_xyxy": [0.0, 0.0, 10.0, 5.0]}]
+        res = crosscheck(sam, fal)
+        assert res.matched == 1
+
+    def test_crosscheck_greedy_one_to_one_highest_iou_first(self):
+        from visionbrain.crosscheck import crosscheck
+
+        sam = [
+            {"label": "a", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]},   # IoU 0.95 with falcon
+            {"label": "b", "score": 0.8, "bbox_xyxy": [1.0, 0.0, 11.0, 10.0]},   # IoU ~0.77 with falcon
+        ]
+        fal = [{"label": "a", "score": 0.7, "bbox_xyxy": [0.0, 0.0, 9.5, 10.0]}]
+        res = crosscheck(sam, fal)
+        assert res.matched == 1
+        assert res.sam_only == 1 and res.falcon_only == 0
+        # Higher-IoU pair wins; one Falcon det can match only one SAM det.
+        assert res.matches[0]["sam_label"] == "a"
+        assert res.agreement == 0.5  # 1 / max(1, max(2, 1))
+
+    def test_crosscheck_label_passthrough(self):
+        from visionbrain.crosscheck import crosscheck
+
+        sam = [{"label": "vehicle", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]}]
+        fal = [{"label": "truck", "score": 0.8, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]}]
+        res = crosscheck(sam, fal)
+        assert res.matched == 1
+        assert res.matches[0]["sam_label"] == "vehicle"
+        assert res.matches[0]["falcon_label"] == "truck"
+
+    def test_crosscheck_track_id_propagation(self):
+        from visionbrain.crosscheck import crosscheck
+
+        sam = [
+            {"label": "cow", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0], "track_id": 7},
+            {"label": "cow", "score": 0.9, "bbox_xyxy": [50.0, 0.0, 60.0, 10.0]},  # no track_id
+        ]
+        fal = [
+            {"label": "cow", "score": 0.8, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]},
+            {"label": "cow", "score": 0.8, "bbox_xyxy": [50.0, 0.0, 60.0, 10.0]},
+        ]
+        res = crosscheck(sam, fal)
+        assert [m["sam_track_id"] for m in res.matches] == [7, None]
+
+    def test_crosscheck_frame_index_defaults_unset(self):
+        from visionbrain.crosscheck import crosscheck
+
+        res = crosscheck([], [])
+        assert res.frame_index == -1
+        res.frame_index = 42  # CLI sets it after matching
+        assert res.frame_index == 42
+
+    def test_summarize_aggregates_and_means(self):
+        from visionbrain.crosscheck import CrosscheckResult, summarize
+
+        results = [
+            CrosscheckResult(frame_index=1, matched=2, sam_only=0, falcon_only=0, agreement=1.0),
+            CrosscheckResult(frame_index=2, matched=1, sam_only=1, falcon_only=0, agreement=0.5),
+        ]
+        agg = summarize(results)
+        assert agg["frames"] == 2
+        assert agg["matched"] == 3
+        assert agg["sam_only"] == 1
+        assert agg["falcon_only"] == 0
+        assert abs(agg["agreement"] - 0.75) < 1e-9
+
+    def test_summarize_empty_is_zero(self):
+        from visionbrain.crosscheck import summarize
+
+        agg = summarize([])
+        assert agg == {"frames": 0, "matched": 0, "sam_only": 0, "falcon_only": 0, "agreement": 0.0}
+
+
+class TestGrounding:
+    # ── build_grounding_prompt ────────────────────────────────────────────────
+
+    def test_prompt_lists_targets_and_canonical_format(self):
+        from visionbrain.grounding import build_grounding_prompt
+
+        prompt = build_grounding_prompt(["boat", "swimmer"])
+        assert "boat" in prompt
+        assert "swimmer" in prompt
+        assert "<box>x1,y1,x2,y2</box>" in prompt
+        assert "NONE" in prompt
+        # The example line shows the canonical integer 0-1000 format.
+        assert "<box>120,340,480,760</box>" in prompt
+
+    def test_prompt_ignores_blank_targets(self):
+        from visionbrain.grounding import build_grounding_prompt
+
+        prompt = build_grounding_prompt(["", "  ", None])  # type: ignore[list-item]
+        assert "objects" in prompt  # neutral fallback wording
+
+    # ── parse_grounding_boxes: canonical <box> tags ───────────────────────────
+
+    def test_parse_canonical_zero_to_1000_ints(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<box>100,200,500,800</box> boat", 500, 250)
+        assert len(boxes) == 1
+        assert boxes[0]["label"] == "boat"
+        x1, y1, x2, y2 = boxes[0]["bbox_xyxy"]
+        assert x1 == pytest.approx(100 / 1000 * 500)
+        assert y1 == pytest.approx(200 / 1000 * 250)
+        assert x2 == pytest.approx(500 / 1000 * 500)
+        assert y2 == pytest.approx(800 / 1000 * 250)
+
+    def test_parse_zero_to_one_floats(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<box>0.1,0.2,0.5,0.8</box> car", 400, 200)
+        assert len(boxes) == 1
+        x1, y1, x2, y2 = boxes[0]["bbox_xyxy"]
+        assert x1 == pytest.approx(40.0)
+        assert y1 == pytest.approx(40.0)
+        assert x2 == pytest.approx(200.0)
+        assert y2 == pytest.approx(160.0)
+
+    def test_parse_zero_to_100_values(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<box>10,20,50,80</box> person", 200, 100)
+        assert len(boxes) == 1
+        x1, y1, x2, y2 = boxes[0]["bbox_xyxy"]
+        assert x1 == pytest.approx(20.0)
+        assert y1 == pytest.approx(20.0)
+        assert x2 == pytest.approx(100.0)
+        assert y2 == pytest.approx(80.0)
+
+    def test_parse_optional_spaces_and_float_values(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<box> 100 , 200.5 , 500 , 800 </box>", 1000, 1000)
+        assert len(boxes) == 1
+        assert boxes[0]["bbox_xyxy"] == [100.0, 200.5, 500.0, 800.0]
+
+    def test_parse_tag_case_insensitive(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<BOX>100,200,500,800</BOX> boat", 1000, 1000)
+        assert len(boxes) == 1
+        assert boxes[0]["label"] == "boat"
+
+    def test_parse_label_stripped_and_empty_ok(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<box>100,200,500,800</box>  red sailboat ", 1000, 1000)
+        assert boxes[0]["label"] == "red sailboat"
+        boxes = parse_grounding_boxes("<box>100,200,500,800</box>", 1000, 1000)
+        assert boxes[0]["label"] == ""
+
+    def test_parse_multiple_boxes_with_labels(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        text = "<box>100,200,500,800</box> boat\n<box>600,100,900,400</box> kayak"
+        boxes = parse_grounding_boxes(text, 1000, 1000)
+        assert [b["label"] for b in boxes] == ["boat", "kayak"]
+        assert boxes[1]["bbox_xyxy"][0] == pytest.approx(600.0)
+
+    def test_parse_unsorted_swapped_corners_ordered(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("<box>500,800,100,200</box> boat", 500, 250)
+        x1, y1, x2, y2 = boxes[0]["bbox_xyxy"]
+        assert x1 < x2 and y1 < y2
+        assert x1 == pytest.approx(50.0) and x2 == pytest.approx(250.0)
+        assert y1 == pytest.approx(50.0) and y2 == pytest.approx(200.0)
+
+    def test_parse_clamps_out_of_range_to_image_bounds(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        # x1,y1,x2,y2 = -50,1200,600,900 on a 0-1000 scale over 500x500:
+        # raw pixels (-25, 600, 300, 450) → clamp → (0, 500, 300, 450) → order.
+        boxes = parse_grounding_boxes("<box>-50,1200,600,900</box> wreck", 500, 500)
+        x1, y1, x2, y2 = boxes[0]["bbox_xyxy"]
+        assert x1 == 0.0  # -25 clamped to left edge
+        assert x2 == pytest.approx(300.0)
+        assert y1 == pytest.approx(450.0)
+        assert y2 == 500.0  # 600 clamped to bottom edge, then ordered below 450
+        assert x1 < x2 and y1 < y2
+
+    # ── parse_grounding_boxes: fallbacks and empty replies ────────────────────
+
+    def test_parse_parenthesized_fallback(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("(120,340),(480,760) boat", 500, 500)
+        assert len(boxes) == 1
+        x1, y1, x2, y2 = boxes[0]["bbox_xyxy"]
+        assert x1 == pytest.approx(60.0)
+        assert y1 == pytest.approx(170.0)
+        assert x2 == pytest.approx(240.0)
+        assert y2 == pytest.approx(380.0)
+        assert boxes[0]["label"] == ""  # no tag → no label
+
+    def test_parse_json_nested_array_fallback(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("[[100,200,500,800],[20,40,60,80]]", 500, 250)
+        assert len(boxes) == 2
+        # First box is 0-1000 scale, second is 0-100 scale (heuristic per box).
+        assert boxes[0]["bbox_xyxy"] == pytest.approx([50.0, 50.0, 250.0, 200.0])
+        assert boxes[1]["bbox_xyxy"] == pytest.approx([100.0, 100.0, 300.0, 200.0])
+
+    def test_parse_json_flat_array_fallback(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        boxes = parse_grounding_boxes("Here: [100,200,500,800] as requested", 1000, 1000)
+        assert len(boxes) == 1
+        assert boxes[0]["bbox_xyxy"] == [100.0, 200.0, 500.0, 800.0]
+
+    def test_parse_json_pair_arrays_are_not_boxes(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        # Corners as coordinate pairs must not be double-parsed as boxes.
+        boxes = parse_grounding_boxes("[[120,340],[480,760]]", 500, 500)
+        assert boxes == []
+
+    def test_parse_none_reply_returns_empty(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        assert parse_grounding_boxes("NONE", 500, 500) == []
+        assert parse_grounding_boxes("none.", 500, 500) == []
+        assert parse_grounding_boxes("", 500, 500) == []
+        assert parse_grounding_boxes("   \n  ", 500, 500) == []
+
+    def test_parse_prose_without_boxes_returns_empty(self):
+        from visionbrain.grounding import parse_grounding_boxes
+
+        assert parse_grounding_boxes("I cannot see any boats in this image.", 500, 500) == []
+
+    # ── grounding_crosscheck ──────────────────────────────────────────────────
+
+    def test_grounding_crosscheck_perfect_match(self):
+        from visionbrain.grounding import grounding_crosscheck
+
+        sam = [{"label": "boat", "score": 0.9, "bbox_xyxy": [10.0, 10.0, 50.0, 50.0], "track_id": 3}]
+        boxes = [{"bbox_xyxy": [10.0, 10.0, 50.0, 50.0], "label": "boat"}]
+        res = grounding_crosscheck(sam, boxes)
+        assert res.matched == 1
+        assert res.sam_only == 0 and res.falcon_only == 0
+        assert res.agreement == 1.0
+        assert res.matches[0]["iou"] == 1.0
+        assert res.matches[0]["sam_track_id"] == 3
+
+    def test_grounding_crosscheck_loose_default_accepts_coarse_box(self):
+        from visionbrain.crosscheck import crosscheck
+        from visionbrain.grounding import grounding_crosscheck
+
+        # Coarse VLM box: IoU = 0.4 — too loose for the Falcon threshold (0.5),
+        # matched by the grounding default (0.3).
+        sam = [{"label": "boat", "score": 0.9, "bbox_xyxy": [0.0, 0.0, 10.0, 10.0]}]
+        boxes = [{"bbox_xyxy": [0.0, 0.0, 10.0, 4.0], "label": "boat"}]
+        assert grounding_crosscheck(sam, boxes).matched == 1
+        assert crosscheck(sam, boxes, iou_threshold=0.5).matched == 0
+
+    def test_grounding_crosscheck_empty_inputs(self):
+        from visionbrain.grounding import grounding_crosscheck
+
+        res = grounding_crosscheck([], [])
+        assert res.matched == 0
+        assert res.agreement == 0.0
+        assert res.frame_index == -1  # caller sets it when the frame is known
+
+
 class TestModelHost:
     def test_acquire_loads_once_and_refcounts(self):
         from visionbrain.model_host import ModelHost
@@ -618,6 +1064,237 @@ class TestVLMRegistry:
               "centroid_norm": {"x": 0.2, "y": 0.2}, "source": "sam"}]
         )
         assert out == "- cow, 87% confidence, upper left of frame [sam]"
+
+
+class TestVLMSettings:
+    """Custom OpenAI-compatible backend settings store (CI-safe — no network)."""
+
+    def test_save_load_roundtrip(self, tmp_path):
+        import json
+        from visionbrain import gemma_inference as gi
+
+        p = tmp_path / "settings.json"
+        saved = gi.save_vlm_settings(
+            base_url="http://localhost:1234/v1",
+            model="test-model",
+            api_key="sk-secret",
+            path=p,
+        )
+        # save() redacts the key in its return value...
+        assert saved == {"base_url": "http://localhost:1234/v1", "model": "test-model", "api_key": ""}
+        # ...but the key material persists on disk, in a 0600 file
+        assert json.loads(p.read_text())["api_key"] == "sk-secret"
+        assert (p.stat().st_mode & 0o777) == 0o600
+
+        loaded = gi.load_vlm_settings(path=p)
+        assert loaded == {
+            "base_url": "http://localhost:1234/v1",
+            "model": "test-model",
+            "api_key": "sk-secret",
+        }
+
+    def test_missing_or_corrupt_file_yields_empty_settings(self, tmp_path):
+        from visionbrain import gemma_inference as gi
+
+        assert gi.load_vlm_settings(path=tmp_path / "absent.json") == {
+            "base_url": "", "model": "", "api_key": "",
+        }
+        corrupt = tmp_path / "corrupt.json"
+        corrupt.write_text("{not valid json")
+        assert gi.load_vlm_settings(path=corrupt) == {
+            "base_url": "", "model": "", "api_key": "",
+        }
+
+    def test_save_empty_preserves_and_clear_key_wipes_only_key(self, tmp_path):
+        from visionbrain import gemma_inference as gi
+
+        p = tmp_path / "settings.json"
+        gi.save_vlm_settings(base_url="http://x/v1", model="m1", api_key="k1", path=p)
+
+        saved = gi.save_vlm_settings(path=p)  # all-empty: nothing overwritten
+        assert saved["base_url"] == "http://x/v1"
+        assert saved["model"] == "m1"
+        assert gi.load_vlm_settings(path=p)["api_key"] == "k1"
+
+        saved = gi.save_vlm_settings(model="m2", clear_key=True, path=p)
+        assert saved["model"] == "m2"
+        assert gi.load_vlm_settings(path=p) == {
+            "base_url": "http://x/v1", "model": "m2", "api_key": "",
+        }
+
+    def test_custom_backend_configured_requires_base_url_and_model(self, tmp_path, monkeypatch):
+        from visionbrain import gemma_inference as gi
+
+        p = tmp_path / "settings.json"
+        monkeypatch.setattr(gi, "settings_path", lambda: p)
+
+        assert gi.custom_backend_configured() is False  # no file yet
+        gi.save_vlm_settings(base_url="http://x/v1", path=p)
+        assert gi.custom_backend_configured() is False  # base_url only
+        gi.save_vlm_settings(model="m", path=p)
+        assert gi.custom_backend_configured() is True
+        gi.save_vlm_settings(clear_key=True, path=p)
+        assert gi.custom_backend_configured() is True   # api_key is irrelevant
+
+    def test_available_backend_custom_first(self, monkeypatch):
+        from visionbrain import gemma_inference as gi
+
+        def no_network(*args, **kwargs):
+            raise AssertionError("network probe attempted")
+
+        monkeypatch.setattr(gi.urllib.request, "urlopen", no_network)
+        monkeypatch.setattr(gi, "custom_backend_configured", lambda: True)
+        assert gi.available_backend() == "custom"
+
+        monkeypatch.setattr(gi, "custom_backend_configured", lambda: False)
+        assert gi.available_backend() != "custom"
+
+    def test_custom_chat_request_shape(self, monkeypatch):
+        import json
+        from visionbrain import gemma_inference as gi
+
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "choices": [{"message": {"content": "answer from custom"}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 7},
+                }).encode("utf-8")
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.headers)
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse()
+
+        monkeypatch.setattr(gi.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(gi, "load_vlm_settings", lambda path=None: {
+            "base_url": "http://example.test:1234/v1", "model": "test-model", "api_key": ""})
+
+        text, raw, latency_s = gi._custom_chat(
+            [{"role": "user", "content": "hi"}], max_tokens=64, temperature=0.1
+        )
+        assert text == "answer from custom"
+        assert raw["usage"]["completion_tokens"] == 7
+        assert latency_s >= 0.0
+        assert captured["url"] == "http://example.test:1234/v1/chat/completions"
+        assert "Authorization" not in captured["headers"]  # no key → no header
+        assert captured["payload"]["model"] == "test-model"
+        assert captured["payload"]["max_tokens"] == 64
+        assert captured["payload"]["temperature"] == 0.1
+        assert captured["payload"]["messages"] == [{"role": "user", "content": "hi"}]
+
+        # With a saved api key, a Bearer Authorization header is sent
+        monkeypatch.setattr(gi, "load_vlm_settings", lambda path=None: {
+            "base_url": "http://example.test:1234/v1/", "model": "test-model",
+            "api_key": "sk-test"})
+        captured.clear()
+        gi._custom_chat([{"role": "user", "content": "hi"}], max_tokens=64, temperature=0.1)
+        assert captured["headers"]["Authorization"] == "Bearer sk-test"
+        assert captured["url"] == "http://example.test:1234/v1/chat/completions"  # trailing / stripped
+
+    def test_custom_chat_unconfigured_or_malformed_raises(self, monkeypatch, tmp_path):
+        import json
+        from visionbrain import gemma_inference as gi
+
+        monkeypatch.setattr(gi, "load_vlm_settings", lambda path=None: {
+            "base_url": "", "model": "", "api_key": ""})
+        with pytest.raises(RuntimeError, match="not configured"):
+            gi._custom_chat([{"role": "user", "content": "hi"}], max_tokens=8, temperature=0.1)
+
+        class BadResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps({"choices": "nope"}).encode("utf-8")
+
+        monkeypatch.setattr(gi.urllib.request, "urlopen", lambda req, timeout=None: BadResponse())
+        monkeypatch.setattr(gi, "load_vlm_settings", lambda path=None: {
+            "base_url": "http://example.test", "model": "m", "api_key": ""})
+        with pytest.raises(RuntimeError, match="Malformed response"):
+            gi._custom_chat([{"role": "user", "content": "hi"}], max_tokens=8, temperature=0.1)
+
+
+class TestMlxCompat:
+    """mlx_vlm load shims (gemma-4 quantized ScaledLinear, lfm2_vl layernorm)."""
+
+    def test_apply_all_idempotent(self):
+        from visionbrain.mlx_compat import apply_all
+
+        try:
+            import mlx_vlm  # noqa: F401
+        except ImportError:
+            pytest.skip("mlx_vlm not installed")
+        apply_all()
+        apply_all()  # second call must be a no-op, not a double patch
+
+    def test_scaled_linear_quantized_matches_reference(self):
+        try:
+            import mlx.core as mx
+            from mlx_vlm.models.gemma4.language import ScaledLinear
+        except ImportError:
+            pytest.skip("mlx_vlm gemma4 arch not available")
+
+        from visionbrain.mlx_compat import ensure_scaled_linear_quantization
+
+        ensure_scaled_linear_quantization()
+        if not hasattr(ScaledLinear, "to_quantized"):
+            pytest.fail("ScaledLinear.to_quantized shim was not installed")
+
+        layer = ScaledLinear(128, 64, scalar=0.25)
+        layer.weight = mx.random.normal((64, 128))
+        x = mx.random.normal((2, 16, 128))
+
+        ql = layer.to_quantized(group_size=64, bits=4, mode="affine")
+        got = ql(x)
+        w, scales, biases = mx.quantize(layer.weight, 64, 4, mode="affine")
+        want = (x @ mx.dequantize(w, scales, biases, 64).T) * 0.25
+        assert mx.abs(got - want).max() < 1e-4
+
+    def test_lfm_guard_corrects_only_proven_layernorm(self, tmp_path):
+        import json
+
+        try:
+            import mlx_vlm  # noqa: F401
+        except ImportError:
+            pytest.skip("mlx_vlm not installed")
+
+        from visionbrain.mlx_compat import ensure_lfm_projector_layernorm
+        from mlx_vlm.utils import load_config
+
+        ensure_lfm_projector_layernorm()
+
+        def make_case(name, layernorm_in_weights, declared):
+            d = tmp_path / name
+            d.mkdir()
+            (d / "config.json").write_text(json.dumps({
+                "model_type": "lfm2-vl",
+                "projector_use_layernorm": declared,
+            }))
+            weight_map = {"language_model.model.embed_tokens.weight": "m.safetensors"}
+            if layernorm_in_weights:
+                weight_map["multi_modal_projector.layer_norm.weight"] = "m.safetensors"
+            (d / "model.safetensors.index.json").write_text(
+                json.dumps({"weight_map": weight_map})
+            )
+            return d
+
+        lying = make_case("lying", layernorm_in_weights=True, declared=False)
+        assert load_config(lying)["projector_use_layernorm"] is True
+
+        honest = make_case("honest", layernorm_in_weights=False, declared=False)
+        assert load_config(honest)["projector_use_layernorm"] is False
 
 
 class TestLiveTracking:

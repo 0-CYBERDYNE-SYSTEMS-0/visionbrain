@@ -193,13 +193,39 @@ def cmd_sam3_detect(args: argparse.Namespace) -> None:
 def cmd_track(args: argparse.Namespace) -> None:
     """Track objects in a video file using SAM 3.1."""
     from .loader import sam31_record
-    from .sam3_inference import track_video, sam31_available
+    from .sam3_inference import track_video, track_video_with_json, sam31_available
 
     if not sam31_available():
         rec = sam31_record()
         print(f"ERROR: SAM 3.1 not ready — {rec.note}", file=sys.stderr)
         print("Run: huggingface-cli download facebook/sam3.1", file=sys.stderr)
         sys.exit(1)
+
+    if args.json_output:
+        print(f"Tracking {args.prompts} in {args.video}...")
+        stats, _ = track_video_with_json(
+            args.video,
+            args.prompts,
+            output_path=args.output,
+            json_path=args.json_output,
+            threshold=args.threshold,
+            every_n_frames=args.every,
+            backbone_every=args.backbone_every,
+            resolution=args.resolution,
+            opacity=args.opacity,
+            use_supervision=args.supervision,
+            track_persistent_ids=args.persistent_ids,
+            adaptive_motion=args.adaptive_motion,
+            motion_threshold=args.motion_threshold,
+            propagate_frames=args.propagate,
+        )
+
+        print(f"\nDone. JSON detections: {args.json_output}")
+        print(f"  {stats.processed_frames}/{stats.total_frames} frames processed")
+        print(f"  {stats.unique_objects} object types tracked")
+        if stats.output_path:
+            print(f"  Output: {stats.output_path}")
+        return
 
     print(f"Tracking {args.prompts} in {args.video}...")
     stats = track_video(
@@ -271,6 +297,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         available_backend,
     )
     from .prompt_router import route, route_fallback
+    from .crosscheck import crosscheck, falcon_to_dets, summarize
 
     video_path = Path(args.video)
     if not video_path.exists():
@@ -469,6 +496,11 @@ def cmd_analyze(args: argparse.Namespace) -> None:
 
     # ── Step 2 (optional): Falcon Perception key-frame refinement ───────────────
     falcon_summary_parts = []
+    crosscheck_results: list = []
+    key_frames: list = []
+    sam_by_frame: dict = {}
+    key_frame_dims: dict = {}
+    do_crosscheck = not getattr(args, "no_crosscheck", False)
     if getattr(args, "falcon_refine", False):
         rec = falcon_perception_record()
         if not rec.can_load:
@@ -479,6 +511,24 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                 n_refine = min(getattr(args, "falcon_frames", 6), len(frames_with_dets))
                 print(f"[2/{total_steps}] Falcon Perception — semantic analysis on top {n_refine} frames...")
                 key_frames = _extract_key_frames(str(video_path), frames_with_dets, n=n_refine)
+
+                # Cross-engine inputs: SAM detections per frame index + key-frame
+                # pixel dims (for Falcon normalized → pixel box conversion).
+                sam_by_frame = {f["frame_index"]: f.get("detections", []) for f in frame_data}
+                key_frame_dims = {fi: pf.size for fi, _ts, pf in key_frames}
+
+                def _crosscheck_frame(fi: int, fp_results: list) -> None:
+                    """Validate one frame's Falcon boxes against SAM (never fails the pipeline)."""
+                    if not do_crosscheck:
+                        return
+                    try:
+                        w, h = key_frame_dims.get(fi, (0, 0))
+                        falcon_dets = falcon_to_dets(fp_results, w, h)
+                        cc = crosscheck(sam_by_frame.get(fi, []), falcon_dets)
+                        cc.frame_index = fi
+                        crosscheck_results.append(cc)
+                    except Exception as exc:
+                        print(f"    WARNING: SAM-vs-Falcon cross-check failed on frame {fi}: {exc}")
 
                 if getattr(args, "parallel_falcon", True):
                     # ── Parallel Falcon via ThreadPoolExecutor ───────────────
@@ -504,6 +554,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                                 + ("\n".join(det_strs) if det_strs else "  [no detections]")
                             )
                             print(f"  Frame {fi} (t={ts:.1f}s): {len(fp_results)} Falcon detections — {fp_stats.total_ms:.0f}ms [parallel]")
+                            _crosscheck_frame(fi, fp_results)
                     print()
                 else:
                     # ── Sequential Falcon (fallback) ─────────────────────────
@@ -519,13 +570,58 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                             + ("\n".join(det_strs) if det_strs else "  [no detections]")
                         )
                         print(f"  Frame {fi} (t={ts:.1f}s): {len(fp_results)} Falcon detections — {fp_stats.total_ms:.0f}ms")
+                        _crosscheck_frame(fi, fp_results)
                     print()
             else:
                 print(f"[2/{total_steps}] Falcon Perception — no frames with SAM detections to refine; skipping.")
                 print()
+        if crosscheck_results:
+            print(f"  Cross-check (SAM vs Falcon, IoU ≥ 0.5):")
+            for cc in sorted(crosscheck_results, key=lambda r: r.frame_index):
+                print(f"    frame {cc.frame_index}: matched {cc.matched} · sam-only {cc.sam_only} · "
+                      f"falcon-only {cc.falcon_only} (agreement {cc.agreement:.2f})")
+            agg = summarize(crosscheck_results)
+            print(f"  → Cross-check aggregate: {agg['frames']} frames · agreement {agg['agreement']*100:.0f}% · "
+                  f"{agg['matched']} matched · {agg['sam_only']} SAM-only · {agg['falcon_only']} falcon-only")
+            print()
         step_gemma = f"[3/{total_steps}]"
     else:
         step_gemma = f"[2/{total_steps}]"
+
+    # ── Step 2b (optional): LFM grounding third opinion on the same key frames ──
+    # Asks the local LFM2.5-VL where the SAM targets are on each key frame,
+    # parses the boxes from its text reply, and cross-checks them against
+    # SAM's detections at the same frame index. Opt-in via --lfm-ground; a
+    # missing model never fails the pipeline (one warning line, then on).
+    lfm_grounding_results: list = []
+    if getattr(args, "lfm_ground", False):
+        if not key_frames:
+            print("  LFM grounding: no key frames available (needs --falcon-refine); skipping.")
+        else:
+            try:
+                from . import grounding
+                from . import vlm_registry
+
+                vlm_registry.set_model("lfm")
+                grounding_prompt = grounding.build_grounding_prompt(sam_targets)
+                print("  LFM grounding check (SAM vs LFM, IoU ≥ 0.3):")
+                for fi, _ts, pil_frame in key_frames:
+                    reply = vlm_registry.ask(grounding_prompt, image=pil_frame)
+                    lfm_boxes = grounding.parse_grounding_boxes(
+                        reply, pil_frame.size[0], pil_frame.size[1]
+                    )
+                    gc = grounding.grounding_crosscheck(sam_by_frame.get(fi, []), lfm_boxes)
+                    gc.frame_index = fi
+                    lfm_grounding_results.append(gc)
+                    print(f"    frame {fi}: {len(lfm_boxes)} LFM box(es) · matched {gc.matched} · "
+                          f"sam-only {gc.sam_only} · lfm-only {gc.falcon_only} (agreement {gc.agreement:.2f})")
+                agg_lfm = summarize(lfm_grounding_results)
+                print(f"  → LFM grounding aggregate: {agg_lfm['frames']} frames · "
+                      f"agreement {agg_lfm['agreement']*100:.0f}% · {agg_lfm['matched']} matched · "
+                      f"{agg_lfm['sam_only']} SAM-only · {agg_lfm['falcon_only']} lfm-only")
+                print()
+            except Exception as exc:
+                print(f"  LFM grounding unavailable: {exc}")
 
     # Step 3: Remote Gemma 4 reasoning
     if not gemma_available():
@@ -571,6 +667,28 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         summary_parts.append("")
         summary_parts.append("Falcon Perception key-frame semantic analysis:")
         summary_parts.extend(falcon_summary_parts)
+
+    if crosscheck_results:
+        try:
+            agg = summarize(crosscheck_results)
+            summary_parts.append(
+                f"Cross-engine check (SAM vs Falcon) on {agg['frames']} key frames: "
+                f"agreement {agg['agreement']*100:.0f}%, {agg['matched']} matched, "
+                f"{agg['sam_only']} SAM-only, {agg['falcon_only']} Falcon-only."
+            )
+        except Exception as exc:
+            print(f"  WARNING: cross-check summary for Gemma failed: {exc}")
+
+    if lfm_grounding_results:
+        try:
+            agg_lfm = summarize(lfm_grounding_results)
+            summary_parts.append(
+                f"LFM grounding check on {agg_lfm['frames']} key frames: "
+                f"agreement {agg_lfm['agreement']*100:.0f}%, {agg_lfm['matched']} matched, "
+                f"{agg_lfm['sam_only']} SAM-only, {agg_lfm['falcon_only']} lfm-only."
+            )
+        except Exception as exc:
+            print(f"  WARNING: LFM grounding summary for Gemma failed: {exc}")
 
     summary_text = "\n".join(summary_parts)
 
@@ -764,6 +882,17 @@ def main() -> None:
     p.add_argument("--backbone-every", type=int, default=1, help="Re-run ViT every N detections")
     p.add_argument("--resolution", type=int, default=1008)
     p.add_argument("--opacity", type=float, default=0.6)
+    p.add_argument("--json-output", help="Also write per-frame detections JSON at this path")
+    p.add_argument("--supervision", action="store_true",
+                   help="Render with supervision annotators (mask/box/label)")
+    p.add_argument("--persistent-ids", action="store_true",
+                   help="ByteTrack persistent tracker IDs across occlusions")
+    p.add_argument("--adaptive-motion", action="store_true",
+                   help="Skip detection on low-motion frames")
+    p.add_argument("--motion-threshold", type=float, default=0.03,
+                   help="Grey-delta threshold for adaptive motion skip")
+    p.add_argument("--propagate", type=int, default=0,
+                   help="Propagate last detection forward N frames after each detect")
 
     # analyze
     p = sub.add_parser("analyze", help="Full pipeline: SAM 3.1 track → Gemma 4 reasoning → report")
@@ -794,6 +923,10 @@ def main() -> None:
                    help="Run Falcon Perception on key frames for semantic deep-dive")
     p.add_argument("--falcon-frames", type=int, default=6,
                    help="Number of key frames to analyze with Falcon (default 6)")
+    p.add_argument("--no-crosscheck", action="store_true",
+                   help="Skip SAM-vs-Falcon cross-validation on key frames")
+    p.add_argument("--lfm-ground", action="store_true",
+                   help="Ask the local LFM VLM to ground targets on key frames and cross-check against SAM")
     # ── Fast-path + adaptive ─────────────────────────────────────
     p.add_argument("--fast", action="store_true",
                    help="Run fast-path Falcon scan first, return quick answer immediately")

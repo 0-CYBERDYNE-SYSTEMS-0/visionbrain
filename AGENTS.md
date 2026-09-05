@@ -19,6 +19,12 @@ VisionBrain/
 │   ├── frame_selector.py     # Motion-based frame scoring (score_frames) behind the fastscan CLI
 │   ├── zones.py              # Line/polygon zone counters, ZoneManager
 │   ├── supervision_bridge.py # Converts Falcon/SAM results to supervision.Detections + ByteTrack
+│   ├── detection_core.py     # Shared detection primitives: IoU matching, identity, cross-engine validation (pure Python)
+│   ├── direction_tracking.py # Per-track 8-way compass heading from centroid history (DirectionClassifier)
+│   ├── live_tracking.py      # LiveSamTracker.step(): per-frame SAM 3.1 tracking with cached backbone
+│   ├── model_host.py         # Refcounted MLX checkpoint residency host (HOST)
+│   ├── vlm_registry.py       # Named local VLMs (gemma|lfm|lfm3b) for ask/report, loaded via model_host
+│   ├── mlx_compat.py         # Idempotent shims so pinned mlx_vlm loads gemma4/LFM checkpoints (applied via apply_all())
 │   ├── web_app.py            # FastAPI web UI (Aerial Ground Control)
 │   ├── viz.py                # Set-of-Marks rendering, crop extraction
 │   ├── agent_tools.py        # Agent-facing tools: ground_expression(), compute_relations()
@@ -79,7 +85,8 @@ must pass with no MLX hardware and no cached weights.
 - Framework: **pytest** (version >= 8.0)
 - All tests live in `tests/test_visionbrain.py` organized into classes:
   `TestLoader`, `TestFalconPerception`, `TestAgentTools`, `TestViz`,
-  `TestReviewOutputs`, `TestCLI`, `TestWebApp`
+  `TestReviewOutputs`, `TestCLI`, `TestWebApp`, `TestDetectionCore`,
+  `TestModelHost`, `TestVLMRegistry`, `TestLiveTracking`, `TestMlxCompat`
 - Tests must pass without MLX hardware or cached model weights — heavy inference paths are skipped/mocked
 - CLI smoke tests verify each `cmd_*` function handles missing arguments gracefully
 - Loader tests validate model registry records and cache paths
@@ -87,15 +94,18 @@ must pass with no MLX hardware and no cached weights.
 
 ## Gotchas
 
-- `supervision_bridge.py` imports `supervision` at module top level, but `supervision` is **not** in `pyproject.toml` dependencies — it must be pre-installed in the environment (it is in `.venv`)
+- `supervision` **is** now a declared dependency (`supervision>=0.28,<0.30` — keep the `<0.30` pin). The heavy deps still *not* declared are `mlx` and `mlx_vlm`: `pyproject.toml` expects them pre-installed in the environment, detected at runtime with graceful fallback
 - `visionbrain fastscan` is implemented by `cmd_fastscan()` in `cli.py`; `frame_selector.py` only provides the `score_frames()` scorer
-- `src/visionbrain/__init__.py` currently exports only `__version__` — do not rely on package-level re-exports of inference functions
+- `src/visionbrain/__init__.py` exports `__version__` plus a single re-export, `DirectionClassifier` — do not rely on package-level re-exports of inference functions
+- **Keep `detection_core.py` and `direction_tracking.py` dependency-free by design** (pure Python / numpy only, no MLX): the field bridge imports the `visionbrain` package directly on hosts with no models, so these must stay lightweight and importable anywhere
+- `mlx_vlm` version window matters: `>= 0.6.1` (Gemma 4 KV-sharing weights) and `< 0.6.4` (0.6.4 drops SAM 3.1 support)
 - `FAST_PIPELINE_SPEC.md` describes an in-progress feature (fast path + adaptive sampling); check status before assuming its behavior exists
 - Web UI layout: three top-level tabs — **analyze** (video), **inspect** (image), **live** (field hub) — with all form controls in the right-rail **MISSION SETUP** panel (`#mission-setup` in `static/index.html`); tab switching toggles `.cfg-pane` elements by ID (`cfg-analyze` / `cfg-inspect` / `cfg-live`). Video modes (mission · track · fastscan) switch via `#c-mode`; image tasks (auto · detect · segment · sam3 · ocr, auto is keyword-routed) via `#c-task`. There is no bottom config bar. The analyze pipeline derives SAM targets from the query server-side (`prompt_router`) — there is no separate prompts field on the video pane
-- Live tab talks **directly to the field hub** at `ws://127.0.0.1:8765` as role `dashboard` (observer relay ~5fps): binary frames are `>III` header + JPEG + telemetry JSON (decode offsets 4/8 for lengths); detections arrive as `type:"detections"` with an `items` array of normalized xyxy boxes. Controls send `set_engine` (incl. `lfm_model`: lfm|lfm3b), `set_vlm`, and `ask {question}` — see `LIVE` state object in index.html
+- Live tab talks **directly to the field hub** at `ws://127.0.0.1:8765` as role `dashboard` (observer relay ~5fps): binary frames use the bridge wire format `>III` = (frame_id, timestamp_ms, jpeg_len) + JPEG + `>I` telem_len + telemetry JSON — jpeg_len is at offset 8, pixels at offset 12; detections arrive as `type:"detections"` with an `items` array of normalized xyxy boxes. Controls send `set_engine` (incl. `lfm_model`: lfm|lfm3b), `set_vlm`, and `ask {question}` — see `LIVE` state object in index.html
 - Live-tab **record** exports the annotated view client-side via `canvas.captureStream` + MediaRecorder (MP4 if supported, else WebM) — overlays included by construction since the canvas is what's recorded; **report** button posts `{type:"report", report_type:"field", summary}` where summary is a counts line built from the last detections frame
 - The annotator palette constant is `SOM_PALETTE` in `viz.py` (renamed from `FARM_PALETTE`)
 - SAM 3.1 weights (`mlx-community/sam3.1-bf16`, snapshot `a992e302…`) are already MLX-layout/post-sanitize; the local `.venv` patch at `.venv/lib/python3.14/site-packages/mlx_vlm/models/sam3_1/sam3_1.py::sanitize()` detects this (`mask_embed.conv` marker) and passes them through — without it every Conv2d double-transposes and `track_video` dies with a shape mismatch. Pre-patch original kept beside it as `sam3_1.py.bak-pre-fix`. If mlx-vlm is ever upgraded, re-check this guard still applies
+- `prototype/` (repo root, untracked) holds standalone gallery/cockpit HTML design mockups; kept out of `static/` so the web app does not serve them
 
 ## Commit & Pull Request Guidelines
 
@@ -107,7 +117,7 @@ must pass with no MLX hardware and no cached weights.
 
 ## Key Design Decisions
 
-- **Two-machine architecture**: SAM 3.1 runs locally on Mac Mini M4 (16GB), Gemma 4 26B runs on remote GPU server via HTTP
+- **Two-machine architecture, evolved into a backend chain**: SAM 3.1 always runs locally (Mac Mini M4, 16GB); ask/report Gemma resolves a backend via `gemma_inference.available_backend()` — `ollama` (local endpoint) | `remote` (GPU server over HTTP) | `local` (MLX VLM via `vlm_registry`). Local VLM checkpoints (gemma/lfm/lfm3b) load through `model_host.HOST` so co-resident callers share one copy
 - **MLX ecosystem**: All models use MLX-community weights for Apple Silicon optimization
 - **FastAPI web UI**: The `web_app.py` module serves the VisionBrain — Aerial Ground Control dashboard (FastAPI title and `static/index.html` `<title>`) with static assets from `static/`
 - **No modifications to existing projects**: VisionBrain reads from cached weights and the Falcon-Perception git repo without writing back
