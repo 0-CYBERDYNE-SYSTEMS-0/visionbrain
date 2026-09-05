@@ -1958,17 +1958,37 @@ function liveDrawFrame(buf) {
 }
 
 function liveBox(ctx, d, W, H) {
-  const b = d.box; if (!b || b.length < 4) return;
-  const x1 = b[0]*W, y1 = b[1]*H, w = (b[2]-b[0])*W, h = (b[3]-b[1])*H;
   const color = LIVE_PALETTE[(d.color_id ?? d.track_id ?? 0) % 8];
-  ctx.strokeStyle = color; ctx.lineWidth = 2;
-  ctx.strokeRect(x1, y1, w, h);
+  const poly = d.polygon;
+  let labelAnchor = null;
+  if (poly && poly.length >= 3) {
+    // Painted mask: fill the object's outline, stroke its edge.
+    ctx.beginPath();
+    ctx.moveTo(poly[0][0]*W, poly[0][1]*H);
+    for (let k = 1; k < poly.length; k++) ctx.lineTo(poly[k][0]*W, poly[k][1]*H);
+    ctx.closePath();
+    ctx.save();
+    ctx.globalAlpha = 0.30; ctx.fillStyle = color; ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+    labelAnchor = [Math.min(...poly.map(p => p[0]))*W, Math.min(...poly.map(p => p[1]))*H];
+  }
+  const b = d.box;
+  if (b && b.length >= 4) {
+    const x1 = b[0]*W, y1 = b[1]*H, w = (b[2]-b[0])*W, h = (b[3]-b[1])*H;
+    if (!labelAnchor) {
+      ctx.strokeStyle = color; ctx.lineWidth = 2;
+      ctx.strokeRect(x1, y1, w, h);
+      labelAnchor = [x1, y1];
+    }
+  }
+  if (!labelAnchor) return;
   let label = `${d.label}${d.track_state === 'predicted' ? ' ·held' : ''} ${Math.round((d.score||0)*100)}%`;
   if (d.direction && d.direction !== 'unknown' && d.direction !== 'stationary') label += ' · ' + d.direction;
   ctx.font = '12px monospace';
   const tw = ctx.measureText(label).width + 8;
-  ctx.fillStyle = color; ctx.fillRect(x1, Math.max(0,y1-16), tw, 16);
-  ctx.fillStyle = '#000'; ctx.fillText(label, x1+4, Math.max(11,y1-4));
+  ctx.fillStyle = color; ctx.fillRect(labelAnchor[0], Math.max(0,labelAnchor[1]-16), tw, 16);
+  ctx.fillStyle = '#000'; ctx.fillText(label, labelAnchor[0]+4, Math.max(11,labelAnchor[1]-4));
 }
 
 function liveSend(obj) { if (LIVE.ws && LIVE.ws.readyState === 1) LIVE.ws.send(JSON.stringify(obj)); return !!LIVE.ws; }

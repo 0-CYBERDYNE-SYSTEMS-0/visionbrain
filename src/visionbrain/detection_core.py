@@ -299,3 +299,59 @@ def merge_validate(
         for i, it in enumerate(llm):
             it.setdefault("track_id", i)
     return overlay, llm, stats
+
+
+def mask_to_polygon(
+    mask: Any,
+    width: int,
+    height: int,
+    max_points: int = 48,
+) -> Optional[list[list[float]]]:
+    """Extract a normalized outline polygon from a binary mask.
+
+    Traces per-row pixel runs (leftmost/rightmost true pixel) top-down then
+    back up — a dependency-free contour approximation suited to the blobby
+    single-object masks SAM produces. Mask pixel coordinates are resolved
+    against ``(width, height)``, so callers must pass the mask's own frame
+    dimensions (SAM masks arrive frame-sized).
+
+    Returns ``[[x, y], ...]`` normalized to 0-1 and rounded to 4 decimals, or
+    ``None`` when the mask is empty/invalid or numpy is unavailable.
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        return None
+
+    m = np.asarray(mask)
+    if m.ndim != 2 or m.size == 0:
+        return None
+    m = m != 0
+    true_rows = np.nonzero(m.any(axis=1))[0]
+    if true_rows.size == 0:
+        return None
+
+    # Subsample rows so the emitted polygon stays bounded on wire + canvas.
+    max_points = max(6, int(max_points))
+    step = max(1, true_rows.size // (max_points // 2))
+    sampled = true_rows[::step].tolist()
+    if sampled[-1] != int(true_rows[-1]):
+        sampled.append(int(true_rows[-1]))
+
+    left: list[int] = []
+    right: list[int] = []
+    for r in sampled:
+        cols = np.nonzero(m[r])[0]
+        left.append(int(cols[0]))
+        right.append(int(cols[-1]))
+
+    poly = [[left[k], int(sampled[k])] for k in range(len(sampled))]
+    poly += [[right[k], int(sampled[k])] for k in range(len(sampled) - 1, -1, -1)]
+
+    sx = max(1.0, float(width))
+    sy = max(1.0, float(height))
+
+    def _norm(value: int, span: float) -> float:
+        return round(max(0.0, min(1.0, float(value) / span)), 4)
+
+    return [[_norm(x, sx), _norm(y, sy)] for x, y in poly]

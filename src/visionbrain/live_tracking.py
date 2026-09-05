@@ -91,13 +91,20 @@ def _default_preprocess(processor, image):
     return mx.array(inputs["pixel_values"])
 
 
+def _default_mask_to_polygon(mask, width: int, height: int):
+    """Default mask->polygon hook (detection_core's dependency-free tracer)."""
+    from .detection_core import mask_to_polygon
+
+    return mask_to_polygon(mask, width, height)
+
+
 class LiveSamTracker:
     """Per-shot SAM 3.1 tracker holding backbone cache + SimpleTracker state.
 
     Call :meth:`step` once per frame; returns normalized items carrying
     ``label`` / ``score`` / ``box`` (xyxy normalized 0-1) / ``source="sam"`` /
-    ``track_id`` / ``color_id`` / ``track_state`` (+ optional ``polygon`` when
-    a mask-to-polygon hook is supplied).
+    ``track_id`` / ``color_id`` / ``track_state`` (+ ``polygon`` — the mask
+    outline, extracted by default whenever the model returns masks).
     """
 
     def __init__(
@@ -126,7 +133,10 @@ class LiveSamTracker:
         self._backbone_fn = backbone_fn or _default_backbone
         self._detect_fn = detect_fn or _default_detect
         self._preprocess_fn = preprocess_fn or _default_preprocess
-        self._mask_to_polygon = mask_to_polygon
+        # Polygon outlines are emitted by default so every consumer sees the
+        # painted mask shape, not just the box around it; callers may still
+        # inject their own tracer (or None to disable).
+        self._mask_to_polygon = mask_to_polygon or _default_mask_to_polygon
         self._tracker = tracker  # injectable; else lazily built
         self.reset()
 

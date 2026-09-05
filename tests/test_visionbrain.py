@@ -497,6 +497,23 @@ class TestWebApp:
 
         web_app._jobs.pop(jid, None)
 
+    def test_find_upload_skips_stills_dir(self, tmp_path, monkeypatch):
+        from fastapi import HTTPException
+
+        from visionbrain import web_app
+
+        (tmp_path / "abc123.mp4").write_bytes(b"fake")
+        (tmp_path / "abc123_stills").mkdir()          # analyze sidecar directory
+        (tmp_path / "abc123_stills" / "f0.jpg").write_bytes(b"j")
+        monkeypatch.setattr(web_app, "UPLOADS", tmp_path)
+
+        assert web_app._find_upload("abc123") == tmp_path / "abc123.mp4"
+        try:
+            web_app._find_upload("zzzz")
+            raise AssertionError("expected HTTPException for missing upload")
+        except HTTPException as exc:
+            assert exc.status_code == 404
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Prompt router tests (no MLX required — pure Python)
@@ -672,6 +689,52 @@ class TestDetectionCore:
         fal = [{"label": "tractor", "score": 0.6, "box": [0.6, 0.6, 0.9, 0.9]}]
         overlay, llm, stats = merge_validate(sam, fal, mode="soft")
         assert len(overlay) == 2 and stats["agree"] == 0
+
+    @staticmethod
+    def _rect_mask(rows=(10, 30), cols=(20, 80), height=50, width=100):
+        import numpy as np
+
+        m = np.zeros((height, width), dtype=np.uint8)
+        m[rows[0]:rows[1], cols[0]:cols[1]] = 1
+        return m
+
+    def test_mask_to_polygon_traces_outline_normalized(self):
+        from visionbrain.detection_core import mask_to_polygon
+
+        poly = mask_to_polygon(self._rect_mask(), width=100, height=50)
+        assert poly is not None and len(poly) >= 4
+        xs = [p[0] for p in poly]
+        ys = [p[1] for p in poly]
+        assert min(xs) == 0.2 and max(xs) == 0.79   # cols 20..79 / 100
+        assert min(ys) == 0.2 and max(ys) == 0.58   # rows 10..29 / 50
+        # every point inside 0-1 and pairs
+        assert all(0.0 <= x <= 1.0 and 0.0 <= y <= 1.0 for x, y in poly)
+
+    def test_mask_to_polygon_empty_and_invalid_return_none(self):
+        import numpy as np
+
+        from visionbrain.detection_core import mask_to_polygon
+
+        assert mask_to_polygon(np.zeros((50, 100), dtype=np.uint8), 100, 50) is None
+        assert mask_to_polygon(None, 100, 50) is None
+        assert mask_to_polygon(np.zeros((0, 10)), 10, 0) is None
+        assert mask_to_polygon(np.zeros((2, 2, 2), dtype=np.uint8), 2, 2) is None
+
+    def test_mask_to_polygon_accepts_plain_lists(self):
+        from visionbrain.detection_core import mask_to_polygon
+
+        mask = [[0, 0, 0], [0, 1, 1], [0, 1, 1]]
+        poly = mask_to_polygon(mask, width=3, height=3)
+        assert poly is not None and len(poly) >= 4
+        assert max(x for x, _ in poly) == round(2 / 3, 4)
+
+    def test_mask_to_polygon_respects_max_points(self):
+        from visionbrain.detection_core import mask_to_polygon
+
+        poly = mask_to_polygon(self._rect_mask(), 100, 50, max_points=12)
+        assert poly is not None
+        assert len(poly) <= 16  # 2 * (max_points//2 + 1)
+        assert len(poly) >= 6
 
 
 class TestCrosscheck:
@@ -1371,6 +1434,91 @@ class TestLiveTracking:
             tracker.step("img", ["plane"], "detect", 200, 200,
                          frame_id=f, timestamp_ms=f * 100)
         assert len(bb_calls) == 3
+
+    def test_step_segment_emits_polygon_by_default(self):
+        import numpy as np
+
+        from visionbrain import live_tracking as lt
+
+        mask = np.zeros((200, 200), dtype=np.uint8)
+        mask[10:50, 10:50] = 1
+
+        class FakeResult:
+            scores = [0.9]
+            boxes = [[10.0, 10.0, 50.0, 50.0]]
+            labels = ["boat"]
+            track_ids = [7]
+            masks = [mask]
+
+        class FakeTracker:
+            def update(self, result):
+                return result
+
+        lt._loaded[(lt.DEFAULT_MODEL, lt.DEFAULT_RESOLUTION)] = {
+            "model": object(), "processor": object(), "predictor": object(),
+        }
+        tracker = lt.LiveSamTracker(
+            backbone_fn=lambda m, p: object(),
+            detect_fn=lambda *a, **k: FakeResult(),
+            preprocess_fn=lambda proc, img: "pixels",
+            tracker=FakeTracker(),
+        )
+        items = tracker.step("img", ["boat"], "segment", 200, 200,
+                             frame_id=1, timestamp_ms=1000)
+        assert len(items) == 1
+        poly = items[0].get("polygon")
+        assert poly is not None and len(poly) >= 4
+        xs = [p[0] for p in poly]
+        assert min(xs) == 0.05 and max(xs) == round(49 / 200, 4)
+
+    def test_step_detect_task_stays_box_only(self):
+        import numpy as np
+
+        from visionbrain import live_tracking as lt
+
+        class FakeResult:
+            scores = [0.9]
+            boxes = [[10.0, 10.0, 50.0, 50.0]]
+            labels = ["boat"]
+            track_ids = [7]
+            masks = [np.ones((200, 200), dtype=np.uint8)]
+
+        class FakeTracker:
+            def update(self, result):
+                return result
+
+        lt._loaded[(lt.DEFAULT_MODEL, lt.DEFAULT_RESOLUTION)] = {
+            "model": object(), "processor": object(), "predictor": object(),
+        }
+        tracker = lt.LiveSamTracker(
+            backbone_fn=lambda m, p: object(),
+            detect_fn=lambda *a, **k: FakeResult(),
+            preprocess_fn=lambda proc, img: "pixels",
+            tracker=FakeTracker(),
+        )
+        items = tracker.step("img", ["boat"], "detect", 200, 200,
+                             frame_id=1, timestamp_ms=1000)
+        assert "polygon" not in items[0]
+
+    def test_make_item_carries_polygon(self):
+        from visionbrain.live_engine import make_item
+
+        item = make_item(
+            [10.0, 10.0, 50.0, 50.0], 100, 100, "boat", 0.9, 3, "east",
+            polygon=[[0.1, 0.1], [0.5, 0.1], [0.5, 0.5], [0.1, 0.5]],
+        )
+        assert item["polygon"] == [[0.1, 0.1], [0.5, 0.1], [0.5, 0.5], [0.1, 0.5]]
+        # out-of-range points clamp into 0-1
+        item_clamped = make_item(
+            [0.0, 0.0, 100.0, 100.0], 100, 100, "boat", 0.9, 3, "east",
+            polygon=[[-0.2, 0.1], [0.5, 1.7], [0.5, 0.5]],
+        )
+        assert item_clamped["polygon"][0] == [0.0, 0.1]
+        assert item_clamped["polygon"][1] == [0.5, 1.0]
+        # falsy polygon omitted entirely
+        assert "polygon" not in make_item(
+            [0, 0, 1, 1], 1, 1, "x", 1.0, 0, "east", polygon=None
+        )
 
 
 if __name__ == "__main__":

@@ -25,7 +25,10 @@ Outbound JSON text messages:
     {"type": "status", "note": str}
     {"type": "detections", "items": [{"box": [x1, y1, x2, y2] (normalized
         0-1), "label": str, "score": float, "track_id": int,
-        "color_id": int, "direction": str, "track_state"?: str}]}
+        "color_id": int, "direction": str, "track_state"?: str,
+        "polygon"?: [[x, y], ...] normalized mask outline (present when SAM
+        produced a mask for the object — clients paint it as a filled shape
+        and fall back to the box when absent)}]}
     {"type": "engine_stopped"}
     {"type": "event", "event": {"kind": "line_cross" | "direction" | "dwell"
         | "watch" | "zone_enter" | "zone_exit", "zone": str, "direction": str,
@@ -144,6 +147,8 @@ from typing import Any, Optional, Sequence
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from .detection_core import mask_to_polygon
+
 __all__ = [
     "router",
     "configure",
@@ -195,12 +200,16 @@ def make_item(
     score: float,
     track_id: int,
     direction: str,
+    polygon: Optional[Sequence[Sequence[float]]] = None,
 ) -> dict:
     """Build one detection item in the client protocol.
 
     The pixel box is normalized to ``[x1, y1, x2, y2]`` in 0-1 (clamped),
     score is rounded to 3 decimals, and ``color_id`` mirrors ``track_id`` so
-    the client palette is stable per track.
+    the client palette is stable per track. ``polygon`` (optional) is already
+    normalized 0-1 — e.g. ``detection_core.mask_to_polygon`` output — and is
+    clamped/rounded through unchanged so clients can paint the object's mask
+    outline; clients fall back to the box when absent.
     """
     w = max(1.0, float(width))
     h = max(1.0, float(height))
@@ -208,7 +217,7 @@ def make_item(
     def _norm(value: float, span: float) -> float:
         return round(max(0.0, min(1.0, float(value) / span)), 4)
 
-    return {
+    item = {
         "box": [
             _norm(box_px[0], w),
             _norm(box_px[1], h),
@@ -221,6 +230,15 @@ def make_item(
         "color_id": int(track_id),
         "direction": str(direction),
     }
+    if polygon:
+        item["polygon"] = [
+            [round(max(0.0, min(1.0, float(p[0]))), 4),
+             round(max(0.0, min(1.0, float(p[1]))), 4)]
+            for p in polygon if len(p) >= 2
+        ]
+        if not item["polygon"]:
+            del item["polygon"]
+    return item
 
 
 def sanitize_clip_name(name: Any) -> Optional[str]:
@@ -1400,8 +1418,8 @@ class _EngineWorker:
         import mlx.core as mx
         from PIL import Image
 
+        from . import sam3_inference as _sam3
         from .direction_tracking import DirectionClassifier
-        from .sam3_inference import _ensure_sam31
         try:
             from mlx_vlm.models.sam3_1.generate import (
                 SimpleTracker,
@@ -1414,6 +1432,19 @@ class _EngineWorker:
                 _detect_with_backbone,
                 _get_backbone_features,
             )
+
+        def _load_sam_for_this_thread(threshold: float, resolution: int):
+            """Load SAM 3.1 fresh in THIS worker thread.
+
+            MLX binds GPU streams to the thread that loads the model:
+            reusing ``sam3_inference``'s module cache from a previous worker
+            dies on its first detect with "There is no Stream(gpu, 1) in
+            current thread" — i.e. every second engine start in one process.
+            Clearing the cache forces a clean in-thread load (~10 s) and
+            lets the stale copy be collected.
+            """
+            _sam3._sam_model_cache.clear()
+            return _sam3._ensure_sam31(threshold=threshold, resolution=resolution)
 
         cfg = self.cfg
         source = cfg["source"]
@@ -1454,9 +1485,9 @@ class _EngineWorker:
                     self.push({"type": "status", "note": f"cannot open source: {source_desc}"})
                 return
 
-            # ── model (lazy load; cached inside sam3_inference) ───────────
+            # ── model (private per-worker load; see _load_sam_for_this_thread)
             try:
-                model, processor, predictor = _ensure_sam31(
+                model, processor, predictor = _load_sam_for_this_thread(
                     threshold=threshold, resolution=resolution
                 )
             except Exception as exc:  # noqa: BLE001 — weights missing etc.
@@ -1565,6 +1596,11 @@ class _EngineWorker:
                     boxes = latest.boxes
                     labels = latest.labels or (current * len(scores))
                     track_ids = getattr(latest, "track_ids", None)
+                    # SAM paints per-object masks in frame pixel space — the
+                    # whole point of tracking this model. Extract each mask's
+                    # outline so the dashboard can paint the object, not a
+                    # rectangle around it.
+                    masks = getattr(latest, "masks", None)
                     items: list[dict] = []
                     for i, (score, box, label) in enumerate(zip(scores, boxes, labels)):
                         tid = (
@@ -1572,6 +1608,9 @@ class _EngineWorker:
                             if track_ids is not None and i < len(track_ids)
                             else i
                         )
+                        polygon = None
+                        if masks is not None and i < len(masks):
+                            polygon = mask_to_polygon(masks[i], src_w, src_h)
                         items.append(make_item(
                             [float(box[0]), float(box[1]), float(box[2]), float(box[3])],
                             src_w,
@@ -1580,6 +1619,7 @@ class _EngineWorker:
                             float(score),
                             tid,
                             "unknown",
+                            polygon=polygon,
                         ))
                     # 8-way heading per track — classify() consumes the same
                     # normalized items the client receives (box + track_id)

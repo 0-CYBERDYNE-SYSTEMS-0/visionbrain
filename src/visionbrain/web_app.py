@@ -279,10 +279,18 @@ async def api_upload(file: UploadFile = File(...)):
 
 
 def _find_upload(fid: str) -> Path:
-    matches = list(UPLOADS.glob(f"{fid}*"))
-    if not matches:
+    """Resolve a file_id to its uploaded file, never a sidecar directory.
+
+    ``{fid}*`` can match more than the upload itself: the analyze pipeline
+    writes a ``{fid}_stills`` directory beside the video. Skip directories
+    (scandir order is arbitrary, so ``matches[0]`` was a coin flip between
+    the media file and the stills dir) and prefer the shortest name when
+    several files share the prefix (``{fid}.mp4`` beats ``{fid}_small.mp4``).
+    """
+    files = [p for p in UPLOADS.glob(f"{fid}*") if p.is_file()]
+    if not files:
         raise HTTPException(404, "Upload not found")
-    return matches[0]
+    return min(files, key=lambda p: (len(p.name), p.name))
 
 
 # ── Analyze ────────────────────────────────────────────────────────────────────
