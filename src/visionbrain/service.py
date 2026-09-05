@@ -39,7 +39,8 @@ def check_token(provided: Optional[str]) -> bool:
     expected = os.environ.get("VB_TOKEN") or ""
     if not expected or not provided:
         return False
-    return hmac.compare_digest(provided, expected)
+    # hmac.compare_digest raises TypeError on non-ASCII str, so compare bytes.
+    return hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
 
 
 def max_jobs() -> int:
@@ -72,6 +73,19 @@ class JobQueue:
     def queued_count(self) -> int:
         """Number of jobs currently waiting for a slot (excludes cancelled)."""
         return sum(1 for _key, fut in self._waiters if not fut.done())
+
+    def wait_position(self, key: str) -> int:
+        """Live 1-based line spot for *key*; 0 when running or not present.
+
+        Unlike the submit-time position acquire() returns, this stays
+        truthful as waiters ahead of *key* are granted or cancelled.
+        """
+        if key in self._active:
+            return 0
+        for spot, (waiter, fut) in enumerate(self._waiters, start=1):
+            if waiter == key and not fut.done():
+                return spot
+        return 0
 
     async def acquire(self, key: str) -> int:
         """Wait for a free slot; return this job's submit-time position.

@@ -371,9 +371,9 @@ Lets VisionBrain itself play the field-hub server role: one worker streams SAM 3
 Pure asyncio/stdlib primitives for LAN/business deployments (no fastapi or MLX imports — importable anywhere):
 - `token_enabled() / check_token(provided)` — VB_TOKEN env (read at call time); constant-time compare via `hmac.compare_digest`; unset/empty disables auth entirely
 - `max_jobs() -> int` — `VB_MAX_JOBS` clamped to 1..4 (default 1); invalid → default
-- `JobQueue` — asyncio FIFO slot limiter: `acquire(key) -> position` (0 = started immediately, 1 = first in line…), `release(key)`, `queued_count`; deque-of-futures so there is no busy waiting, and a waiter cancelled while queued is skipped cleanly and never consumes a slot
+- `JobQueue` — asyncio FIFO slot limiter: `acquire(key) -> position` (0 = started immediately, 1 = first in line…), `release(key)`, `queued_count`, `wait_position(key)` (live line spot: 0 when running, 1-based while waiting); deque-of-futures so there is no busy waiting, and a waiter cancelled while queued is skipped cleanly and never consumes a slot
 
-`web_app.py` wiring: when `VB_TOKEN` is set, every `/api/*` path except `/api/healthz` requires the token via the `X-Auth-Token` header or `?token=` query (401 JSON otherwise; the live WebSocket is NOT token-enforced — protect via network boundary/reverse proxy). The heavy subprocess endpoints (`analyze`, `fastscan`, `track`, `agent`) run through a shared `JobQueue`; light image jobs (`detect`, `segment`, `sam3`, `ocr`) bypass it. Job dicts carry `queue_position`/`queued`, launch responses gain `{queued, position}`, and SSE heartbeats include both.
+`web_app.py` wiring: when `VB_TOKEN` is set, every `/api/*` path except `/api/healthz` requires the token via the `X-Auth-Token` header or `?token=` query (401 JSON otherwise). WebSocket scopes never pass through HTTP middleware, so the live WebSocket enforces the same token in-handler via `?token=` (checked before accept, close 4401). The heavy subprocess endpoints (`analyze`, `fastscan`, `track`, `agent`) run through a shared `JobQueue`; light image jobs (`detect`, `segment`, `sam3`, `ocr`) bypass it. Job dicts carry `queue_position`/`queued`, launch responses gain `{queued, queue_position}` (submit-time), and job state + SSE heartbeats report the live line position while a job still waits.
 
 ### `model_host.py` — Refcounted MLX Checkpoint Residency
 
@@ -440,7 +440,7 @@ FastAPI app serving the single-page Ground Control dashboard (`static/index.html
 - `GET /api/job/{jid}/detections|report|fast|file/{kind}` — result artifacts
 - `GET /api/clips/{name}` — serve smart-capture clips (name sanitized; traversal/bad extensions → 404)
 
-**Auth + concurrency (service.py):** set `VB_TOKEN` to require the token (X-Auth-Token header or `?token=`) on all `/api/*` except `/api/healthz` — off by default; `VB_MAX_JOBS` (1..4, default 1) caps concurrent heavy jobs via a FIFO queue with `queue_position`/`queued` visible in job state, launch responses, and SSE heartbeats. The live WebSocket is not token-enforced. See DEPLOY.md.
+**Auth + concurrency (service.py):** set `VB_TOKEN` to require the token (X-Auth-Token header or `?token=`) on all `/api/*` except `/api/healthz` — off by default; the live WebSocket is covered too (enforced in-handler, close 4401 before accept). `VB_MAX_JOBS` (1..4, default 1) caps concurrent heavy jobs via a FIFO queue with `queue_position`/`queued` visible in job state, launch responses, and SSE heartbeats (live line position while queued). See DEPLOY.md.
 
 **UI layout:**
 - Header: logo, mode tabs (analyze / detect / segment / track / sam-3 / ocr), connection status

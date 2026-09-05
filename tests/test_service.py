@@ -134,6 +134,34 @@ class TestJobQueue:
 
         asyncio.run(main())
 
+    def test_wait_position_tracks_live_line_spot(self):
+        from visionbrain.service import JobQueue
+
+        async def main():
+            q = JobQueue(1)
+            assert await q.acquire("a") == 0
+
+            b = asyncio.create_task(q.acquire("b"))
+            await asyncio.sleep(0)
+            c = asyncio.create_task(q.acquire("c"))
+            await asyncio.sleep(0)
+            assert q.wait_position("a") == 0  # running, not waiting
+            assert q.wait_position("b") == 1
+            assert q.wait_position("c") == 2
+            assert q.wait_position("ghost") == 0
+
+            q.release("a")  # grants the slot to b; c moves up one
+            assert await asyncio.wait_for(b, timeout=2) == 1
+            assert q.wait_position("b") == 0
+            assert q.wait_position("c") == 1
+
+            q.release("b")  # grants the slot to c
+            assert await asyncio.wait_for(c, timeout=2) == 2
+            assert q.wait_position("c") == 0
+            q.release("c")
+
+        asyncio.run(main())
+
     def test_cancelled_waiter_is_skipped_cleanly(self):
         from visionbrain.service import JobQueue
 
@@ -278,7 +306,7 @@ class TestWebAppQueue:
         assert r.status_code == 200
         body = r.json()
         assert body["queued"] is False
-        assert body["position"] == 0
+        assert body["queue_position"] == 0
         assert body["job_id"]
 
     def test_second_job_queues_and_reports_position(self, queued_client, monkeypatch):
@@ -294,13 +322,13 @@ class TestWebAppQueue:
         monkeypatch.setattr(web_app, "_exec", fake_exec)
 
         first = client.post("/api/job/analyze", data={"file_id": "clip"}).json()
-        assert first["position"] == 0 and first["queued"] is False
+        assert first["queue_position"] == 0 and first["queued"] is False
 
         # The second launch blocks in the handler until a slot frees, then
         # reports its submit-time line position.
         second = client.post("/api/job/fastscan", data={"file_id": "clip"}).json()
         assert second["queued"] is True
-        assert second["position"] == 1
+        assert second["queue_position"] == 1
 
         assert client.get(f"/api/job/{second['job_id']}").json()["queue_position"] == 1
 

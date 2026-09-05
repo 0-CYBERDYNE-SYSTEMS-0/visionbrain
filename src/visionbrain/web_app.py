@@ -17,12 +17,17 @@ import uuid
 from pathlib import Path
 from typing import AsyncGenerator, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import service
+from .live_engine import (
+    configure as _live_configure,
+    router as _live_router,
+    sanitize_clip_name as _sanitize_clip_name,
+)
 
 app = FastAPI(title="VisionBrain — Aerial Ground Control", docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -31,12 +36,13 @@ app.state.started_at = time.time()
 
 # ── Shared-token auth (VB_TOKEN; off by default) ──────────────────────────────
 @app.middleware("http")
-async def _token_auth(request: Request, call_next):
+async def _token_auth(request: Request, call_next) -> Response:
     """Enforce the shared token on /api/* (except /api/healthz) when enabled.
 
     Token sources, in order: the X-Auth-Token header, then the ?token= query
-    parameter. The live WebSocket route is HTTP-middleware-exempt by design —
-    see DEPLOY.md ("Token auth") for the documented gap.
+    parameter. WebSocket scopes never pass through HTTP middleware, so the
+    live WebSocket route enforces the same token in-handler (?token=,
+    close 4401 before accept) — see DEPLOY.md ("Auth (shared token)").
     """
     if service.token_enabled():
         path = request.url.path
@@ -70,11 +76,6 @@ PYTHON     = sys.executable          # same env that launched us
 STATIC_DIR = Path(__file__).parent / "static"
 
 # ── Local live engine (SAM 3.1 streamed over /api/live/ws) ────────────────────
-from .live_engine import (
-    configure as _live_configure,
-    router as _live_router,
-    sanitize_clip_name as _sanitize_clip_name,
-)
 _live_configure(UPLOADS, CLIPS)
 app.include_router(_live_router)
 
@@ -146,10 +147,9 @@ async def _run_queued(job: dict, cmd: list[str], outputs: dict[str, str]) -> int
     in a done-callback, so a client disconnect never leaks the slot.
     """
     queue = _queue()
+    job["phase"] = "queued"
     position = await queue.acquire(job["id"])
     job["queue_position"] = position
-    if position > 0:
-        job["phase"] = "queued"
     task = asyncio.create_task(_exec(job, cmd, outputs))
     task.add_done_callback(lambda _t: queue.release(job["id"]))
     return position
@@ -158,7 +158,19 @@ async def _run_queued(job: dict, cmd: list[str], outputs: dict[str, str]) -> int
 def _launch_payload(job: dict, position: int) -> dict:
     """Standard response body for a job-launch endpoint."""
     return {"job_id": job["id"], "created_at": job["ts"],
-            "queued": position > 0, "position": position}
+            "queued": position > 0, "queue_position": position}
+
+
+def _job_queue_position(job: dict) -> Optional[int]:
+    """Live line spot while *job* still waits, else its submit-time position.
+
+    While queued the recorded submit-time value goes stale as jobs ahead
+    finish, so poll the queue; once a slot is granted the recorded value
+    is returned (real _exec flips the phase to running immediately).
+    """
+    if job.get("phase") == "queued" and job.get("queue_position") is None:
+        return _queue().wait_position(job["id"])
+    return job.get("queue_position")
 
 
 # ── Status ─────────────────────────────────────────────────────────────────────
@@ -219,12 +231,12 @@ def _settings_payload() -> dict:
 
 
 @app.get("/api/settings")
-async def api_get_settings():
+async def api_get_settings() -> dict:
     return _settings_payload()
 
 
 @app.post("/api/settings")
-async def api_set_settings(request: Request):
+async def api_set_settings(request: Request) -> dict:
     from .gemma_inference import save_vlm_settings
 
     try:
@@ -515,7 +527,7 @@ async def job_agent(
     api_key:  str = Form(""),
     model:    str = Form(""),
     base_url: str = Form(""),
-):
+) -> dict:
     src = _find_upload(file_id)
     job = _new_job("agent")
     jid = job["id"]
@@ -548,7 +560,7 @@ async def get_job(jid: str):
     if not job:
         raise HTTPException(404)
     payload = {k: v for k, v in job.items() if k != "_proc"}
-    payload["queue_position"] = job.get("queue_position")
+    payload["queue_position"] = _job_queue_position(job)
     payload["queued"] = job.get("phase") == "queued"
     return payload
 
@@ -612,7 +624,7 @@ async def stream_job(jid: str, request: Request):
                     "type": "heartbeat",
                     "status": job["status"],
                     "phase": job.get("phase", "running"),
-                    "queue_position": job.get("queue_position"),
+                    "queue_position": _job_queue_position(job),
                     "queued": job.get("phase") == "queued",
                     "ts": now,
                     "last_heartbeat_at": job.get("last_heartbeat_at", now),
@@ -645,7 +657,7 @@ async def serve_upload(fid: str):
 
 
 @app.get("/api/clips/{name}")
-async def serve_clip(name: str):
+async def serve_clip(name: str) -> FileResponse:
     # sanitize_clip_name allows only [A-Za-z0-9_.-] + ".mp4" — no path
     # separators, no traversal; anything else is a 404.
     clean = _sanitize_clip_name(name)

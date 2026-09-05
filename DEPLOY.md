@@ -45,9 +45,12 @@ Clients send it as the `X-Auth-Token` header or `?token=` query parameter:
 curl -H "X-Auth-Token: pick-a-long-random-string" http://host:7860/api/status
 ```
 
-**Known gap:** the live-engine WebSocket (`/api/live/ws`) is not
-token-enforced yet — protect it at the network boundary (LAN firewall rules
-or a reverse-proxy ACL on that path) until it is.
+The live-engine WebSocket (`/api/live/ws`) never passes through the HTTP
+middleware (WebSocket scopes don't hit it), so it enforces the same token
+in-handler: append `?token=…` to the WebSocket URL. A missing or wrong
+token is rejected with close code **4401** before the connection is
+accepted. TLS (see below) is still recommended so the token isn't sent in
+the clear across the LAN.
 
 ## Concurrency
 
