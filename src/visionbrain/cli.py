@@ -826,6 +826,56 @@ def cmd_fastscan(args: argparse.Namespace) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# cmd_pilot_eval
+# ──────────────────────────────────────────────────────────────────────────────
+def cmd_pilot_eval(args: argparse.Namespace) -> None:
+    """Replay-based pilot evaluation against a ground-truth event label file."""
+    import json
+    from pathlib import Path
+
+    video_path = Path(args.video)
+    if not video_path.exists():
+        print(f"ERROR: video not found: {video_path}", file=sys.stderr)
+        sys.exit(1)
+
+    gt_path = Path(args.ground_truth)
+    if not gt_path.exists():
+        print(f"ERROR: ground-truth file not found: {gt_path}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        ground_truth = json.loads(gt_path.read_text())
+    except json.JSONDecodeError as exc:
+        print(f"ERROR: ground-truth file is not valid JSON: {gt_path} ({exc})",
+              file=sys.stderr)
+        sys.exit(1)
+
+    from .pilot_eval import run_pilot_eval
+
+    try:
+        report = run_pilot_eval(
+            str(video_path),
+            ground_truth,
+            tolerance_s=args.tolerance_s,
+            sample_every_n_seconds=args.sample_every,
+            max_frames=args.max_frames,
+            resolution=args.resolution,
+            min_relevance=args.min_relevance,
+            evidence_dir=args.evidence_dir,
+        )
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    for line in report.summary():
+        print(line)
+
+    if args.report:
+        report.save(args.report)
+        print(f"\n  Report JSON saved to: {args.report}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # main
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -963,6 +1013,27 @@ def main() -> None:
                    help="Minimum relevance to count as a region (default 0.2)")
     p.add_argument("--output", help="Write structured JSON result to this path")
 
+    # pilot-eval
+    p = sub.add_parser("pilot-eval",
+                       help="Replay-based evaluation: missed events, false alerts, "
+                            "latency and coverage against a labeled video")
+    p.add_argument("--video", required=True, help="Recorded video path to replay")
+    p.add_argument("--ground-truth", required=True,
+                   help="Ground-truth event label JSON path")
+    p.add_argument("--report", help="Write the evaluation report JSON to this path")
+    p.add_argument("--evidence-dir",
+                   help="Directory to save supporting frames as JPEG evidence")
+    p.add_argument("--tolerance-s", type=float, default=3.0,
+                   help="Matching tolerance around each event window, seconds (default 3.0)")
+    p.add_argument("--sample-every", type=float, default=5.0,
+                   help="Sample one frame every N seconds (default 5)")
+    p.add_argument("--max-frames", type=int, default=60,
+                   help="Maximum frames to score (default 60)")
+    p.add_argument("--min-relevance", type=float, default=0.2,
+                   help="Minimum relevance for a frame to count as a detection (default 0.2)")
+    p.add_argument("--resolution", type=int, default=360,
+                   help="Falcon resolution (default 360 — low-res for speed)")
+
     # ui
     p = sub.add_parser("ui", help="Launch the web Ground Control UI (opens browser)")
     p.add_argument("--port", type=int, default=7860, help="Port (default 7860)")
@@ -1006,6 +1077,7 @@ def main() -> None:
         "analyze": cmd_analyze,
         "agent": cmd_agent,
         "fastscan": cmd_fastscan,
+        "pilot-eval": cmd_pilot_eval,
     }
     dispatch[args.command](args)
 
