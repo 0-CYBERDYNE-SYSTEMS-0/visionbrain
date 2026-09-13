@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>demo60 frames</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Spectral:ital,wght@0,300;0,400;1,300&display=swap');
+
+:root {
+  --canvas: #0e100d;
+  --surface-2: #181b16;
+  --surface-3: #1f221c;
+  --ink-1: #ebe5d2;
+  --ink-2: #b8b29f;
+  --ink-3: #807a68;
+  --rule: #292d25;
+  --rule-strong: #3a3e34;
+  --accent: #d4b572;
+  --ok: #8fa97a;
+  --paper: #f3eee2;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --serif: 'Spectral', Georgia, serif;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:1920px; height:1080px; overflow:hidden; }
+body { background:transparent; font-family:var(--mono); -webkit-font-smoothing:antialiased; }
+body.opaque { background:var(--canvas); }
+
+section.frame {
+  position:absolute; inset:0; width:1920px; height:1080px;
+  display:none; overflow:hidden; color:var(--ink-1);
+}
+section.frame.show { display:block; }
+
+/* ---------- shared bits ---------- */
+.eyebrow {
+  font-size:24px; letter-spacing:.18em; text-transform:uppercase;
+  color:var(--ink-2); font-weight:500;
+}
+.eyebrow b { color:var(--accent); font-weight:500; }
+.eyebrow .dim { color:var(--ink-3); }
+.bar {
+  position:absolute; left:0; right:0; bottom:0;
+  background:rgba(14,16,13,.78);
+  border-top:1px solid var(--rule-strong);
+  padding:34px 72px 40px;
+}
+.bar .line { font-size:32px; font-weight:300; color:var(--ink-1); letter-spacing:.01em; }
+.bar .line i { font-style:normal; color:var(--accent); font-weight:500; }
+.bar .line .sep { color:var(--ink-3); padding:0 14px; }
+.chiprow { display:flex; gap:16px; align-items:center; margin-top:22px; }
+.chip {
+  display:inline-flex; align-items:center; gap:12px;
+  border:1px solid var(--rule-strong); padding:10px 18px;
+  font-size:20px; color:var(--ink-2); letter-spacing:.08em; text-transform:uppercase;
+  background:rgba(24,27,22,.85);
+}
+.chip .dot { width:9px; height:9px; border-radius:50%; background:var(--ok); }
+.chip.amber { color:var(--accent); border-color:#5a5142; }
+.tl { position:absolute; top:56px; left:72px; }
+.num { font-variant-numeric:tabular-nums; }
+
+/* ---------- o1 hook ---------- */
+#o1_hook .numbers { font-size:44px; font-weight:300; color:var(--ink-1); }
+#o1_hook .numbers i { font-style:normal; color:var(--accent); font-weight:500; }
+
+/* ---------- o3 recorded ---------- */
+
+/* ---------- o4 live ---------- */
+#o4_a .zoneline { position:absolute; left:230px; right:230px; top:585px; height:0;
+  border-top:2px solid var(--accent); opacity:.9; }
+#o4_a .zoneline::before, #o4_a .zoneline::after {
+  content:""; position:absolute; top:-7px; width:2px; height:16px; background:var(--accent);
+}
+#o4_a .zoneline::before { left:0; } #o4_a .zoneline::after { right:0; }
+#o4_a .zonetag {
+  position:absolute; right:230px; top:533px;
+  font-size:20px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent);
+  background:rgba(14,16,13,.82); border:1px solid #5a5142; padding:8px 16px;
+}
+
+/* ---------- o5 ask ---------- */
+#o5_a .bubbles { position:absolute; top:150px; left:310px; width:820px;
+  display:flex; flex-direction:column; gap:18px; }
+#o5_a .tl { top:64px; left:72px; background:rgba(14,16,13,.85);
+  border:1px solid var(--rule-strong); padding:12px 20px; }
+.bubble {
+  padding:22px 28px; font-size:29px; line-height:1.5; font-weight:300;
+  border:1px solid var(--rule-strong); color:var(--ink-1);
+  background:rgba(24,27,22,.92);
+}
+.bubble.op { align-self:flex-end; color:#0e100d; background:var(--ink-1); border-color:var(--ink-1); font-weight:500; }
+.bubble .who { display:block; font-size:17px; letter-spacing:.18em; text-transform:uppercase;
+  margin-bottom:10px; color:var(--ink-3); }
+.bubble.op .who { color:#55503f; }
+.bubble em { font-style:normal; color:var(--accent); }
+.bubble.op em { font-style:normal; color:#0e100d; text-decoration:underline; text-decoration-color:#b8a97e; }
+/* staged reveal (o5): qonly hides the visionbrain reply bubble */
+#o5_a.qonly .bubble:not(.op) { display:none; }
+
+/* ---------- f2 pipeline diagram ---------- */
+#f2_pipeline { background:var(--canvas); }
+#f2_pipeline .bg { position:absolute; inset:0; opacity:.30; }
+#f2_pipeline .bg img { width:100%; height:100%; object-fit:cover; display:block; }
+#f2_pipeline .wrap { position:absolute; inset:0; padding:96px 110px;
+  display:flex; flex-direction:column; }
+#f2_pipeline h1 { font-size:62px; font-weight:500; letter-spacing:-.01em; margin-top:18px; }
+#f2_pipeline h1 em { font-style:normal; color:var(--accent); }
+.diagram { flex:1; display:flex; align-items:center; gap:0; margin-top:8px; }
+.querycard, .outcard {
+  border:1px solid var(--rule-strong); background:rgba(24,27,22,.88);
+  padding:34px 38px; width:480px;
+}
+.querycard .lbl, .outcard .lbl { font-size:18px; letter-spacing:.18em; text-transform:uppercase;
+  color:var(--ink-3); margin-bottom:16px; }
+.querycard .q { font-size:31px; line-height:1.45; font-weight:300; color:var(--ink-1); }
+.querycard .q::before { content:"“"; color:var(--accent); }
+.querycard .q::after { content:"”"; color:var(--accent); }
+.outcard .o { font-size:29px; font-weight:300; line-height:1.75; color:var(--ink-1); }
+.outcard .o i { font-style:normal; color:var(--accent); }
+.wire { flex:1; height:0; border-top:1px solid var(--rule-strong); position:relative; min-width:60px; }
+.wire::after { content:""; position:absolute; right:-1px; top:-5px; width:9px; height:9px;
+  border-top:1px solid var(--rule-strong); border-right:1px solid var(--rule-strong);
+  transform:rotate(45deg); }
+.nodes { display:flex; gap:28px; padding:0 8px; }
+.node { width:300px; border:1px solid var(--rule-strong); background:rgba(24,27,22,.88); padding:28px 30px 30px; position:relative; }
+.node .stage { font-size:19px; letter-spacing:.18em; text-transform:uppercase; color:var(--accent); }
+.node .model { font-size:33px; font-weight:500; margin-top:12px; color:var(--ink-1); }
+.node .job { font-size:22px; font-weight:300; color:var(--ink-2); margin-top:12px; line-height:1.45; }
+.caption { border-top:1px solid var(--rule); padding-top:30px; text-align:center;
+  font-size:30px; font-weight:300; color:var(--ink-2); }
+.caption i { font-style:normal; color:var(--accent); }
+
+/* dim state for staged reveal (f2) */
+body.dim #f2_pipeline .node, body.dim #f2_pipeline .querycard .q,
+body.dim #f2_pipeline .outcard .o, body.dim #f2_pipeline .caption { opacity:.28; }
+
+/* ---------- f6 end card ---------- */
+#f6_end { background:var(--canvas); }
+#f6_end .bg { position:absolute; inset:0; }
+#f6_end .bg img { width:100%; height:100%; object-fit:cover; display:block; }
+#f6_end .bg::after { content:""; position:absolute; inset:0; background:rgba(14,16,13,.84); }
+#f6_end .wrap { position:absolute; inset:0; padding:120px 130px;
+  display:flex; flex-direction:column; }
+#f6_end .wordmark { font-size:20px; letter-spacing:.22em; text-transform:uppercase; color:var(--ink-2); }
+#f6_end .wordmark b { color:var(--ink-1); font-weight:500; }
+#f6_end h1 { font-size:96px; font-weight:500; letter-spacing:-.015em; line-height:1.06; margin-top:150px; }
+#f6_end h1 em { font-style:normal; color:var(--accent); }
+#f6_end .verts { margin-top:56px; font-size:31px; font-weight:300; color:var(--ink-2); }
+#f6_end .verts .sep { color:var(--ink-3); padding:0 16px; }
+#f6_end .quiet { margin-top:26px; font-size:31px; font-weight:300; color:var(--ink-2); }
+#f6_end .cta { margin-top:auto; border-top:1px solid var(--rule); padding-top:36px;
+  display:flex; justify-content:space-between; align-items:baseline; }
+#f6_end .cta .ask { font-size:40px; font-weight:500; color:var(--accent); }
+#f6_end .cta .sub { font-size:20px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-3); }
+</style>
+</head>
+<body>
+
+<!-- ============ o1 · hook overlay ============ -->
+<section class="frame" id="o1_hook">
+  <div class="tl eyebrow"><b>ONE QUERY</b><span class="dim"> · </span>PORT OF ROTTERDAM</div>
+  <div class="bar">
+    <div class="line num"><i>480</i> frames<span class="sep">·</span><i>96</i> processed<span class="sep">·</span><i>338</i> unique objects tracked</div>
+    <div class="chiprow">
+      <span class="chip"><span class="dot"></span>complete · report ready</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ f2 · pipeline diagram ============ -->
+<section class="frame" id="f2_pipeline">
+    <div class="bg"><img src="file:///Users/scrimwiggins/VisionBrain/marketing/shots/analyze_running_1920.png" alt=""></div>
+  <div class="wrap">
+    <div class="eyebrow"><b>HOW IT WORKS</b><span class="dim"> · </span>ON YOUR HARDWARE</div>
+    <h1>Three models, <em>one pipeline</em></h1>
+    <div class="diagram">
+      <div class="querycard">
+        <div class="lbl">query in</div>
+        <div class="q">vessels and trucks at the quay</div>
+      </div>
+      <div class="wire"></div>
+      <div class="nodes">
+        <div class="node">
+          <div class="stage">tracking</div>
+          <div class="model">SAM 3.1</div>
+          <div class="job">per-frame masks, persistent track ids</div>
+        </div>
+        <div class="node">
+          <div class="stage">grounding</div>
+          <div class="model">Falcon</div>
+          <div class="job">detect · segment · ocr</div>
+        </div>
+        <div class="node">
+          <div class="stage">reasoning</div>
+          <div class="model">Gemma 4</div>
+          <div class="job">field reports, plain-language q&amp;a</div>
+        </div>
+      </div>
+      <div class="wire"></div>
+      <div class="outcard">
+        <div class="lbl">results out</div>
+        <div class="o">annotated video<br>structured json<br><i>written field report</i></div>
+      </div>
+    </div>
+    <div class="caption">one query in — annotated video, structured json, and a written field report out.</div>
+  </div>
+</section>
+
+<!-- ============ o3 · recorded footage overlay ============ -->
+<section class="frame" id="o3_a">
+  <div class="tl eyebrow"><b>PIPELINE 01</b><span class="dim"> · </span>RECORDED FOOTAGE</div>
+  <div class="bar">
+    <div class="line">query in<span class="sep">→</span>tracks <span class="sep">·</span> counts <span class="sep">·</span> <i>written report</i></div>
+  </div>
+</section>
+<section class="frame" id="o3_b">
+  <div class="tl eyebrow"><b>PIPELINE 01</b><span class="dim"> · </span>RECORDED FOOTAGE</div>
+</section>
+
+<!-- ============ o4 · live site overlays ============ -->
+<section class="frame" id="o4_a">
+  <div class="tl eyebrow"><b>PIPELINE 02</b><span class="dim"> · </span>LIVE SITE</div>
+  <div class="zoneline"></div>
+  <div class="zonetag">line zone · armed</div>
+  <div class="bar">
+    <div class="line">one live feed<span class="sep">·</span>zone counters<span class="sep">·</span>eight-way direction<span class="sep">·</span>dwell</div>
+  </div>
+</section>
+<section class="frame" id="o4_b">
+  <div class="tl eyebrow"><b>PIPELINE 02</b><span class="dim"> · </span>LIVE SITE</div>
+  <div class="bar">
+    <div class="line">evidence clips on trigger — <i>35 in one session</i></div>
+    <div class="chiprow">
+      <span class="chip"><span class="dot"></span>hub ready · 5 fps relay</span>
+      <span class="chip amber">● recording annotated view</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ o5 · ask the scene overlays ============ -->
+<section class="frame" id="o5_a">
+  <div class="tl eyebrow"><b>PIPELINE 03</b><span class="dim"> · </span>ASK THE SCENE</div>
+  <div class="bubbles">
+    <div class="bubble op"><span class="who">operator</span>what do you see?</div>
+    <div class="bubble"><span class="who">visionbrain</span><em>4 tracked objects</em> in frame, movement nominal. no perimeter events in the last 60&nbsp;s.</div>
+  </div>
+</section>
+<section class="frame" id="o5_b">
+  <div class="tl eyebrow"><b>PIPELINE 03</b><span class="dim"> · </span>ASK THE SCENE</div>
+  <div class="bar">
+    <div class="line">answer<span class="sep">·</span>field report<span class="sep">·</span>evidence<span class="sep">→</span><i>work order</i></div>
+  </div>
+</section>
+
+<!-- ============ f6 · end card ============ -->
+<section class="frame" id="f6_end">
+    <div class="bg"><img src="file:///Users/scrimwiggins/VisionBrain/marketing/shots/annotated_frame.jpg" alt=""></div>
+  <div class="wrap">
+    <div class="wordmark"><b>VisionBrain</b> · ground control</div>
+    <h1>your footage never<br>leaves <em>the building.</em></h1>
+    <div class="verts">ports &amp; terminals<span class="sep">·</span>logistics yards<span class="sep">·</span>corridors<span class="sep">·</span>shipyards</div>
+    <div class="quiet">no cloud. no subscription. runs on your apple silicon.</div>
+    <div class="cta">
+      <div class="ask">bring a 20-second clip. leave with a report.</div>
+      <div class="sub">aerial intelligence · mlx</div>
+    </div>
+  </div>
+</section>
+
+<script>
+  const p = new URLSearchParams(location.search);
+  const f = p.get('f');
+  if (f) {
+    document.getElementById(f)?.classList.add('show');
+    const opaque = ['f2_pipeline', 'f6_end'].includes(f);
+    if (opaque) document.body.classList.add('opaque');
+    if (p.get('v') === 'dim') document.body.classList.add('dim');
+    if (p.get('v') === 'q') document.getElementById(f)?.classList.add('qonly');
+  } else {
+    // no param: show all stacked (dev preview)
+    document.querySelectorAll('section.frame').forEach(s => s.classList.add('show'));
+  }
+</script>
+</body>
+</html>

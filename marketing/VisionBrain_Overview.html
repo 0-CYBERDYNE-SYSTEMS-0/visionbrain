@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VisionBrain — product overview</title>
+<link rel="stylesheet" href="social/cards.css">
+<style>
+@page { size: 297mm 210mm; margin: 0; }
+html, body { margin: 0; padding: 0; background: #0e100d; }
+.page {
+  width: 297mm; height: 210mm;
+  box-sizing: border-box;
+  padding: 18mm 20mm;
+  page-break-after: always;
+  display: flex; flex-direction: column;
+  position: relative;
+}
+.page:last-child { page-break-after: auto; }
+* { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+.eyebrow { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); }
+.eyebrow b { color: var(--accent); font-weight: 500; }
+.headline { font-weight: 500; line-height: 1.12; letter-spacing: -0.01em; color: var(--ink-1); }
+.headline em { font-style: normal; color: var(--accent); }
+.sub { color: var(--ink-2); font-weight: 300; line-height: 1.55; }
+
+/* footer strip on every page */
+.pfoot {
+  margin-top: auto; padding-top: 5mm; border-top: 1px solid var(--rule);
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 8.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+}
+.pfoot .wordmark { color: var(--ink-1); font-weight: 500; font-size: 11px; }
+.pfoot .wordmark span { color: var(--accent); }
+
+/* cover */
+.cover { justify-content: space-between; }
+.cover .headline { font-size: 54px; max-width: 78%; }
+.cover .sub { font-size: 15px; max-width: 62%; margin-top: 10mm; }
+.cover .chips { display: flex; gap: 8px; margin-top: 10mm; }
+.cover .bigmark { font-size: 13px; letter-spacing: 0.3em; color: var(--ink-3); text-transform: uppercase; }
+.cover .bigmark b { color: var(--ink-1); font-weight: 500; }
+.coverline { border-top: 1px solid var(--rule-strong); padding-top: 6mm; display: flex; justify-content: space-between; color: var(--ink-3); font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; }
+
+/* content pages */
+.h { font-size: 27px; max-width: 86%; margin-top: 4mm; }
+.lead { font-size: 11.5px; margin-top: 4mm; max-width: 70%; }
+
+.shot { position: relative; margin-top: 7mm; }
+.shot img { display: block; width: 100%; border: 1px solid var(--rule-strong); }
+.brackets::before, .brackets::after, .shot .b::before, .shot .b::after {
+  content: ""; position: absolute; width: 12px; height: 12px; border-color: var(--accent); border-style: solid;
+}
+.brackets::before { top: -2px; left: -2px; border-width: 1.5px 0 0 1.5px; }
+.brackets::after  { top: -2px; right: -2px; border-width: 1.5px 1.5px 0 0; }
+.shot .b::before { bottom: -2px; left: -2px; border-width: 0 0 1.5px 1.5px; }
+.shot .b::after  { bottom: -2px; right: -2px; border-width: 0 1.5px 1.5px 0; }
+.cap { font-size: 8.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-top: 3mm; }
+
+/* pipeline rows */
+.pipe { margin-top: 8mm; border-top: 1px solid var(--rule); }
+.pipe .row { display: grid; grid-template-columns: 42mm 52mm 1fr; gap: 8mm; padding: 5mm 0; border-bottom: 1px solid var(--rule); align-items: baseline; }
+.pipe .stage { font-size: 9px; letter-spacing: 0.16em; color: var(--accent); }
+.pipe .model { color: var(--ink-1); font-weight: 500; font-size: 13px; }
+.pipe .job { color: var(--ink-2); font-weight: 300; font-size: 10.5px; line-height: 1.5; }
+
+/* triptych */
+.tri { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6mm; margin-top: 8mm; }
+.tri img { width: 100%; display: block; border: 1px solid var(--rule-strong); }
+.tri figcaption { margin-top: 2.5mm; font-size: 8px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); line-height: 1.7; }
+
+/* stats band */
+.band { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); margin-top: 9mm; }
+.stat { padding: 6mm 6mm 2mm 0; }
+.stat + .stat { border-left: 1px solid var(--rule); padding-left: 6mm; }
+.stat .n { font-size: 30px; font-weight: 500; color: var(--ink-1); font-variant-numeric: tabular-nums; }
+.stat .n i { font-style: normal; color: var(--accent); }
+.stat .n small { font-size: 14px; }
+.stat .l { font-size: 8px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-top: 2mm; line-height: 1.6; }
+
+/* bubbles + paper */
+.exchange { display: flex; flex-direction: column; gap: 4mm; margin-top: 8mm; max-width: 150mm; }
+.bubble { max-width: 82%; padding: 4mm 5mm; font-size: 10px; line-height: 1.55; border: 1px solid var(--rule); color: var(--ink-2); background: var(--surface-2); }
+.bubble.op { align-self: flex-end; color: var(--canvas); background: var(--ink-1); border-color: var(--ink-1); font-weight: 500; }
+.bubble .who { display: block; font-size: 7.5px; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 1.5mm; color: var(--ink-3); }
+.bubble.op .who { color: #55503f; }
+.paper { background: var(--paper); color: #26241c; padding: 5mm 6mm; font-family: var(--serif); font-size: 11px; line-height: 1.55; max-width: 150mm; }
+.paper .ph2 { font-family: var(--mono); font-size: 7.5px; letter-spacing: 0.16em; text-transform: uppercase; color: #8a8368; margin-bottom: 2mm; }
+
+/* two columns */
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14mm; margin-top: 8mm; }
+.cols h3 { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; margin: 0 0 4mm; }
+.cols h3 b { color: var(--accent); font-weight: 500; }
+.cols ul { list-style: none; margin: 0; padding: 0; }
+.cols li { padding: 2.8mm 0; border-bottom: 1px solid var(--rule); color: var(--ink-2); font-weight: 300; font-size: 10px; line-height: 1.5; }
+.cols li::before { content: "→ "; color: var(--ink-4); }
+.cols li b { color: var(--ink-1); font-weight: 500; }
+
+/* verticals grid */
+.vert { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--rule); border: 1px solid var(--rule); margin-top: 8mm; }
+.vert div { background: #0e100d; padding: 6mm 7mm; }
+.vert .v { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); margin-bottom: 2.5mm; }
+.vert p { color: var(--ink-2); font-weight: 300; font-size: 10px; line-height: 1.55; margin: 0; }
+
+.run { margin-top: 8mm; display: inline-block; background: var(--surface-2); border: 1px solid var(--rule-strong); padding: 5mm 7mm; color: var(--ink-2); font-size: 11px; }
+.run b { color: var(--ink-1); font-weight: 500; }
+</style>
+</head>
+<body>
+
+<!-- PAGE 1 · COVER -->
+<div class="page cover">
+  <div>
+    <div class="eyebrow">VISIONBRAIN <b>◆</b> AERIAL GROUND CONTROL</div>
+    <div class="headline" style="margin-top:16mm">aerial intelligence<br>that runs on <em>your desk</em>.</div>
+    <div class="sub">three vision models stitched into one pipeline — tracking, grounding, reasoning —
+    over drone and camera footage, entirely on apple silicon. no cloud round-trip. no per-seat pricing.
+    no footage leaving the building.</div>
+    <div class="chips">
+      <span class="chip"><span class="dot"></span>SAM 3.1 · TRACKING</span>
+      <span class="chip"><span class="dot"></span>FALCON PERCEPTION · GROUNDING</span>
+      <span class="chip"><span class="dot"></span>GEMMA 4 · REASONING</span>
+    </div>
+  </div>
+  <div>
+    <div class="coverline">
+      <div class="bigmark"><b>VISIONBRAIN</b> ◆ PRODUCT OVERVIEW</div>
+      <div>2026 · OPERATOR'S EDITION</div>
+    </div>
+  </div>
+</div>
+
+<!-- PAGE 2 · HOW IT WORKS -->
+<div class="page">
+  <div class="eyebrow">HOW IT WORKS</div>
+  <div class="headline h">one query in. <em>three models</em> later: annotated video, structured json, and a written field report.</div>
+  <div class="sub lead">type "vessels and trucks at the quay" — the prompt router splits your sentence into
+  tracking targets for sam 3.1 and a semantic question for gemma. the output is the triad ops teams actually need.</div>
+  <div class="pipe">
+    <div class="row"><div class="stage">1 · TRACKING</div><div class="model">SAM 3.1</div><div class="job">per-frame masks and persistent track ids across the whole clip, on-device via MLX.</div></div>
+    <div class="row"><div class="stage">2 · GROUNDING</div><div class="model">Falcon Perception</div><div class="job">expression-level detect, segment, and ocr on key frames — "person pushing a stroller", not just "person".</div></div>
+    <div class="row"><div class="stage">3 · REASONING</div><div class="model">Gemma 4</div><div class="job">counts, anomalies, and recommended actions in a field report — resolved locally via ollama, your own gpu server, or on-device.</div></div>
+  </div>
+  <div class="pfoot"><div class="wordmark">visionbrain<span>◆</span></div><div>HOW IT WORKS · 02</div></div>
+</div>
+
+<!-- PAGE 3 · MISSION (ANALYZE) -->
+<div class="page">
+  <div class="eyebrow">MISSION CONTROL <b>◆</b> ANALYZE</div>
+  <div class="headline h">every sweep becomes <em>evidence</em>: the clip, the counts, and the write-up.</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:6mm;margin-top:7mm">
+    <div class="shot brackets" style="margin:0"><span class="b"></span>
+      <img src="shots/analyze_results_1920.png" alt="completed mission with stats and field report">
+    </div>
+    <div class="shot brackets" style="margin:0"><span class="b"></span>
+      <img src="shots/annotated_frame.jpg" alt="annotated output frame with sam 3.1 track contours">
+    </div>
+  </div>
+  <div class="cap">LEFT — MISSION VIEW: 480 frames → 96 processed · 338 objects · 445 detections · field report in 66 s<br>
+  RIGHT — ACTUAL ANNOTATED OUTPUT: sam 3.1 track contours + confidence, rendered by the pipeline</div>
+  <div class="pfoot"><div class="wordmark">visionbrain<span>◆</span></div><div>ANALYZE · 03</div></div>
+</div>
+
+<!-- PAGE 4 · ENVIRONMENTS -->
+<div class="page">
+  <div class="eyebrow">ONE PLATFORM · MANY ENVIRONMENTS</div>
+  <div class="headline h">ports, yards, corridors — <em>the same three questions</em>: what is here, what moved, what matters.</div>
+  <div class="tri">
+    <figure style="margin:0"><img src="shots/analyze_results_1920.png" alt="analyze mission results">
+      <figcaption>ANALYZE<br>full mission · stats + report</figcaption></figure>
+    <figure style="margin:0"><img src="shots/inspect_segment_1920.png" alt="set-of-marks segmentation">
+      <figcaption>INSPECT<br>falcon detect · segment · ocr</figcaption></figure>
+    <figure style="margin:0"><img src="shots/live_terminal_1920.png" alt="live yard feed">
+      <figcaption>LIVE<br>field hub · 5 fps relay</figcaption></figure>
+  </div>
+  <div class="pfoot"><div class="wordmark">visionbrain<span>◆</span></div><div>ENVIRONMENTS · 04</div></div>
+</div>
+
+<!-- PAGE 5 · LIVE OPS -->
+<div class="page">
+  <div class="eyebrow">LIVE OPERATIONS</div>
+  <div class="headline h">ask the scene a question. <em>get an answer</em> before the drone lands.</div>
+  <div class="shot brackets" style="margin:0;max-width:72%"><span class="b"></span>
+    <img src="shots/live_quay_1920.png" alt="live field hub over a port berth">
+  </div>
+  <div class="exchange" style="margin-top:5mm">
+    <div class="bubble op" style="padding:3mm 4mm;font-size:9px"><span class="who">operator</span>what do you see?</div>
+    <div class="bubble" style="padding:3mm 4mm;font-size:9px"><span class="who">visionbrain · gemma 4 e2b</span>holding pattern over the quay. 4 tracked objects in frame, movement nominal. no perimeter events in the last 60 s.</div>
+  </div>
+  <div class="pfoot"><div class="wordmark">visionbrain<span>◆</span></div><div>LIVE OPS · 05</div></div>
+</div>
+
+<!-- PAGE 6 · NUMBERS -->
+<div class="page">
+  <div class="eyebrow">THE NUMBERS</div>
+  <div class="headline h">measured, not projected. <em>one 32 GB mac</em>, all three models co-resident.</div>
+  <div class="band">
+    <div class="stat"><div class="n"><i>338</i></div><div class="l">objects tracked · 20 s quay clip · one query</div></div>
+    <div class="stat"><div class="n">~7</div><div class="l">fps end-to-end tracking at 512 px</div></div>
+    <div class="stat"><div class="n">23.1<small> GB</small></div><div class="l">falcon + sam + gemma resident in ram</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">bytes of footage to any cloud</div></div>
+  </div>
+  <div class="sub lead" style="margin-top:10mm">zone counters (line + polygon), 8-way direction classification, and bytetrack
+  identity come standard. fastscan answers "is it there?" in under a minute; the full pipeline keeps working behind it.
+  chunked processing chews through long recordings that would starve a single-pass pipeline.</div>
+  <div class="pfoot"><div class="wordmark">visionbrain<span>◆</span></div><div>NUMBERS · 06</div></div>
+</div>
+
+<!-- PAGE 7 · TODAY + ROADMAP -->
+<div class="page">
+  <div class="eyebrow">WHERE IT STANDS</div>
+  <div class="headline h">shipped, in progress, and <em>direction</em> — labeled exactly like that.</div>
+  <div class="cols">
+    <div>
+      <h3><b>◆</b> SHIPPED — RUNNING TODAY</h3>
+      <ul>
+        <li><b>full pipeline</b> — sam 3.1 track → falcon refine → gemma report, from one query</li>
+        <li><b>ground control ui</b> — analyze · inspect · live panes, resizable operator layout</li>
+        <li><b>live field hub</b> — relay, detection hud, ask-the-scene, reports, annotated recording</li>
+        <li><b>fastscan</b> — quick answers in under a minute; full pipeline continues behind it</li>
+        <li><b>structured video</b> — chunked processing for long recordings, adaptive sampling</li>
+        <li><b>api + cli</b> — visionbrain detect | segment | ocr | track | analyze | fastscan | status</li>
+      </ul>
+    </div>
+    <div>
+      <h3><b>◇</b> IN PROGRESS · THEN DIRECTION</h3>
+      <ul>
+        <li><b>fast-path hardening</b> — quick-answer-first, full pipeline behind it (spec'd, flags live in the ui)</li>
+        <li><b>alert rules on zones</b> — dwell, loiter, wrong-way, perimeter breach → webhook on event</li>
+        <li><b>hub federation</b> — one dashboard, n field relays, per-feed engine control</li>
+        <li><b>thermal + low-light profiles</b> — night patrols without retuning queries</li>
+        <li><b>scheduled sweeps</b> — waypoint missions with per-leg queries</li>
+        <li><b>report templates per vertical</b> — port ops, terminals, corridors, perimeters</li>
+      </ul>
+    </div>
+  </div>
+  <div class="pfoot"><div class="wordmark">visionbrain<span>◆</span></div><div>STATE OF THE BOARD · 07</div></div>
+</div>
+
+<!-- PAGE 8 · FOR BUSINESS + CTA -->
+<div class="page">
+  <div class="eyebrow">WHO THIS IS FOR</div>
+  <div class="headline h">businesses that fly drones and <em>can't ship the footage</em> to someone else's cloud.</div>
+  <div class="vert">
+    <div><div class="v">PORTS &amp; TERMINALS</div><p>berth oversight without shipping footage ashore. vessels, cranes, and truck traffic from one query.</p></div>
+    <div><div class="v">LOGISTICS YARDS</div><p>gate-to-gate truck counts, dwell time, and lane discipline — each a single question.</p></div>
+    <div><div class="v">CORRIDORS &amp; INFRASTRUCTURE</div><p>every overpass, every sweep, written up before the drone lands.</p></div>
+    <div><div class="v">SECURITY &amp; PERIMETER</div><p>live hub + zones + direction tracking: a fence that writes its own log.</p></div>
+  </div>
+  <div class="run"><b>pip install -e .</b> &nbsp;→&nbsp; <b>visionbrain status</b> &nbsp;→&nbsp; open ground control at <b>127.0.0.1:7860</b> &nbsp;·&nbsp; bring a 20-second clip, leave with a report.</div>
+  <div class="pfoot"><div class="wordmark">visionbrain<span>◆</span></div><div>RUN IT · 08</div></div>
+</div>
+
+</body>
+</html>
