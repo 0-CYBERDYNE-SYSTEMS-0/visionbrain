@@ -42,7 +42,12 @@ _loaded: dict[tuple[str, int], dict[str, Any]] = {}
 
 
 def _ensure_loaded(model: str, resolution: int, threshold: float):
-    """Lazy-load SAM 3.1 model/processor/predictor once per (model, res)."""
+    """Lazy-load SAM 3.1 model/processor/predictor once per (model, res).
+
+    ``threshold`` is re-applied to the predictor on a cache hit too — a later
+    tracker built with a different threshold must not silently run at the
+    first-load value.
+    """
     global _loaded
     key = (model, resolution)
     with _lock:
@@ -61,7 +66,12 @@ def _ensure_loaded(model: str, resolution: int, threshold: float):
             _loaded[key] = {"model": m, "processor": proc, "predictor": pred}
             log.info("SAM 3.1 tracking loaded")
         entry = _loaded[key]
-        return entry["model"], entry["processor"], entry["predictor"]
+        predictor = entry["predictor"]
+        try:
+            predictor.score_threshold = float(threshold)
+        except AttributeError:
+            pass  # injected test double without predictor attributes
+        return entry["model"], entry["processor"], predictor
 
 
 def _default_backbone(model, pixel_values):
@@ -169,9 +179,10 @@ class LiveSamTracker:
         """Run one tracking step; returns normalized detection items."""
         do_detect = self._detect_ticks % self.detect_every == 0
 
-        if not do_detect and self._last_items:
-            # Held re-publish: keep last IDs + original observation provenance,
-            # marked predicted so consumers distinguish lag from new measures.
+        if not do_detect:
+            # Held re-publish — even when the last detect found nothing
+            # (empty set held as empty): an empty scene must not defeat the
+            # detect_every throttle by forcing a full detect every frame.
             # stale_ms uses the source's own clock so phone-vs-Mac skew cancels;
             # reporting 0 would be a lie with teeth — downstream evidence
             # filtering treats stale_ms == 0 as "current measurement".

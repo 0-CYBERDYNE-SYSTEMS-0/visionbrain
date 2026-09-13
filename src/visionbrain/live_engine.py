@@ -35,6 +35,11 @@ Outbound JSON text messages:
         "track_id": int | null, "ts": float, "frame_id": int, "detail": str}}
     {"type": "capture", "clip": {"name": str, "url": "/api/clips/<name>",
         "kind": str}}
+    {"type": "error", "error": str}     -> ask/report path ONLY: the request
+        was rejected (no engine running, another ask/report already running,
+        or no usable evidence) or backend VLM inference failed. Everything
+        else keeps its "status" notes — no client should parse status text
+        to detect an ask/report failure.
 
 Clips are written by the worker to the configured clips directory (see
 ``configure()``) and served by ``web_app`` at ``GET /api/clips/{name}``.
@@ -52,7 +57,40 @@ as an alias for programmatic callers.
      "prompts": [str, ...]}              -> run on a network stream
         (rtsp://, rtsps://, http://, https:// — see ``validate_stream_url``;
         URLs are always redacted via ``redact_url`` before display)
-    {"type": "set_prompts", "prompts": [str, ...]} -> swap prompts live
+    {"type": "set_prompts", "prompts": [str, ...]} -> swap prompts live.
+        An EMPTY list is valid and means "detection off" (the hub-protocol
+        pause semantics: prompts are preserved client-side and restored on
+        resume); while off the worker skips the model entirely and emits
+        empty detection sets.
+    {"type": "set_threshold", "threshold": float 0-1}
+        -> live re-apply of the detection threshold (no restart).
+    {"type": "set_stream", "jpeg_quality"?: int 30-95,
+     "send_width"?: int 256-3840}
+        -> live retune of the outbound JPEG encode (quality + downscale
+            width). Lower quality/width cuts encode CPU and wire size with
+            no effect on detection quality — the same STREAM knobs the
+            Android clients expose.
+    {"type": "set_task", "task": "segment"|"detect"}
+        -> live MASK switch: "segment" emits per-object polygons (slower,
+            larger payloads); "detect" skips polygon tracing for fast boxes.
+    {"type": "set_engine", "sam"?: bool, "falcon"?: bool, "lfm"?: bool,
+     "lfm_model"?: "lfm"|"lfm3b"}
+        -> hub-protocol engine chips; the local engine runs SAM only and
+            answers with an honest status note (never a silent no-op).
+    {"type": "set_vlm", "model": "gemma"|"lfm"|"lfm3b"}
+        -> select the ask/report VLM (cheap; swap applies on next ask).
+    {"type": "ask", "question": str <= 500}
+        -> ask the selected VLM about the CURRENT OBSERVATION: at dispatch
+            the handler snapshots (frame, detection records, active prompts)
+            as ONE consistent unit and the background thread answers from
+            that snapshot alone. Replies as an ``ask_ack`` followed by an
+            ``answer`` message — or ``error`` on rejection/failure.
+    {"type": "report", "summary"?: str, "report_type"?: str}
+        -> write a grounded field report. The counts line is derived
+            SERVER-SIDE from the evidence snapshot's detection records; the
+            browser-supplied ``summary`` is accepted and validated for wire
+            compatibility but is never forwarded to the model. Replies as a
+            ``report_result`` message — or ``error`` on rejection/failure.
     {"type": "set_zones", "zones": [...]}  -> REPLACE the whole zone set.
         Each zone: {"kind": "line", "name"?: str, "a": [x, y], "b": [x, y]}
         or {"kind": "rect", "name"?: str, "x1", "y1", "x2", "y2"} — all
@@ -83,20 +121,29 @@ as an alias for programmatic callers.
     {"type": "shutdown"}                 -> stop + free the SAM 3.1 model
 
 Optional "start" tuning keys: "threshold" (0-1, default 0.15),
-"detect_every" (int >= 1, default 6), "resolution" (int, default 1008).
+"detect_every" (int >= 1, default 6), "resolution" (int, default 1008),
+"backbone_every" (DEPRECATED — accepted and validated for compatibility
+with older clients, then ignored: image features are recomputed on EVERY
+detection pass and a status note says so), "jpeg_quality" (30-95,
+default 70), "send_width" (pixels, default 1280),
+"task" ("segment"|"detect", default "segment").
 Anything that fails validation returns ("unknown", {}) and earns a status
 note — never an exception.
 
 Design notes
 ------------
 * ONE engine worker per process: a module-level handle guarded by
-  ``_engine_lock``. A second "start" while a worker is alive is rejected with
-  ``"engine busy — stop first"``.
+  ``_engine_lock``. MULTI-VIEWER: every connected socket gets a sink and the
+  engine broadcasts to all of them, so several dashboards watch the same
+  stream. A "start" while a worker is alive attaches the requester as a
+  viewer (status note) instead of starting a second engine; "stop"/"shutdown"
+  work from any viewer; the engine stops when the last viewer disconnects.
 * The worker runs on a daemon ``threading.Thread`` (MLX inference blocks);
-  it pushes outbound messages onto an ``asyncio.Queue`` via
-  ``loop.call_soon_threadsafe`` (the running loop is captured at start). The
-  WS handler drains that queue with a sender task, so receiving controls and
-  sending frames run concurrently.
+  it broadcasts outbound messages into each viewer's sink (queue + one-slot
+  latest-frame / latest-detections buffers) via ``loop.call_soon_threadsafe``.
+  Each
+  socket's sender task drains its own sink, so receiving controls and
+  sending frames run concurrently per viewer.
 * The VLM event watch runs on its OWN daemon thread (started/stopped by
   ``set_watch``): it sleeps ``interval_s``, snapshots the worker's latest
   full-resolution frame and asks the configured local VLM whether the
@@ -105,16 +152,36 @@ Design notes
   notes (throttled to one per 30s) and a model that cannot load disables the
   watch with a single note.
 * Clip capture: the worker keeps a ring buffer of recent encoded JPEGs; when
-  a trigger fires it snapshots the pre-roll, accumulates frames for
-  ``post_s``, then writes an mp4 into the clips directory (pruned to the 50
-  newest files). Only one capture is pending at a time — further triggers
-  still emit events but do not capture.
-* Box targets (``add_prompt_box``) pair the documented ``predict(boxes=…)``
-  API with ROI-containment labeling: the installed mlx_vlm build plumbs the
-  ``boxes`` kwarg but never applies box conditioning (its geometry encoder
-  is never called), so targets track text-prompt detections whose centers
-  fall inside the drawn ROI. Overlapping ROIs can double-count objects in
-  the overlap — see ``_detect_box_targets``.
+  a trigger fires it snapshots the pre-roll and accumulates frames for
+  ``post_s``. ONE capture occupies the slot across ALL of post-roll
+  collection, queued work, and encoding — later triggers still emit their
+  events but do not allocate another capture. The clip writer thread starts
+  LAZILY when the first completed capture needs encoding (a worker that
+  never captures leaks no parked thread) and exits via the ``None`` queue
+  sentinel, which every worker exit path sends AFTER any accepted capture
+  (FIFO lets it finish); an incomplete (still-collecting) capture is
+  discarded on stop. The writer releases the slot under ``_state_lock``
+  after encode — success OR failure — then prunes the clips directory to
+  the 50 newest files. Decoding + re-encoding the pre-roll blocks for
+  seconds and must never run on the frame-processing thread.
+* Ask/report evidence: the WS handler captures ONE consistent server-owned
+  snapshot — latest full-res frame + detection records + active prompts,
+  frame and records under a single ``_frame_lock`` acquisition — BEFORE
+  spawning the inference thread; the thread never re-reads live worker
+  state. Grounding rule: when prompts are unarmed (paused) or no
+  observation exists, the request is rejected with the ``error`` shape
+  before the shared inference slot is claimed — no VLM call. An observed
+  EMPTY set is a valid observation (the engine ran and saw nothing);
+  pausing (``set_prompts([])``) CLEARS the stored evidence so earlier
+  counts cannot survive as current observations.
+* Box targets (``add_prompt_box``) are ROI labels, not extra inference: the
+  installed mlx_vlm build plumbs the ``boxes`` kwarg but never applies box
+  conditioning (its geometry encoder is never called), so re-running
+  ``predict`` per target only duplicated the main detection at (1 + T)x cost.
+  Instead the single main detection pass runs once and every object whose
+  center falls inside a drawn ROI is relabeled with that target's label
+  ("target N" when the client omitted one). Overlapping ROIs: the first
+  matching target wins the label — no double-counting.
 * Heavy imports (cv2, PIL, numpy, mlx, mlx_vlm, supervision, sam3_inference)
   happen INSIDE the worker / watcher bodies, so CI — with no mlx and no
   cached weights — can import this module and unit-test the pure helpers.
@@ -124,6 +191,16 @@ Design notes
   any path separator or ``..`` in a file_id is rejected up front, and the
   match must resolve inside the configured directory — path traversal is
   impossible.
+* Outbound traffic is COALESCED where replacement is safe: binary frames
+  AND ``detections`` sets overwrite each other in per-viewer one-slot
+  buffers ("latest wins", like the field hub — an empty detection set is a
+  REAL value that supersedes older objects, so ``None`` marks an empty
+  slot, not an empty set). Events, captures, status, and request-result
+  messages (ask_ack / answer / report_result / error) keep their in-order
+  queue path and are never dropped. This bounds frames and detections —
+  it does not bound every possible outbound source.
+* Clip capture writes run on the dedicated writer thread described above —
+  never on the read/detect/encode loop.
 * Token auth: the endpoint honors ``VB_TOKEN`` via the ``?token=`` query
   parameter (browsers cannot set headers on WebSocket connects). When the
   shared token is enabled, a connect without the correct token is denied
@@ -137,6 +214,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import queue
 import re
 import struct
 import threading
@@ -189,7 +267,8 @@ def pack_frame(frame_id: int, ts_ms: int, jpeg: bytes, telem: dict) -> bytes:
         int(ts_ms) & 0xFFFFFFFF,
         len(jpeg),
     )
-    return header + bytes(jpeg) + struct.pack(">I", len(telem_bytes)) + telem_bytes
+    body = jpeg if isinstance(jpeg, bytes) else bytes(jpeg)
+    return header + body + struct.pack(">I", len(telem_bytes)) + telem_bytes
 
 
 def make_item(
@@ -576,6 +655,16 @@ _MAX_INTERVAL_S = 30.0
 _MIN_INTERVAL_S = 1.0
 _MAX_CONDITION = 200
 
+# stream tuning + ask/report limits
+_JPEG_QUALITY = 70
+_JPEG_QUALITY_MIN = 30
+_JPEG_QUALITY_MAX = 95
+_MAX_SEND_WIDTH = 1280
+_MIN_SEND_WIDTH = 256
+_MAX_WIRE_WIDTH = 3840
+_MAX_ASK_CHARS = 500
+_ENGINE_KEYS = ("sam", "falcon", "lfm")
+
 
 def _num01_or_more(value: Any, minimum: float) -> bool:
     """True when value is a real number >= minimum (bools rejected)."""
@@ -587,9 +676,11 @@ def _num01_or_more(value: Any, minimum: float) -> bool:
 def _valid_prompts(value: Any) -> Optional[list[str]]:
     """Return the prompts list when valid, else None.
 
-    Valid means a non-empty list of non-empty strings.
+    Valid means a list of non-empty strings. An EMPTY list is also valid and
+    means "detection off" — the hub-protocol pause semantics the Android
+    clients rely on (empty set sent explicitly so the server stops).
     """
-    if not isinstance(value, list) or not value:
+    if not isinstance(value, list):
         return None
     for prompt in value:
         if not isinstance(prompt, str) or not prompt.strip():
@@ -601,7 +692,9 @@ def validate_control(msg: Any) -> tuple[str, dict]:
     """Validate one inbound control message.
 
     Returns ``(action, payload)`` where action is one of ``"start"``,
-    ``"set_prompts"``, ``"set_zones"``, ``"add_prompt_box"``,
+    ``"set_prompts"``, ``"set_threshold"``, ``"set_stream"``, ``"set_task"``,
+    ``"set_engine"``, ``"set_vlm"``, ``"ask"``, ``"report"``,
+    ``"set_zones"``, ``"add_prompt_box"``,
     ``"remove_targets"``, ``"set_triggers"``, ``"set_watch"``, ``"stop"``,
     ``"shutdown"``, ``"ignore"`` (protocol hello) — or ``"unknown"`` with an
     empty payload for anything invalid. Control key is ``type`` (hub-protocol
@@ -656,6 +749,29 @@ def validate_control(msg: Any) -> tuple[str, dict]:
         resolution = msg.get("resolution")
         if isinstance(resolution, int) and not isinstance(resolution, bool) and resolution >= 64:
             payload["resolution"] = int(resolution)
+        backbone_every = msg.get("backbone_every")
+        if (
+            isinstance(backbone_every, int)
+            and not isinstance(backbone_every, bool)
+            and backbone_every >= 1
+        ):
+            payload["backbone_every"] = int(backbone_every)
+        jpeg_quality = msg.get("jpeg_quality")
+        if (
+            isinstance(jpeg_quality, int)
+            and not isinstance(jpeg_quality, bool)
+            and _JPEG_QUALITY_MIN <= jpeg_quality <= _JPEG_QUALITY_MAX
+        ):
+            payload["jpeg_quality"] = int(jpeg_quality)
+        send_width = msg.get("send_width")
+        if (
+            isinstance(send_width, int)
+            and not isinstance(send_width, bool)
+            and _MIN_SEND_WIDTH <= send_width <= _MAX_WIRE_WIDTH
+        ):
+            payload["send_width"] = int(send_width)
+        if msg.get("task") in ("segment", "detect"):
+            payload["task"] = msg["task"]
         return ("start", payload)
 
     if action == "set_prompts":
@@ -745,6 +861,88 @@ def validate_control(msg: Any) -> tuple[str, dict]:
                 return ("unknown", {})
             payload["model"] = msg["model"]
         return ("set_watch", payload)
+
+    if action == "set_threshold":
+        value = msg.get("threshold")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not 0.0 < float(value) < 1.0
+        ):
+            return ("unknown", {})
+        return ("set_threshold", {"threshold": float(value)})
+
+    if action == "set_stream":
+        payload = {}
+        if "jpeg_quality" in msg:
+            quality = msg["jpeg_quality"]
+            if (
+                isinstance(quality, bool)
+                or not isinstance(quality, int)
+                or not _JPEG_QUALITY_MIN <= quality <= _JPEG_QUALITY_MAX
+            ):
+                return ("unknown", {})
+            payload["jpeg_quality"] = int(quality)
+        if "send_width" in msg:
+            width = msg["send_width"]
+            if (
+                isinstance(width, bool)
+                or not isinstance(width, int)
+                or not _MIN_SEND_WIDTH <= width <= _MAX_WIRE_WIDTH
+            ):
+                return ("unknown", {})
+            payload["send_width"] = int(width)
+        if not payload:
+            return ("unknown", {})
+        return ("set_stream", payload)
+
+    if action == "set_task":
+        if msg.get("task") not in ("segment", "detect"):
+            return ("unknown", {})
+        return ("set_task", {"task": msg["task"]})
+
+    if action == "set_engine":
+        payload = {}
+        for key in _ENGINE_KEYS:
+            if key in msg:
+                if not isinstance(msg[key], bool):
+                    return ("unknown", {})
+                payload[key] = msg[key]
+        if "lfm_model" in msg:
+            if msg["lfm_model"] not in _WATCH_MODELS:
+                return ("unknown", {})
+            payload["lfm_model"] = msg["lfm_model"]
+        return ("set_engine", payload)
+
+    if action == "set_vlm":
+        model = msg.get("model")
+        if not isinstance(model, str) or not model.strip():
+            return ("unknown", {})
+        return ("set_vlm", {"model": model.strip()})
+
+    if action == "ask":
+        question = msg.get("question")
+        if not isinstance(question, str) or not question.strip():
+            return ("unknown", {})
+        if len(question) > _MAX_ASK_CHARS:
+            return ("unknown", {})
+        return ("ask", {"question": question.strip()})
+
+    if action == "report":
+        payload = {"summary": "", "report_type": "field"}
+        summary = msg.get("summary")
+        if summary is not None:
+            if not isinstance(summary, str) or len(summary) > _MAX_ASK_CHARS:
+                return ("unknown", {})
+            payload["summary"] = summary.strip()
+        report_type = msg.get("report_type")
+        if report_type is not None:
+            if not isinstance(report_type, str) or not report_type.strip():
+                return ("unknown", {})
+            if len(report_type) > 40:
+                return ("unknown", {})
+            payload["report_type"] = report_type.strip()
+        return ("report", payload)
 
     if action in ("stop", "shutdown"):
         return (action, {})
@@ -904,6 +1102,100 @@ def _watch_loop(stop_event: threading.Event) -> None:
                 _watch_busy = False
 
 
+# ── Ask / report — one in-flight slot shared by both (Android semantics) ─────
+_ask_lock = threading.Lock()
+_ask_busy = False
+
+
+def _claim_ask_slot() -> bool:
+    """Claim the shared ask/report slot; False when one is already running."""
+    global _ask_busy
+    with _ask_lock:
+        if _ask_busy:
+            return False
+        _ask_busy = True
+        return True
+
+
+def _release_ask_slot() -> None:
+    global _ask_busy
+    with _ask_lock:
+        _ask_busy = False
+
+
+def _vlm_label() -> str:
+    """MODELS key of the selected ask VLM (or ``"custom"`` for a raw pin)."""
+    try:
+        from . import vlm_registry
+
+        return vlm_registry.current_key() or "custom"
+    except Exception:  # noqa: BLE001 — label only
+        return "custom"
+
+
+def _counts_summary(records: Sequence[dict]) -> str:
+    """Build the report counts line SERVER-SIDE from detection records.
+
+    e.g. ``"3x car, 1x person"`` (first-appearance order), or
+    ``"no objects observed"`` for an empty set. The browser-supplied
+    ``summary`` is accepted for wire compatibility but deliberately never
+    forwarded to the model — a forged summary must not change the counts.
+    """
+    counts: dict[str, int] = {}
+    for rec in records:
+        label = str(rec.get("label", "object")) or "object"
+        counts[label] = counts.get(label, 0) + 1
+    if not counts:
+        return "no objects observed"
+    return ", ".join(f"{n}x {label}" for label, n in counts.items())
+
+
+def _ask_once(worker: "_EngineWorker", question: str, snapshot: dict) -> None:
+    """Answer one question about the captured evidence snapshot.
+
+    Runs on a background thread: the VLM generate blocks for seconds (MLX) —
+    never the event loop. ``snapshot`` is the consistent (frame, records,
+    prompts) triple captured at dispatch time; this thread must NOT re-read
+    live worker state. Failures push the pinned ``error`` shape so the
+    client clears its request UI.
+    """
+    try:
+        from . import vlm_registry
+
+        reply = vlm_registry.ask(
+            question,
+            detections=snapshot["records"],
+            prompts=snapshot["prompts"],
+            image=snapshot["frame"],
+        )
+        worker.push({"type": "answer", "answer": str(reply)})
+    except Exception as exc:  # noqa: BLE001 — report through the socket
+        worker.push({"type": "error", "error": f"ask failed: {exc}"})
+    finally:
+        _release_ask_slot()
+
+
+def _report_once(worker: "_EngineWorker", snapshot: dict, report_type: str) -> None:
+    """Write one grounded field report from the evidence snapshot.
+
+    The counts line is derived server-side from the snapshot's detection
+    records (see :func:`_counts_summary`) — never from the browser's
+    ``summary``. Failures push the pinned ``error`` shape.
+    """
+    try:
+        from . import vlm_registry
+
+        summary = _counts_summary(snapshot["records"])
+        reply = vlm_registry.generate_report(
+            summary, report_type=report_type, image=snapshot["frame"]
+        )
+        worker.push({"type": "report_result", "text": str(reply)})
+    except Exception as exc:  # noqa: BLE001 — report through the socket
+        worker.push({"type": "error", "error": f"report failed: {exc}"})
+    finally:
+        _release_ask_slot()
+
+
 async def _apply_watch(payload: dict) -> bool:
     """Merge a ``set_watch`` payload into the watch config; start/stop the thread.
 
@@ -945,35 +1237,118 @@ async def _apply_watch(payload: dict) -> bool:
 # Worker — one running engine (thread + outbound queue + live prompts)
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _records_from_items(items: Sequence[dict]) -> list[dict]:
+    """Compact VLM-facing ``{label, score, centroid_norm, source}`` records.
+
+    The shape ``vlm_registry.ask`` formats into grounded prompt sections,
+    derived from one detect frame's wire items.
+    """
+    records: list[dict] = []
+    for item in items:
+        box = item.get("box") or [0.5, 0.5, 0.5, 0.5]
+        records.append({
+            "label": str(item.get("label", "object")),
+            "score": float(item.get("score", 0.0)),
+            "centroid_norm": {
+                "x": (float(box[0]) + float(box[2])) / 2.0,
+                "y": (float(box[1]) + float(box[3])) / 2.0,
+            },
+            "source": "sam",
+        })
+    return records
+
 _MAX_SEND_WIDTH = 1280
 _JPEG_QUALITY = 70
 _HELD_EVERY = 5  # resend held boxes every Nth non-detect frame
 _MAX_RING_FRAMES = 150
 _MAX_CLIPS = 50
 _MAX_STREAM_READ_FAILS = 40  # consecutive url read failures before giving up
-_BOX_NOTE_THROTTLE_S = 30.0  # min gap between box-target error status notes
+# Worker-thread cap on joining its clip writer at exit. Must stay below the
+# event loop's 10s worker join so a hung encode cannot stall the loop's own
+# cleanup for long — the writer is a daemon and the process never cancels it.
+_CAPTURE_JOIN_TIMEOUT_S = 8.0
+
+# One-slot marker meaning "a wire frame is waiting in the sink's pending
+# slot" — lets each viewer's sender ship only the newest queued frame
+# (latest wins), per viewer.
+_FRAME_SENTINEL = object()
+# Same pattern for ``detections`` messages: the marker means "a detection
+# set is pending"; the slot itself holds the newest set, INCLUDING empty
+# ones (None — not [] — means nothing pending).
+_DETECTIONS_SENTINEL = object()
+
+
+class _ClientSink:
+    """One attached viewer's outbound path.
+
+    A queue for in-order JSON messages (events / captures / status /
+    request-result — never dropped) plus one-slot coalescing buffers for
+    the two replaceable streams: wire frames and ``detections`` sets
+    (latest-wins, so a slow viewer never grows a stale backlog of either).
+    Every connected socket gets a sink and the running engine broadcasts
+    to all of them — that is what lets several dashboards watch the same
+    stream. This bounds frames and detections specifically, not every
+    possible outbound source.
+    """
+
+    __slots__ = (
+        "loop", "queue", "out_lock",
+        "pending_frame", "pending_detections",
+    )
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.loop = loop
+        self.queue: "asyncio.Queue[Any]" = asyncio.Queue()
+        self.out_lock = threading.Lock()
+        self.pending_frame: Optional[bytes] = None
+        self.pending_detections: Optional[list] = None
+
+    def push(self, message: Any) -> None:
+        """Queue one JSON message; a dead loop just drops this sink."""
+        try:
+            self.loop.call_soon_threadsafe(self.queue.put_nowait, message)
+        except RuntimeError:
+            pass  # event loop gone (client disconnected)
+
+    def push_frame(self, packed: bytes) -> None:
+        """Accept one wire frame, coalescing to the newest per viewer."""
+        with self.out_lock:
+            first = self.pending_frame is None
+            self.pending_frame = packed
+        if first:
+            self.push(_FRAME_SENTINEL)
+
+    def push_detections(self, items: list) -> None:
+        """Accept one detection set, coalescing to the newest per viewer.
+
+        An EMPTY set is a real value (it tells the client to drop stale
+        boxes) and must supersede older non-empty ones — so ``None``, not
+        ``[]``, marks an empty slot.
+        """
+        with self.out_lock:
+            first = self.pending_detections is None
+            self.pending_detections = list(items)
+        if first:
+            self.push(_DETECTIONS_SENTINEL)
 
 
 class _EngineWorker:
     """A single running engine: worker thread state plus tunables.
 
-    Holds the stop event, the outbound queue target (event loop captured at
-    start), and the current prompts under a small lock so ``set_prompts``
-    can retarget detection mid-run from the WS thread. Also owns the shared
-    smart-capture state (zones, box-prompted targets, triggers, ring buffer,
-    pending capture, latest full frame) guarded by ``_state_lock`` /
-    ``_frame_lock``.
+    Holds the stop event, the viewer sink set it broadcasts to, and the
+    current prompts under a small lock so ``set_prompts`` can retarget
+    detection mid-run from the WS thread. Also owns the shared smart-capture
+    state (zones, box-prompted targets, triggers, ring buffer, pending
+    capture, latest full frame) guarded by ``_state_lock`` / ``_frame_lock``.
     """
 
     def __init__(
         self,
         cfg: dict,
-        loop: asyncio.AbstractEventLoop,
-        outbound: "asyncio.Queue[Any]",
+        sinks: "set[_ClientSink]",
     ) -> None:
         self.cfg = cfg
-        self.loop = loop
-        self.outbound = outbound
+        self.sinks = sinks
         self.stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self._prompts_lock = threading.Lock()
@@ -988,7 +1363,6 @@ class _EngineWorker:
         self._line_totals: dict[str, int] = {}
         self._targets: list[dict] = []   # box-prompted targets (normalized)
         self._target_seq = 0             # running per-engine target sequence
-        self._box_note_ts = 0.0          # monotonic ts of last box-target note
         self._triggers: dict[str, Any] = dict(TRIGGER_DEFAULTS)
         self._ring: deque = deque()
         self._capture: Optional[dict] = None
@@ -999,6 +1373,34 @@ class _EngineWorker:
 
         self._frame_lock = threading.Lock()
         self._latest_frame: Optional[tuple[int, Any]] = None
+        self._last_frame_items: list[dict] = []   # detection items for that frame
+
+        # ── live-tunable knobs (start keys, mutable via set_* controls) ───
+        # NOTE: the legacy "backbone_every" start key is validated for
+        # compatibility but deliberately NOT stored — image features are
+        # recomputed on every detection pass (see the module docstring).
+        self._tuning_lock = threading.Lock()
+        self._threshold = min(0.99, max(0.01, float(cfg.get("threshold", 0.15))))
+        self._task = str(cfg.get("task", "segment"))
+        self._jpeg_quality = max(
+            _JPEG_QUALITY_MIN,
+            min(_JPEG_QUALITY_MAX, int(cfg.get("jpeg_quality", _JPEG_QUALITY))),
+        )
+        self._send_width = max(
+            _MIN_SEND_WIDTH,
+            min(_MAX_WIRE_WIDTH, int(cfg.get("send_width", _MAX_SEND_WIDTH))),
+        )
+
+        # ── off-loop clip writer (started LAZILY on first capture) ────────
+        # The writer thread is NOT created here: a worker that never
+        # captures must not leak a parked thread. ``_ensure_capture_writer``
+        # starts it when a completed capture needs encoding, and every
+        # worker exit path signals shutdown with the None sentinel (see
+        # ``_shutdown_capture_writer``). The slot bookkeeping guarantees at
+        # most one completed capture is ever queued, so the queue cannot
+        # grow during a slow encode.
+        self._capture_queue: "queue.Queue[Optional[dict]]" = queue.Queue()
+        self._capture_thread: Optional[threading.Thread] = None
 
     def get_prompts(self) -> list[str]:
         """Return a copy of the current prompts (thread-safe)."""
@@ -1006,9 +1408,43 @@ class _EngineWorker:
             return list(self._prompts)
 
     def set_prompts(self, prompts: list[str]) -> None:
-        """Replace the active prompts (thread-safe; picked up next frame)."""
+        """Replace the active prompts (thread-safe; picked up next frame).
+
+        An empty list is "detection off": the worker skips the model until
+        new prompts arrive. Pausing ALSO clears the stored evidence (latest
+        frame + detection records) so earlier counts cannot survive as
+        current observations for ask/report — the next real detect pass
+        re-establishes it.
+        """
         with self._prompts_lock:
             self._prompts = list(prompts)
+        if not prompts:
+            with self._frame_lock:
+                self._latest_frame = None
+                self._last_frame_items = []
+
+    def set_threshold(self, value: float) -> None:
+        """Retune the detection threshold live (thread-safe)."""
+        with self._tuning_lock:
+            self._threshold = min(0.99, max(0.01, float(value)))
+
+    def set_task(self, task: str) -> None:
+        """Switch segment/detect live ("detect" skips polygon emission)."""
+        with self._tuning_lock:
+            self._task = str(task)
+
+    def set_stream(self, jpeg_quality: Optional[int] = None,
+                   send_width: Optional[int] = None) -> None:
+        """Retune the outbound JPEG encode live (thread-safe)."""
+        with self._tuning_lock:
+            if jpeg_quality is not None:
+                self._jpeg_quality = max(
+                    _JPEG_QUALITY_MIN, min(_JPEG_QUALITY_MAX, int(jpeg_quality))
+                )
+            if send_width is not None:
+                self._send_width = max(
+                    _MIN_SEND_WIDTH, min(_MAX_WIRE_WIDTH, int(send_width))
+                )
 
     def set_zones(self, zones: list[dict]) -> None:
         """Replace the zone set (thread-safe; rebuilt on the next detect frame)."""
@@ -1046,107 +1482,40 @@ class _EngineWorker:
         with self._state_lock:
             return [dict(t, box=list(t["box"])) for t in self._targets]
 
-    def _note_box_target_error(self, exc: Exception) -> None:
-        """Push a box-target failure note, throttled to one per 30s."""
-        now = time.monotonic()
-        if now - self._box_note_ts < _BOX_NOTE_THROTTLE_S:
-            return
-        self._box_note_ts = now
-        self.push({"type": "status", "note": f"box target error: {exc}"})
+    def last_detection_records(self) -> list[dict]:
+        """VLM-facing detection records for the latest detect frame.
 
-    def _detect_box_targets(
-        self,
-        predictor: Any,
-        frame_pil: Any,
-        prompts: list[str],
-        targets: list[dict],
-        result: Any,
-        threshold: float,
-        src_w: int,
-        src_h: int,
-    ) -> Any:
-        """Run box-guided detection per target ROI and merge into ``result``.
-
-        Each target re-detects every detect frame through the documented
-        box-guided API ``Sam3Predictor.predict(image, text_prompt, boxes,
-        score_threshold)`` — ``boxes`` is an ``(N, 4)`` float ndarray of
-        normalized 0-1 xyxy coordinates (the space the predictor's own
-        postprocess scales out of), and the returned ``DetectionResult``
-        carries pixel xyxy boxes, masks and scores without labels.
-
-        IMPORTANT CAVEAT: the installed mlx_vlm build plumbs the ``boxes``
-        kwarg through ``predict`` but never applies box conditioning (the
-        geometry encoder is instantiated but never called), so the geometry
-        itself is inert. The text-prompt detections are therefore assigned
-        to the first target ROI containing their center (persistent ROI
-        semantics) and labeled with that target's label ("target N" when
-        the client omitted one). Overlapping ROIs can double-count an
-        object sitting in the overlap. A per-target failure pushes a
-        throttled status note and skips that target for this frame only —
-        the worker keeps running.
+        Compact ``{label, score, centroid_norm, source}`` dicts — the shape
+        ``vlm_registry.ask`` formats into grounded prompt sections.
         """
-        import numpy as np
+        with self._frame_lock:
+            return _records_from_items(self._last_frame_items)
 
-        try:
-            from mlx_vlm.models.sam3_1.generate import DetectionResult, nms
-        except ImportError:  # older mlx_vlm layout
-            from mlx_vlm.models.sam3.generate import (  # type: ignore[no-redef]
-                DetectionResult,
-                nms,
-            )
+    def evidence_snapshot(self) -> Optional[dict]:
+        """One consistent server-owned snapshot for ask/report dispatch.
 
-        text_prompt = ", ".join(prompts) if prompts else "object"
-        box_parts = [np.asarray(result.boxes)]
-        score_parts = [np.asarray(result.scores)]
-        mask_parts = [np.asarray(result.masks)]
-        label_parts = [list(result.labels or [])]
-        added = 0
+        Returns ``{"frame_id", "frame", "records", "prompts"}`` where frame
+        and detection records come from a SINGLE ``_frame_lock`` acquisition
+        (they are always stored together by the detect pass) and ``prompts``
+        is the active prompt list. The WS handler calls this BEFORE spawning
+        the inference thread; the thread must not re-read live worker state.
 
-        for target in targets:
-            try:
-                roi = np.array([target["box"]], dtype=np.float32)
-                sub = predictor.predict(
-                    frame_pil,
-                    text_prompt=text_prompt,
-                    boxes=roi,
-                    score_threshold=threshold,
-                )
-                if sub is not None and len(getattr(sub, "scores", [])) > 0:
-                    sub = nms(sub)
-            except Exception as exc:  # noqa: BLE001 — never kill the worker
-                self._note_box_target_error(exc)
-                continue
-            if sub is None or len(sub.scores) == 0:
-                continue
-
-            kept_boxes, kept_scores, kept_masks, kept_labels = [], [], [], []
-            for i in range(len(sub.scores)):
-                bx = sub.boxes[i]
-                cx01 = (float(bx[0]) + float(bx[2])) / (2.0 * max(1.0, float(src_w)))
-                cy01 = (float(bx[1]) + float(bx[3])) / (2.0 * max(1.0, float(src_h)))
-                label = target_label_at(cx01, cy01, targets)
-                if label is None:
-                    continue
-                kept_boxes.append(np.asarray(bx, dtype=np.float32))
-                kept_scores.append(float(sub.scores[i]))
-                kept_masks.append(np.asarray(sub.masks[i]))
-                kept_labels.append(label)
-            if not kept_boxes:
-                continue
-            box_parts.append(np.stack(kept_boxes))
-            score_parts.append(np.asarray(kept_scores, dtype=np.float32))
-            mask_parts.append(np.stack(kept_masks))
-            label_parts.append(kept_labels)
-            added += len(kept_boxes)
-
-        if not added:
-            return result
-        return DetectionResult(
-            boxes=np.concatenate(box_parts),
-            masks=np.concatenate(mask_parts),
-            scores=np.concatenate(score_parts),
-            labels=[label for part in label_parts for label in part],
-        )
+        Returns None when no current observation exists — i.e. the stored
+        evidence was cleared by a pause (``set_prompts([])``) or no real
+        detect pass has run yet. An observed EMPTY set is NOT None: the
+        engine ran and saw nothing, which is a valid observation.
+        """
+        with self._frame_lock:
+            if self._latest_frame is None:
+                return None
+            frame_id, image = self._latest_frame
+            records = _records_from_items(self._last_frame_items)
+        return {
+            "frame_id": int(frame_id),
+            "frame": image,
+            "records": records,
+            "prompts": self.get_prompts(),
+        }
 
     def set_triggers(self, partial: dict) -> None:
         """Merge trigger keys into the current config (thread-safe)."""
@@ -1170,10 +1539,14 @@ class _EngineWorker:
             return int(frame_id), image
 
     def request_capture(self, kind: str, ts: float) -> bool:
-        """Arm one pending clip capture; False when disabled/already pending.
+        """Claim the capture slot for one clip; False when it is occupied.
 
-        Snapshots the current ring buffer as pre-roll; the worker accumulates
-        frames until ``trigger_ts + post_s`` and then writes the file.
+        The slot spans ALL of post-roll collection, queued work, and
+        encoding: while one capture is alive (any state) later triggers
+        still emit their events but do NOT allocate another capture. The
+        snapshot of the current ring buffer is the pre-roll; the worker
+        accumulates frames until ``trigger_ts + post_s`` and then hands the
+        capture to the clip writer, which releases the slot after encode.
         """
         if _clips_dir is None:
             return False
@@ -1188,16 +1561,41 @@ class _EngineWorker:
                 "trigger_ts": float(ts),
                 "deadline": float(ts) + post_s,
                 "frames": list(self._ring),
+                # "collecting" -> post-roll growing; "encoding" -> handed to
+                # the writer, slot still claimed until it finishes.
+                "state": "collecting",
             }
             return True
 
     def push(self, message: Any) -> None:
-        """Queue an outbound message (bytes or dict) from the worker thread."""
-        try:
-            self.loop.call_soon_threadsafe(self.outbound.put_nowait, message)
-        except RuntimeError:
-            # Event loop is gone (client disconnected) — nothing to send to.
-            self.stop_event.set()
+        """Broadcast one outbound message (bytes or dict) to every viewer."""
+        for sink in tuple(self.sinks):
+            sink.push(message)
+
+    def push_frame(self, packed: bytes) -> None:
+        """Broadcast one wire frame with latest-frame-wins coalescing.
+
+        A slow dashboard must not build an unbounded backlog of stale JPEGs
+        (memory on a 16GB field box, plus video latency climbing past the
+        3s auto-hide contract): each viewer's sink keeps only the newest
+        frame and its sender ships that. In-order JSON messages travel via
+        :meth:`push` and are never dropped.
+        """
+        for sink in tuple(self.sinks):
+            sink.push_frame(packed)
+
+    def push_detections(self, items: list[dict]) -> None:
+        """Broadcast one detection set with latest-wins coalescing.
+
+        Same replaceable-stream reasoning as :meth:`push_frame`: a slow
+        viewer must not accumulate old detection snapshots behind current
+        video, so each sink keeps only the newest set — INCLUDING empty
+        ones (they tell the client to drop stale boxes). Events, captures,
+        status, and request-result messages keep their in-order path via
+        :meth:`push` and are never dropped.
+        """
+        for sink in tuple(self.sinks):
+            sink.push_detections(items)
 
     # ── zone / trigger evaluation ─────────────────────────────────────────
 
@@ -1334,20 +1732,111 @@ class _EngineWorker:
 
     # ── clip writing ──────────────────────────────────────────────────────
 
-    def _write_capture(self) -> None:
-        """Write the pending capture's buffered JPEGs to an mp4 and announce it.
+    def _handoff_capture(self) -> Optional[dict]:
+        """Mark the pending capture ready for the writer (worker thread).
 
-        Runs on the worker thread (brief blocking is fine); only one capture
-        is pending at a time. Prunes the clips dir to the newest files after.
+        The slot STAYS claimed — the capture dict remains ``self._capture``
+        with ``state`` advanced to ``"encoding"`` — until the writer
+        releases it after encode (success or failure), so no second capture
+        can start while one is queued or being written. Only a
+        ``"collecting"`` capture transitions; repeats are no-ops.
         """
+        with self._state_lock:
+            capture = self._capture
+            if capture is None or capture.get("state") != "collecting":
+                return None
+            capture["state"] = "encoding"
+        return capture
+
+    def _dispatch_due_capture(self) -> None:
+        """Hand a completed capture to the clip writer (worker thread).
+
+        Called from the frame loop when the post-roll deadline passes. This
+        is where the writer thread is lazily started — a worker that never
+        captures never pays for one. At most ONE completed capture can be
+        queued: the slot is claimed until the writer finishes encoding.
+        """
+        capture = self._handoff_capture()
+        if capture is None:
+            return
+        self._ensure_capture_writer()
+        self._capture_queue.put(capture)
+
+    def _ensure_capture_writer(self) -> None:
+        """Start the clip writer thread on first use (idempotent).
+
+        The writer is deliberately NOT started in the constructor — every
+        worker construction used to leak a parked thread. Stopped via the
+        ``None`` sentinel from :meth:`_shutdown_capture_writer`.
+        """
+        with self._state_lock:
+            thread = self._capture_thread
+            if thread is not None and thread.is_alive():
+                return
+            thread = threading.Thread(
+                target=self._capture_writer, name="live-capture-writer", daemon=True
+            )
+            self._capture_thread = thread
+        thread.start()
+
+    def _release_capture(self, capture: dict) -> None:
+        """Free the capture slot after encode (writer thread).
+
+        Runs in the writer's ``finally`` so an encoding FAILURE releases the
+        slot too — a failed encode must not pin capture forever.
+        """
+        with self._state_lock:
+            if self._capture is capture:
+                self._capture = None
+
+    def _shutdown_capture_writer(self) -> None:
+        """Signal writer shutdown on a worker exit path (worker thread).
+
+        Queues the ``None`` sentinel AFTER any accepted capture — FIFO
+        ordering lets an already completed capture (queued or encoding)
+        finish first. An INCOMPLETE (still-collecting post-roll) capture is
+        discarded. Joins the writer with a timeout — the event loop never
+        joins the writer, and there is no unsafe cancellation: a hung encode
+        simply outlives this join as a daemon thread.
+        """
+        with self._state_lock:
+            if (
+                self._capture is not None
+                and self._capture.get("state") != "encoding"
+            ):
+                self._capture = None  # incomplete post-roll — discard
+            thread = self._capture_thread
+        if thread is None:
+            return  # writer never started — nothing to stop
+        self._capture_queue.put(None)
+        thread.join(_CAPTURE_JOIN_TIMEOUT_S)
+
+    def _capture_writer(self) -> None:
+        """Writer-thread body: encode captures off the engine loop.
+
+        Decoding up to ~150 pre-roll JPEGs and re-encoding an mp4 blocks for
+        seconds; doing that on the worker thread froze the live view. The
+        ``None`` sentinel — sent by every worker exit path AFTER its
+        accepted captures — stops the thread once the accepted work is done.
+        The capture slot is released in ``finally``: success or failure.
+        """
+        while True:
+            capture = self._capture_queue.get()
+            if capture is None:
+                return
+            try:
+                self._write_capture_file(capture)
+            except Exception as exc:  # noqa: BLE001 — capture must not kill anything
+                self.push({"type": "status", "note": f"clip capture failed: {exc}"})
+                self._prune_clips()
+            finally:
+                self._release_capture(capture)
+
+    def _write_capture_file(self, capture: dict) -> None:
+        """Encode one detached capture dict to an mp4 and announce it."""
         import cv2
         import numpy as np
 
-        with self._state_lock:
-            capture = self._capture
-            self._capture = None
-        if not capture or _clips_dir is None:
-            return
         frames = capture.get("frames") or []
         if not frames:
             return
@@ -1405,13 +1894,20 @@ class _EngineWorker:
     # ── worker body ───────────────────────────────────────────────────────
 
     def run(self) -> None:
-        """Thread entry point — never lets an exception escape."""
+        """Thread entry point — never lets an exception escape.
+
+        The ``finally`` block is the ONE choke point every exit passes
+        (normal end, source failure, fatal error): after it announces the
+        stop it signals the clip writer shutdown (None sentinel) so no
+        writer thread outlives the worker.
+        """
         try:
             self._run()
         except Exception as exc:  # noqa: BLE001 — report, don't crash the process
             self.push({"type": "status", "note": f"engine error: {exc}"})
         finally:
             self.push({"type": "engine_stopped"})
+            self._shutdown_capture_writer()
 
     def _run(self) -> None:
         import cv2
@@ -1474,6 +1970,10 @@ class _EngineWorker:
             cap = cv2.VideoCapture(camera)
             source_desc = f"webcam:{camera}"
 
+        # Honest startup notes: model load and source open are the two long
+        # silent windows between `start` and the first wire frame.
+        self.push({"type": "status", "note": f"opening source: {source_desc}"})
+
         try:
             if not cap.isOpened():
                 if source == "url":
@@ -1486,6 +1986,7 @@ class _EngineWorker:
                 return
 
             # ── model (private per-worker load; see _load_sam_for_this_thread)
+            self.push({"type": "status", "note": "loading SAM 3.1 weights"})
             try:
                 model, processor, predictor = _load_sam_for_this_thread(
                     threshold=threshold, resolution=resolution
@@ -1527,6 +2028,10 @@ class _EngineWorker:
             held_tick = 0
             latest_items: list[dict] = []
             next_frame_t = time.monotonic()
+            # NO cross-pass backbone/encoder cache: every scheduled detect
+            # pass recomputes image features from ITS OWN frame, so a file
+            # loop or pause/resume can never dress an old scene up as a new
+            # observation. ``detect_every`` is the only inference throttle.
 
             while not self.stop_event.is_set():
                 ret, frame = cap.read()
@@ -1567,118 +2072,156 @@ class _EngineWorker:
                     last_read_t = time.monotonic()
 
                 current = self.get_prompts()
+                with self._tuning_lock:
+                    threshold = self._threshold
+                    task = self._task
                 fired_events: list[dict] = []
 
                 # ── detection: every detect_every-th frame AND frame 0 ────
                 if fi % detect_every == 0:
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    frame_pil = Image.fromarray(frame_rgb)
-                    inputs = processor.preprocess_image(frame_pil)
-                    pixel_values = mx.array(inputs["pixel_values"])
-                    # Backbone recompute per detect is acceptable for the
-                    # first cut — no memory-bank/propagation machinery here.
-                    backbone = _get_backbone_features(model, pixel_values)
-                    result = _detect_with_backbone(
-                        predictor, backbone, current, frame_pil.size, threshold
-                    )
-                    # Box-prompted targets re-detect on the SAME frame and
-                    # merge into the SAME result, so they pick up track IDs
-                    # and flow through zones/triggers like text detections.
-                    current_targets = self.get_targets()
-                    if current_targets:
-                        result = self._detect_box_targets(
-                            predictor, frame_pil, current, current_targets,
-                            result, threshold, src_w, src_h,
+                    if not current:
+                        # Detection off — the hub-protocol pause semantics
+                        # (empty prompt set). Zero model work; an empty
+                        # detection set tells clients to drop stale boxes.
+                        latest_items = []
+                        self.push_detections([])
+                    else:
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        frame_pil = Image.fromarray(frame_rgb)
+                        # FRESH features on EVERY scheduled pass: backbone +
+                        # encoder run against this exact frame. The per-pass
+                        # encoder cache dict exists only because the model
+                        # helper's signature requires it — it never survives
+                        # the pass (no cross-pass reuse, no separate
+                        # backbone cadence; detect_every is the sole
+                        # throttle).
+                        inputs = processor.preprocess_image(frame_pil)
+                        pixel_values = mx.array(inputs["pixel_values"])
+                        backbone_features = _get_backbone_features(
+                            model, pixel_values
                         )
-                    latest = tracker.update(result)
-
-                    scores = latest.scores
-                    boxes = latest.boxes
-                    labels = latest.labels or (current * len(scores))
-                    track_ids = getattr(latest, "track_ids", None)
-                    # SAM paints per-object masks in frame pixel space — the
-                    # whole point of tracking this model. Extract each mask's
-                    # outline so the dashboard can paint the object, not a
-                    # rectangle around it.
-                    masks = getattr(latest, "masks", None)
-                    items: list[dict] = []
-                    for i, (score, box, label) in enumerate(zip(scores, boxes, labels)):
-                        tid = (
-                            int(track_ids[i])
-                            if track_ids is not None and i < len(track_ids)
-                            else i
+                        result = _detect_with_backbone(
+                            predictor, backbone_features, current,
+                            frame_pil.size, threshold,
+                            encoder_cache={},
                         )
-                        polygon = None
-                        if masks is not None and i < len(masks):
-                            polygon = mask_to_polygon(masks[i], src_w, src_h)
-                        items.append(make_item(
-                            [float(box[0]), float(box[1]), float(box[2]), float(box[3])],
-                            src_w,
-                            src_h,
-                            str(label or "object"),
-                            float(score),
-                            tid,
-                            "unknown",
-                            polygon=polygon,
-                        ))
-                    # 8-way heading per track — classify() consumes the same
-                    # normalized items the client receives (box + track_id)
-                    # and returns copies with direction/moved attached.
-                    items = classifier.classify(items)
-                    latest_items = items
+                        latest = tracker.update(result)
 
-                    # Snapshot for the VLM watch: the full-res frame the
-                    # worker already built, before JPEG downscale.
-                    with self._frame_lock:
-                        self._latest_frame = (int(frame_id), frame_pil)
+                        scores = latest.scores
+                        boxes = latest.boxes
+                        labels = latest.labels or (current * len(scores))
+                        track_ids = getattr(latest, "track_ids", None)
+                        # SAM paints per-object masks in frame pixel space —
+                        # MASK switch: polygons only in the segment task;
+                        # detect ships fast boxes (no per-object full-frame
+                        # mask tracing, much smaller payloads).
+                        masks = getattr(latest, "masks", None)
+                        current_targets = self.get_targets()
+                        items: list[dict] = []
+                        for i, (score, box, label) in enumerate(zip(scores, boxes, labels)):
+                            tid = (
+                                int(track_ids[i])
+                                if track_ids is not None and i < len(track_ids)
+                                else i
+                            )
+                            polygon = None
+                            if task == "segment" and masks is not None and i < len(masks):
+                                polygon = mask_to_polygon(masks[i], src_w, src_h)
+                            item = make_item(
+                                [float(box[0]), float(box[1]), float(box[2]), float(box[3])],
+                                src_w,
+                                src_h,
+                                str(label or "object"),
+                                float(score),
+                                tid,
+                                "unknown",
+                                polygon=polygon,
+                            )
+                            # Box-prompted targets are ROI labels, not extra
+                            # inference: box conditioning is inert in the
+                            # installed mlx_vlm, so relabel objects whose
+                            # center falls inside a drawn ROI (first match
+                            # wins) instead of re-detecting per target.
+                            if current_targets:
+                                cx01 = (item["box"][0] + item["box"][2]) / 2.0
+                                cy01 = (item["box"][1] + item["box"][3]) / 2.0
+                                target_label = target_label_at(cx01, cy01, current_targets)
+                                if target_label:
+                                    item["label"] = target_label
+                            items.append(item)
+                        # 8-way heading per track — classify() consumes the same
+                        # normalized items the client receives (box + track_id)
+                        # and returns copies with direction/moved attached.
+                        items = classifier.classify(items)
+                        latest_items = items
 
-                    self.push({"type": "detections", "items": items})
+                        # Snapshot for the VLM watch/ask: the full-res frame
+                        # the worker already built, before JPEG downscale.
+                        # This IS the evidence — the next real detect pass
+                        # replaces it, a pause clears it.
+                        with self._frame_lock:
+                            self._latest_frame = (int(frame_id), frame_pil)
+                            self._last_frame_items = list(items)
 
-                    # Zones + deterministic triggers (line / rect / direction
-                    # / dwell) — each fired event goes out as its own message.
-                    fired_events = self._evaluate_triggers(items, time.time())
-                    for ev in fired_events:
-                        self.push({
-                            "type": "event",
-                            "event": {
-                                "kind": str(ev.get("kind", "")),
-                                "zone": str(ev.get("zone", "")),
-                                "direction": str(ev.get("direction", "")),
-                                "track_id": ev.get("track_id"),
-                                "ts": float(ev.get("ts", 0.0)),
-                                "frame_id": int(frame_id),
-                                "detail": str(ev.get("detail", "")),
-                            },
-                        })
+                        self.push_detections(items)
+
+                        # Zones + deterministic triggers (line / rect /
+                        # direction / dwell) — each fired event goes out as
+                        # its own message.
+                        fired_events = self._evaluate_triggers(items, time.time())
+                        for ev in fired_events:
+                            self.push({
+                                "type": "event",
+                                "event": {
+                                    "kind": str(ev.get("kind", "")),
+                                    "zone": str(ev.get("zone", "")),
+                                    "direction": str(ev.get("direction", "")),
+                                    "track_id": ev.get("track_id"),
+                                    "ts": float(ev.get("ts", 0.0)),
+                                    "frame_id": int(frame_id),
+                                    "detail": str(ev.get("detail", "")),
+                                },
+                            })
                 elif latest_items:
                     held_tick += 1
                     if held_tick % _HELD_EVERY == 0:
                         held = [dict(it, track_state="held") for it in latest_items]
-                        self.push({"type": "detections", "items": held})
+                        self.push_detections(held)
 
                 # ── clean JPEG (downscaled copy, no overlay) ──────────────
-                if src_w > _MAX_SEND_WIDTH:
-                    scale = _MAX_SEND_WIDTH / src_w
+                # Quality + width are live STREAM knobs (Android parity):
+                # lower quality/width cuts encode CPU and wire size with no
+                # effect on detection quality.
+                with self._tuning_lock:
+                    send_width = self._send_width
+                    jpeg_quality = self._jpeg_quality
+                if src_w > send_width:
+                    scale = send_width / src_w
                     small = cv2.resize(
-                        frame, (_MAX_SEND_WIDTH, max(1, int(round(src_h * scale))))
+                        frame, (send_width, max(1, int(round(src_h * scale))))
                     )
                 else:
                     small = frame
                 ok, buf = cv2.imencode(
-                    ".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), _JPEG_QUALITY]
+                    ".jpg", small, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
                 )
                 if not ok:
                     self.push({"type": "status", "note": "JPEG encode failed"})
                     return
 
                 # Ring buffer (clip pre-roll) + pending-capture bookkeeping,
-                # using the SAME encoded JPEG that is streamed below.
+                # using the SAME encoded JPEG that is streamed below. Frames
+                # only grow a capture that is still "collecting" — one
+                # already handed to the writer stays frozen.
                 jpeg_bytes = buf.tobytes()
                 now_ts = time.time()
                 with self._state_lock:
                     self._ring.append((now_ts, jpeg_bytes))
                     pending = self._capture
-                    if pending is not None:
+                    if (
+                        pending is not None
+                        and pending.get("state") == "collecting"
+                    ):
                         pending["frames"].append((now_ts, jpeg_bytes))
                         capture_due = now_ts >= float(pending["deadline"])
                     else:
@@ -1690,7 +2233,12 @@ class _EngineWorker:
                         str(ev.get("kind", "event")), float(ev.get("ts", now_ts))
                     )
                 if capture_due:
-                    self._write_capture()
+                    # Encode off-loop: the pre-roll decode/re-encode blocks
+                    # for seconds and must never run on this frame loop.
+                    # The slot stays claimed until the WRITER finishes
+                    # encoding, so triggers firing during a slow encode
+                    # emit events but cannot allocate another capture.
+                    self._dispatch_due_capture()
 
                 # All-native telemetry — no numpy types can leak into JSON.
                 telemetry = {
@@ -1701,9 +2249,12 @@ class _EngineWorker:
                     "frame_id": int(frame_id),
                     "resolution": f"{src_w}x{src_h}",
                     "threshold": float(threshold),
+                    "task": str(task),
+                    "jpeg_quality": int(jpeg_quality),
+                    "send_width": int(send_width),
                 }
                 ts_ms = int(time.time() * 1000)
-                self.push(pack_frame(frame_id, ts_ms, buf.tobytes(), telemetry))
+                self.push_frame(pack_frame(frame_id, ts_ms, jpeg_bytes, telemetry))
 
                 # ── pace to (roughly) real time ───────────────────────────
                 # File/webcam only: url streams are paced by their own
@@ -1733,6 +2284,7 @@ _worker: Optional[_EngineWorker] = None
 _pending_zones: Optional[list[dict]] = None    # set_zones before a worker exists
 _pending_triggers: Optional[dict] = None       # set_triggers before a worker exists
 _pending_targets: Optional[list[dict]] = None  # add_prompt_box before a worker exists
+_sinks: "set[_ClientSink]" = set()             # every attached viewer's sink
 
 
 def _alive(worker: Optional[_EngineWorker]) -> bool:
@@ -1748,15 +2300,36 @@ async def _safe_send_json(websocket: WebSocket, message: dict) -> None:
         pass
 
 
-async def _sender(websocket: WebSocket, outbound: "asyncio.Queue[Any]") -> None:
-    """Drain the worker's outbound queue to the socket.
+async def _sender(websocket: WebSocket, sink: "_ClientSink") -> None:
+    """Drain one viewer's sink queue to its socket.
 
-    Binary bytes (packed frames) go out as-is; dicts are json-dumped.
+    Binary frames AND ``detections`` sets travel via the sink's one-slot
+    pending buffers (the queue only ever carries the ``_FRAME_SENTINEL`` /
+    ``_DETECTIONS_SENTINEL`` markers), so a slow viewer can never
+    accumulate a backlog of stale JPEGs or stale detection snapshots — the
+    newest value wins and older ones are dropped. Other dicts (events /
+    captures / status / ask_ack / answer / report_result / error) are
+    json-dumped in order and never dropped.
     """
     while True:
-        message = await outbound.get()
+        message = await sink.queue.get()
         try:
-            if isinstance(message, (bytes, bytearray)):
+            if message is _FRAME_SENTINEL:
+                with sink.out_lock:
+                    frame = sink.pending_frame
+                    sink.pending_frame = None
+                if frame is not None:
+                    await websocket.send_bytes(frame)
+            elif message is _DETECTIONS_SENTINEL:
+                with sink.out_lock:
+                    items = sink.pending_detections
+                    sink.pending_detections = None
+                if items is not None:
+                    await websocket.send_text(
+                        json.dumps({"type": "detections", "items": items})
+                    )
+            elif isinstance(message, (bytes, bytearray)):
+                # Not produced by the worker anymore; kept for robustness.
                 await websocket.send_bytes(bytes(message))
             else:
                 await websocket.send_text(json.dumps(message))
@@ -1791,11 +2364,19 @@ async def live_ws(websocket: WebSocket) -> None:
         return
 
     await websocket.accept()
-    await _safe_send_json(websocket, {"type": "status", "note": "local engine ready"})
+    # Multi-viewer: any connected dashboard receives the running engine's
+    # stream; only the SOURCE/config changes need a stop + fresh start.
+    streaming = _alive(_worker)
+    await _safe_send_json(
+        websocket,
+        {"type": "status",
+         "note": ("local engine ready — engine streaming (attached as viewer)"
+                  if streaming else "local engine ready")},
+    )
 
-    outbound: "asyncio.Queue[Any]" = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-    sender = asyncio.create_task(_sender(websocket, outbound))
+    sink = _ClientSink(asyncio.get_running_loop())
+    _sinks.add(sink)
+    sender = asyncio.create_task(_sender(websocket, sink))
 
     while True:
         # Receive controls (JSON text) and send frames concurrently: the
@@ -1822,6 +2403,17 @@ async def live_ws(websocket: WebSocket) -> None:
             continue
 
         if action == "start":
+            # Legacy compatibility: the key validates, but the worker never
+            # sees it — features are recomputed every detection pass. The
+            # note goes out after the start settles so it cannot break a
+            # normal start.
+            backbone_note: Optional[str] = None
+            if "backbone_every" in payload:
+                del payload["backbone_every"]
+                backbone_note = (
+                    "backbone_every is deprecated and ignored — features "
+                    "are recomputed on every detection pass"
+                )
             # Single-instance guard: decide under the lock without awaiting,
             # then start the thread outside it (a threading.Lock must never
             # be held across an await on the event loop thread).
@@ -1831,7 +2423,7 @@ async def live_ws(websocket: WebSocket) -> None:
             pending_targets: Optional[list[dict]] = None
             with _engine_lock:
                 if not _alive(_worker):
-                    created = _EngineWorker(payload, loop, outbound)
+                    created = _EngineWorker(payload, _sinks)
                     created.thread = threading.Thread(
                         target=created.run, name="live-engine-worker", daemon=True
                     )
@@ -1844,7 +2436,13 @@ async def live_ws(websocket: WebSocket) -> None:
                     _pending_triggers = None
                     _pending_targets = None
             if created is None:
-                await _safe_send_json(websocket, {"type": "status", "note": "engine busy — stop first"})
+                # Multi-viewer: an engine started by another dashboard keeps
+                # streaming to this socket — nothing to do but say so.
+                await _safe_send_json(
+                    websocket,
+                    {"type": "status",
+                     "note": "engine already running — attached as viewer (stop first to change source)"},
+                )
             else:
                 if pending_zones is not None:
                     created.set_zones(pending_zones)
@@ -1856,6 +2454,10 @@ async def live_ws(websocket: WebSocket) -> None:
                 for entry in pending_targets or []:
                     created.add_target(entry["box"], entry.get("label"))
                 created.thread.start()
+            if backbone_note is not None:
+                await _safe_send_json(
+                    websocket, {"type": "status", "note": backbone_note}
+                )
 
         elif action == "stop":
             worker = _worker
@@ -1887,9 +2489,146 @@ async def live_ws(websocket: WebSocket) -> None:
             worker = _worker
             if _alive(worker):
                 worker.set_prompts(payload["prompts"])
-                await _safe_send_json(websocket, {"type": "status", "note": "prompts updated"})
+                note = (
+                    "prompts updated"
+                    if payload["prompts"]
+                    else "detection paused (no prompts)"
+                )
+                await _safe_send_json(websocket, {"type": "status", "note": note})
             else:
                 await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
+
+        elif action == "set_threshold":
+            worker = _worker
+            if _alive(worker):
+                worker.set_threshold(payload["threshold"])
+                await _safe_send_json(
+                    websocket,
+                    {"type": "status", "note": f"threshold {payload['threshold']:g}"},
+                )
+            else:
+                await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
+
+        elif action == "set_stream":
+            worker = _worker
+            if _alive(worker):
+                worker.set_stream(payload.get("jpeg_quality"), payload.get("send_width"))
+                await _safe_send_json(websocket, {"type": "status", "note": "stream retuned"})
+            else:
+                await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
+
+        elif action == "set_task":
+            worker = _worker
+            if _alive(worker):
+                worker.set_task(payload["task"])
+                await _safe_send_json(
+                    websocket,
+                    {"type": "status", "note": f"task {payload['task']}"},
+                )
+            else:
+                await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
+
+        elif action == "set_engine":
+            # The local engine runs SAM only; answer the hub-protocol chips
+            # honestly instead of silently no-oping.
+            extra = [k for k in ("falcon", "lfm") if payload.get(k)]
+            note = "local engine · SAM only"
+            if extra:
+                note += " — not available locally: " + ", ".join(extra)
+            await _safe_send_json(websocket, {"type": "status", "note": note})
+
+        elif action == "set_vlm":
+            from . import vlm_registry
+
+            try:
+                vlm_registry.set_model(payload["model"])
+                await _safe_send_json(
+                    websocket,
+                    {"type": "status", "note": f"vlm · {payload['model']}"},
+                )
+            except ValueError:
+                await _safe_send_json(
+                    websocket,
+                    {"type": "status",
+                     "note": f"unknown vlm {payload['model']!r} (gemma | lfm | lfm3b)"},
+                )
+
+        elif action == "ask":
+            worker = _worker
+            if not _alive(worker):
+                # Pinned error shape (ask/report path only): rejection (a).
+                await _safe_send_json(
+                    websocket,
+                    {"type": "error", "error": "no engine running — start the engine first"},
+                )
+            else:
+                # Grounding BEFORE the shared slot: capture ONE consistent
+                # server-owned evidence snapshot (frame + records under a
+                # single _frame_lock acquisition, plus prompts) and reject
+                # unarmed/unobserved requests without any VLM inference.
+                snapshot = worker.evidence_snapshot()
+                if snapshot is None:
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "error",
+                         "error": "no current observation — start the engine and arm prompts"},
+                    )
+                elif not snapshot["prompts"]:
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "error",
+                         "error": "prompts are paused — arm prompts to ask"},
+                    )
+                elif not _claim_ask_slot():
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "error", "error": "ask/report already running"},
+                    )
+                else:
+                    await _safe_send_json(websocket, {"type": "ask_ack", "model": _vlm_label()})
+                    threading.Thread(
+                        target=_ask_once,
+                        args=(worker, payload["question"], snapshot),
+                        name="live-ask", daemon=True,
+                    ).start()
+
+        elif action == "report":
+            worker = _worker
+            if not _alive(worker):
+                # Pinned error shape (ask/report path only): rejection (a).
+                await _safe_send_json(
+                    websocket,
+                    {"type": "error", "error": "no engine running — start the engine first"},
+                )
+            else:
+                # Same evidence + grounding rule as ask: snapshot at
+                # dispatch, reject without inference, then claim the slot.
+                # Counts come from the snapshot's records SERVER-SIDE; the
+                # browser summary is never forwarded to the model.
+                snapshot = worker.evidence_snapshot()
+                if snapshot is None:
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "error",
+                         "error": "no current observation — start the engine and arm prompts"},
+                    )
+                elif not snapshot["prompts"]:
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "error",
+                         "error": "prompts are paused — arm prompts to report"},
+                    )
+                elif not _claim_ask_slot():
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "error", "error": "ask/report already running"},
+                    )
+                else:
+                    threading.Thread(
+                        target=_report_once,
+                        args=(worker, snapshot, payload["report_type"]),
+                        name="live-report", daemon=True,
+                    ).start()
 
         elif action == "set_zones":
             zones = payload["zones"]
@@ -1920,22 +2659,32 @@ async def live_ws(websocket: WebSocket) -> None:
                         websocket, {"type": "status", "note": f"target added ({number})"}
                     )
             else:
-                # No engine yet — stage the target, applied on the next start.
+                # No engine yet — stage the target, applied on the next
+                # start. Mutate under the lock, send OUTSIDE it (a
+                # threading.Lock must never be held across an await on the
+                # event loop thread — it is not coroutine-aware; a suspended
+                # send would block every other handler on acquire).
+                staged_ok: list[dict] | None = None
+                staged_full = False
                 with _engine_lock:
                     staged = list(_pending_targets or [])
                     if len(staged) >= _MAX_TARGETS:
-                        await _safe_send_json(
-                            websocket,
-                            {"type": "status", "note": f"target limit reached ({_MAX_TARGETS})"},
-                        )
+                        staged_full = True
                     else:
                         staged.append(payload)
                         _pending_targets = staged
-                        await _safe_send_json(
-                            websocket,
-                            {"type": "status",
-                             "note": f"target added ({len(staged)}) (starts with the engine)"},
-                        )
+                        staged_ok = staged
+                if staged_full:
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "status", "note": f"target limit reached ({_MAX_TARGETS})"},
+                    )
+                else:
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "status",
+                         "note": f"target added ({len(staged_ok or [])}) (starts with the engine)"},
+                    )
 
         elif action == "remove_targets":
             worker = _worker
@@ -1964,9 +2713,12 @@ async def live_ws(websocket: WebSocket) -> None:
                 {"type": "status", "note": "watch on" if enabled else "watch off"},
             )
 
-    # Disconnect (or fatal receive error): stop the worker, drain the sender.
+    # Disconnect (or fatal receive error): drop this viewer's sink; the
+    # engine keeps streaming to remaining viewers and stops only when the
+    # LAST one leaves (or on an explicit stop/shutdown).
+    _sinks.discard(sink)
     worker = _worker
-    if _alive(worker):
+    if _alive(worker) and not _sinks:
         worker.stop_event.set()
         await asyncio.to_thread(worker.thread.join, 10.0)
     sender.cancel()
