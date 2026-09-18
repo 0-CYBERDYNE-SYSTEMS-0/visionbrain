@@ -1,0 +1,100 @@
+<svg viewBox="0 0 1120 472" role="img" aria-label="Signal-flow plate for VisionBridge. Left column, inputs: your existing CCTV network, cameras you already own on a wall or parapet, and drone feeds from one aircraft or a fleet. All three cross the same boundary into one reasoning core, drawn in the middle column, which runs three steps in order: detect whether a person is on a surface, mask the exact shape rather than a box, and fuse many views into one picture. Right column, outputs: field phones receive the annotated frame, and an operator console holds the zone, confidence, timestamp and log. The core's output figures are the architecture, not a measurement taken on this machine.">
+        <defs>
+          <marker id="p1-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#5b6570"/>
+          </marker>
+        </defs>
+
+        <!-- ============================== HEADER ============================== -->
+        <text x="28" y="44" class="svg-label" font-weight="500">how it works</text>
+        <text x="148" y="44" class="svg-mono">· three inputs, one core, one frame out</text>
+        <line x1="28" y1="60" x2="1092" y2="60" stroke="#c8d0d6" stroke-width="1"/>
+
+        <!-- ============================== INPUTS ============================== -->
+        <text x="28" y="84" class="svg-mono">inputs — whichever you already have</text>
+
+        <rect x="28" y="108" width="364" height="288" fill="none" stroke="#c8d0d6" stroke-width="1.5"/>
+        <line x1="28" y1="204" x2="392" y2="204" stroke="#c8d0d6" stroke-width="1"/>
+        <line x1="28" y1="300" x2="392" y2="300" stroke="#c8d0d6" stroke-width="1"/>
+
+        <!-- input 1 — existing cctv network -->
+        <rect x="52" y="140" width="48" height="32" fill="#e4e9ec" stroke="#101820" stroke-width="1.5"/>
+        <line x1="60" y1="148" x2="92" y2="148" stroke="#5b6570" stroke-width="1"/>
+        <line x1="60" y1="156" x2="86" y2="156" stroke="#5b6570" stroke-width="1"/>
+        <line x1="60" y1="164" x2="90" y2="164" stroke="#5b6570" stroke-width="1"/>
+        <line x1="100" y1="156" x2="108" y2="156" stroke="#101820" stroke-width="1.5" stroke-dasharray="3 3"/>
+        <rect x="108" y="148" width="24" height="16" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <circle cx="132" cy="156" r="4" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <text x="168" y="144" class="svg-label" font-weight="500">your existing CCTV</text>
+        <text x="168" y="168" class="svg-mono">NVR or VMS · we read the stream</text>
+
+        <!-- input 2 — fixed cameras you already own -->
+        <line x1="52" y1="224" x2="52" y2="280" stroke="#101820" stroke-width="1.5"/>
+        <rect x="56" y="228" width="48" height="32" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <rect x="110" y="236" width="24" height="16" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <circle cx="138" cy="244" r="4" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <text x="168" y="240" class="svg-label" font-weight="500">cameras you already own</text>
+        <text x="168" y="264" class="svg-mono">on a wall, a gatepost, a parapet</text>
+
+        <!-- input 3 — drone feeds -->
+        <g fill="none" stroke="#101820" stroke-width="1.5">
+          <circle cx="84" cy="348" r="4"/>
+          <line x1="62" y1="326" x2="106" y2="370"/>
+          <line x1="106" y1="326" x2="62" y2="370"/>
+          <circle cx="62" cy="326" r="4"/>
+          <circle cx="106" cy="326" r="4"/>
+          <circle cx="62" cy="370" r="4"/>
+          <circle cx="106" cy="370" r="4"/>
+        </g>
+        <text x="168" y="336" class="svg-label" font-weight="500">drone feeds</text>
+        <text x="168" y="360" class="svg-mono">one aircraft, or a fleet</text>
+
+        <!-- converge on one boundary -->
+        <circle cx="416" cy="252" r="2.5" fill="#5b6570"/>
+        <path d="M392 156 C 412 156, 420 252, 440 252" fill="none" stroke="#5b6570" stroke-width="1.5"/>
+        <path d="M392 252 L440 252" fill="none" stroke="#5b6570" stroke-width="1.5"/>
+        <path d="M392 348 C 412 348, 420 252, 440 252" fill="none" stroke="#5b6570" stroke-width="1.5"/>
+
+        <!-- ============================== THE CORE ============================== -->
+        <rect x="440" y="108" width="328" height="288" fill="#e4e9ec" stroke="#101820" stroke-width="1.5"/>
+        <text x="464" y="144" class="svg-label" font-weight="500">one reasoning core</text>
+
+        <text x="464" y="208" class="svg-mono" font-weight="500">1 detect</text>
+        <text x="532" y="208" class="svg-label" font-weight="500">is a person on a surface?</text>
+
+        <text x="464" y="264" class="svg-mono" font-weight="500">2 mask</text>
+        <text x="532" y="264" class="svg-label" font-weight="500">the exact shape, not a box</text>
+
+        <rect x="464" y="280" width="280" height="44" fill="none" stroke="#c8361a" stroke-width="2" class="pulse"/>
+        <path d="M528 324 L528 308 L572 308 L572 300 L580 288 L628 288 L636 300 L636 308 L680 308 L680 324 Z" fill="none" stroke="#c8361a" stroke-width="2"/>
+
+        <text x="464" y="368" class="svg-mono" font-weight="500">3 fuse</text>
+        <text x="532" y="368" class="svg-label" font-weight="500">many views, one picture</text>
+
+        <!-- ============================== OUTPUTS ============================== -->
+        <text x="840" y="84" class="svg-mono">outputs — where the frame lands</text>
+
+        <line x1="768" y1="252" x2="792" y2="252" stroke="#5b6570" stroke-width="1.5"/>
+        <circle cx="792" cy="252" r="2.5" fill="#5b6570"/>
+        <path d="M792 252 C 812 252, 820 156, 840 156" fill="none" stroke="#5b6570" stroke-width="1.5" marker-end="url(#p1-ar)"/>
+        <path d="M792 252 C 812 252, 820 348, 840 348" fill="none" stroke="#5b6570" stroke-width="1.5" marker-end="url(#p1-ar)"/>
+
+        <!-- output 1 — field phones -->
+        <rect x="840" y="108" width="52" height="96" rx="9" fill="none" stroke="#101820" stroke-width="2"/>
+        <rect x="848" y="128" width="36" height="56" fill="#101820"/>
+        <path d="M856 180 L856 168 L862 162 L866 162 L866 156 L870 152 L874 156 L874 162 L878 162 L880 168 L880 180 Z" fill="#c8361a"/>
+        <rect x="848" y="190" width="36" height="8" fill="none" stroke="#5b6570" stroke-width="1"/>
+        <text x="918" y="144" class="svg-label" font-weight="500">field phones</text>
+        <text x="918" y="168" class="svg-mono">the masked frame, pushed</text>
+        <text x="918" y="186" class="svg-mono">to phones on the ground</text>
+
+        <!-- output 2 — operator console -->
+        <rect x="840" y="300" width="252" height="96" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <text x="864" y="328" class="svg-label" font-weight="500">operator console</text>
+        <text x="864" y="358" class="svg-mono">zone · confidence · timestamp</text>
+        <text x="864" y="376" class="svg-mono">and the log of the frame</text>
+
+        <!-- ============================== FOOTNOTE ============================== -->
+        <line x1="28" y1="420" x2="1092" y2="420" stroke="#c8d0d6" stroke-width="1"/>
+        <text x="28" y="440" class="svg-mono">all three input classes cross the same boundary · one frame out</text>
+      </svg>

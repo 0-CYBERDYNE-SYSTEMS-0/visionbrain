@@ -1,0 +1,283 @@
+/* ============================================================================
+   VisionBridge v3 · component CSS — the numbered step row (.beats)
+   and the readout band (.readout).                     Dana Whitlock, component lead.
+
+   MERGE INSTRUCTIONS (for the orchestrator)
+   -----------------------------------------
+   Delete these v2 rules from site/index-v2.html's single <style> block:
+       lines 55-61   the four .readout rules        (border/div/b/em)
+       lines 75-80   the six .beats rules           (grid/child/borders/h3/p/.n)
+       lines 138-139 .beats + .beats > div, inside the @media (max-width:900px) block
+         — the "border-left: 0 !important" pair.  That !important exists only to
+           undo the base border rule; the block below redefines the structure at
+           each breakpoint instead, so nothing needs !important.
+   Then paste everything between BEGIN COMPONENT CSS and END COMPONENT CSS,
+   verbatim and in order, anywhere after the v2 rules it replaces.  The block is
+   self-contained: it references no other selector on the page and no other rule
+   references these.  It relies on :root tokens from the page (no new token).
+
+   WHAT IS IN THE BLOCK
+     A. .beats       — numbered step row
+     B. @supports    — no-subgrid fallback for A
+     C. .readout     — key/value readout band
+     D. breakpoints  — 900px (2-up / mid band), 620px (1-up), 560px (stacked band)
+
+   PROPERTY-LEVEL CHANGES vs v2 (full list, nothing else was touched)
+     .beats        grid-template-columns repeat(4,1fr) -> repeat(4, minmax(0,1fr))
+                   + grid-template-rows: auto auto 1fr   (NEW: one row grid shared
+                     by all four cards, so ordinal / title / body all start on the
+                     same line in every card)
+                   + column-gap: 48px  (NEW: gutters come from the grid, not from
+                     per-card padding, so all four text columns are the same width)
+                   + row-gap: 0, padding: 0, list-style: none (NEW: the row is now
+                     an <ol>, so the UA list furniture is reset)
+                   margin-top 34px (unchanged)
+     .beats > *    replacing ".beats > div": display: grid NEW, grid-row: span 3 NEW,
+                     grid-template-rows: subgrid NEW, align-content: start NEW,
+                     margin: 0 NEW
+                   padding 20px 22px 4px 0 -> 24px 0 32px
+     .beats > *::before  NEW: the column hairline is a pseudo-element centred in the
+                     grid gutter (left: -24.5px, width: 1px, --rule), shown on all
+                     but the first card.  v2 used border-left on the card itself,
+                     which forced the padding-left/padding-right asymmetry and the
+                     !important reset at 2-up.
+     .beats .n     color var(--signal-ink) -> var(--ink)   (red is semantic on this
+                     page: #9c2a13 is the token for a label attached to a detection,
+                     not for a step number.  SPEC §1.)
+                   display block -> block (unchanged), + line-height 16px NEW
+                     (the ordinal now has its own fixed slot), + font-weight 500 NEW,
+                   + font-variant-numeric: tabular-nums NEW (01–04 all the same
+                     advance width), + letter-spacing .08em NEW,
+                   margin-bottom 10px -> 12px
+     .beats h3     font-size 17px -> 18px, + line-height 1.25 NEW,
+                   + text-wrap: balance NEW, margin 0 0 8px -> 0 0 10px
+     .beats p      font-size 14.5px -> 15px, + line-height 1.55 NEW,
+                   + text-wrap: pretty NEW, + max-width 60ch NEW
+     .readout      + display: grid NEW, + grid-template-columns: max-content
+                     minmax(0,1fr) NEW  (the old fixed 190px key width is gone;
+                     the key column is now exactly as wide as its widest key and
+                     shrinks with the viewport), + column-gap: 28px NEW,
+                   + align-items: baseline NEW (key and value share the first
+                     baseline in every row), + row-gap: 0 NEW,
+                   margin 30px 0 0 -> 30px auto 0  (FIX: the v2 shorthand set
+                     margin-left/right to 0 and silently beat .wrap's "margin: 0
+                     auto" — measured, the whole band sat flush to the left
+                     viewport edge, at 0px while the sections sat at 130px at
+                     1440.  The band's two rules now align with the page measure),
+                   padding 22px 0 -> 20px 0 22px,
+                   border-top / border-bottom (unchanged)
+     .readout > div  NEW: display: contents, so the <b> and <span> of every row
+                     become cells of the band's single two-column grid and line up
+                     across all six rows.  Replaces v2's per-line flex row.
+                     (v2 rule was ".readout div": font-family mono, font-size
+                     13.5px, color graphite, display flex, gap 14px, padding 3px 0,
+                     flex-wrap wrap — all of that is gone.)
+     .readout > div > b        NEW selector: mono 13px / weight 500 / --ink /
+                     padding 5px 0.  (v2 ".readout div b": --ink, weight 500,
+                     min-width 190px — min-width deleted.)
+     .readout > div > span     NEW selector: IBM Plex Sans 14.5px / line-height 21px
+                     / --graphite / padding 5px 0.  This is the architecture-claim
+                     type: if a value is set in Sans it is a claim about what the
+                     architecture supports, not a measurement.
+     .readout > div.ro-measured > span   NEW: mono 13.5px, same graphite.
+     .readout > div.ro-measured > span em  NEW: font-style normal, weight 500,
+                     color --ink.  (v2 ".readout div em": color var(--signal-ink) —
+                     red removed from all five places it was used in this band:
+                     "1.3 s", "1.8 s", "2 s", "drone feeds", "walls", "mobile unit".
+                     Four of those are pure decoration and the two latency figures
+                     are timings, not detection labels; the page's one red rule is
+                     worth more than the accent.  To restore it if the owner
+                     disagrees, that is one line: add
+                     "color: var(--signal-ink)" to the ro-measured em rule.)
+     .ro-head      NEW class: the band's category label — mono 11.5px / .04em /
+                     --graphite / spans both grid columns / padding 0 0 6px.
+     .ro-head-mid  NEW class: the second category label carries the hairline that
+                     separates the two categories (border-top 1px --rule,
+                     margin-top 10px, padding-top 14px).
+     Breakpoints   @media (max-width:900px): .beats 2 columns, structural switch
+                     (column-gap 0, real border-left on the right-hand card,
+                     border-top on the lower row, pseudo hairlines hidden) —
+                     replaces v2's "border-left: 0 !important".
+                   @media (max-width:620px): .beats 1 column, all vertical rules off
+                     by explicit specificity-matched reset, horizontal rule between
+                     cards.
+                   @media (max-width:560px): .readout collapses to one column and
+                     each key/value pair stacks, so no key column has to survive a
+                     narrow viewport.
+
+   NOT IN THE BLOCK: no new colour, no gradient, no shadow, no filter, no
+   transition, no animation, no @font-face.  Motion families used: none.
+   ============================================================================ */
+
+/* ======================= BEGIN COMPONENT CSS ============================== */
+
+  /* ---------- A. the numbered step row -------------------------------------- */
+  .beats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: auto auto 1fr;   /* ordinal · title · body, shared by all cards */
+    column-gap: 48px;
+    row-gap: 0;
+    margin: 34px 0 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--rule);
+  }
+  .beats > * {
+    position: relative;
+    display: grid;
+    grid-row: span 3;
+    grid-template-rows: subgrid;        /* every card subscribes to the shared rows */
+    align-content: start;
+    margin: 0;
+    padding: 24px 0 32px;
+  }
+  .beats > *::before {                  /* column hairline, centred in the gutter */
+    content: "";
+    position: absolute;
+    left: -24.5px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--rule);
+    display: none;
+  }
+  .beats > *:nth-child(n+2)::before { display: block; }
+
+  .beats .n {                           /* the ordinal: fixed slot, tabular figures */
+    display: block;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .08em;
+    color: var(--ink);
+    margin: 0 0 12px;
+  }
+  .beats h3 {
+    font-size: 18px;
+    line-height: 1.25;
+    text-wrap: balance;
+    margin: 0 0 10px;
+  }
+  .beats p {
+    margin: 0;
+    max-width: 60ch;
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--graphite);
+    text-wrap: pretty;
+  }
+
+  /* ---------- B. fallback for browsers without subgrid ---------------------- */
+  @supports not (grid-template-rows: subgrid) {
+    .beats > * {
+      display: flex;
+      flex-direction: column;
+      grid-row: auto;
+      grid-template-rows: none;
+    }
+  }
+
+  /* ---------- C. the readout band ------------------------------------------- */
+  .readout {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    column-gap: 28px;
+    row-gap: 0;
+    align-items: baseline;               /* key and value share a first baseline */
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    /* v2 wrote "margin: 30px 0 0" here, which silently killed .wrap's
+       margin: 0 auto and left the whole band flush to the left viewport edge
+       (measured: band left 0px at 1440 while every other .wrap sits at 130px).
+       "auto" restores the centring the band was always meant to have. */
+    margin: 30px auto 0;
+    padding: 20px 0 22px;
+  }
+  .readout > div { display: contents; }  /* row cells become cells of the band grid */
+
+  .readout > div > b {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+    min-width: 0;                        /* neutralises v2's min-width: 190px */
+    padding: 5px 0;
+  }
+  .readout > div > span {                /* default value type = architecture claim */
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 14.5px;
+    line-height: 21px;
+    min-width: 0;
+    color: var(--graphite);
+    padding: 5px 0;
+  }
+  .readout > div.ro-measured > span {    /* measured type = mono */
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13.5px;
+    line-height: 21px;
+  }
+  .readout > div.ro-measured > span em { /* the measured figure itself */
+    font-style: normal;
+    font-weight: 500;
+    color: var(--ink);
+  }
+
+  .ro-head {
+    grid-column: 1 / -1;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11.5px;
+    line-height: 18px;
+    letter-spacing: .04em;
+    color: var(--graphite);
+    margin: 0;
+    padding: 0 0 6px;
+  }
+  .ro-head-mid {
+    border-top: 1px solid var(--rule);
+    margin-top: 10px;
+    padding-top: 14px;
+  }
+
+  /* ---------- D. breakpoints ------------------------------------------------- */
+  @media (max-width: 900px) {
+    .beats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: 0;
+    }
+    .beats > * { padding-right: 30px; }
+    /* hide the gutter hairlines at every width below 900 — written against the
+       same selector as the base "display: block" rule, because a bare
+       ".beats > *::before" loses to it on specificity and leaves a second
+       1px rule standing 24.5px away from the real column rule (measured at
+       768px: an orphan hairline at x=359.5 next to the card rule at x=384). */
+    .beats > *:nth-child(n+2)::before { display: none; }
+    .beats > *:nth-child(even) {
+      border-left: 1px solid var(--rule);
+      padding-left: 30px;
+      padding-right: 0;
+    }
+    .beats > *:nth-child(n+3) { border-top: 1px solid var(--rule); }
+  }
+
+  @media (max-width: 620px) {
+    .beats { grid-template-columns: minmax(0, 1fr); }
+    .beats > * { padding: 24px 0 26px; }
+    .beats > *:nth-child(even) { border-left: 0; padding-left: 0; }
+    .beats > *:nth-child(n+2) { border-top: 1px solid var(--rule); }
+  }
+
+  @media (max-width: 560px) {
+    .readout {
+      grid-template-columns: minmax(0, 1fr);
+      column-gap: 0;
+      align-items: start;
+    }
+    .readout > div > b { padding: 12px 0 0; }
+    .readout > div > span { padding: 2px 0 4px; }
+    .ro-head-mid { margin-top: 12px; }
+  }
+
+/* ======================== END COMPONENT CSS =============================== */

@@ -1,0 +1,35 @@
+<!-- ============================================================================
+     VisionBridge v3 · component B — the readout band (six key/value lines)
+     Owner: Dana Whitlock (HTML/CSS component specialist).
+     Replaces: <div class="wrap readout"> … </div> in site/index-v2.html,
+     lines 173-180, i.e. the band that sits directly under the hero.
+
+     Class names: .readout, and the <div>/<b>/<span>/<em> furniture, are kept.
+     Added classes: .ro-head, .ro-head-mid, .ro-measured.
+
+     WHAT THE BAND NOW SAYS
+     The six lines are split into the page's two honesty categories, stated in
+     the band itself rather than left to be inferred:
+       measured on this machine  — detection (1.3 s) and mask (1.8 s). These two
+         figures are the warm_ms values in out/falcon_results.json
+         (falcon_lowres_detect.warm_ms = 1281; sam31.segment_warm_ms = 1807).
+       supported in the architecture — alert delivery, inputs, surfaces, where
+         it runs.  "under 2 s after mask" is a stage budget, not a benchmark:
+         no push-path latency exists in falcon_results.json or in the page's
+         table, so it must not be set in measured type.  (The measured
+         end-to-end figure the page already publishes is "under three seconds
+         at a 1 fps sampling rate", on the ledger's measured side.)
+
+     Group membership is markup, not CSS: moving a <p class="ro-head-mid"> one
+     row is all it takes to reclassify a line.
+     ============================================================================ -->
+  <div class="wrap readout">
+    <p class="ro-head">measured on this machine</p>
+    <div class="ro-measured"><b>detection</b><span>person on a surface · low-res tripwire · <em>1.3 s</em> warm</span></div>
+    <div class="ro-measured"><b>mask</b><span>SAM 3.1 segmentation · <em>1.8 s</em> warm</span></div>
+    <p class="ro-head ro-head-mid">supported in the architecture</p>
+    <div><b>alert</b><span>annotated frame to field phones · under 2 s after mask</span></div>
+    <div><b>inputs</b><span>existing CCTV · fixed cameras · drone feeds · one core reads all of them</span></div>
+    <div><b>surfaces</b><span>roofs · walls · perimeters · building faces</span></div>
+    <div><b>where it runs</b><span>on-site machine · virtual machine · cloud · mobile unit</span></div>
+  </div>

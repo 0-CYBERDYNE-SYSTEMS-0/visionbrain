@@ -1,0 +1,224 @@
+{
+ "A-day-roof-field": {
+  "size": [
+   1024,
+   1024
+  ],
+  "detect": {
+   "cold_ms": 9699,
+   "warm_ms": 3950,
+   "n_cold": 1,
+   "n_warm": 1,
+   "items": [
+    {
+     "label": "person",
+     "score": 1.0,
+     "cx": 0.5107421875,
+     "cy": 0.3359375,
+     "h": 0.02423827536404133,
+     "w": 0.010462053120136261
+    }
+   ],
+   "stats": {
+    "preprocess_ms": 39.5,
+    "generation_ms": 3909.9
+   }
+  },
+  "segment": {
+   "cold_ms": 34869,
+   "warm_ms": 9812,
+   "n_cold": 1,
+   "n_warm": 1,
+   "items": [
+    {
+     "id": 1,
+     "centroid_norm": {
+      "x": 0.5098,
+      "y": 0.335
+     },
+     "bbox_norm": {
+      "x1": 0.5049,
+      "y1": 0.3223,
+      "x2": 0.5146,
+      "y2": 0.3477
+     },
+     "area_fraction": 0.0002,
+     "image_region": "center"
+    }
+   ],
+   "stats": {
+    "preprocess_ms": 209.2,
+    "generation_ms": 9513.7
+   }
+  },
+  "segment_rles": [
+   {
+    "size": [
+     1024,
+     1024
+    ],
+    "counts": "bZU`06co0N_PO53KRo0f00O1O1LiPO]OXo0c03O2H7Lae`?"
+   }
+  ],
+  "segment_areas": [
+   0.0002
+  ],
+  "falcon_lowres_detect": {
+   "cold_ms": 8030,
+   "warm_ms": 1281,
+   "n_warm": 1,
+   "items": [
+    {
+     "label": "person",
+     "score": 1.0,
+     "cx": 0.5107421875,
+     "cy": 0.3359375,
+     "h": 0.02423827536404133,
+     "w": 0.010533181019127369
+    }
+   ]
+  },
+  "sam31": {
+   "detect_cold_ms": 11305,
+   "detect_warm_ms": 1831,
+   "segment_cold_ms": 1815,
+   "segment_warm_ms": 1807,
+   "n": 2,
+   "items": [
+    {
+     "label": "person",
+     "score": 0.8475,
+     "bbox_xyxy": [
+      523.6735,
+      338.6416,
+      535.1339,
+      359.493
+     ],
+     "has_mask": true
+    },
+    {
+     "label": "person",
+     "score": 0.3131,
+     "bbox_xyxy": [
+      510.398,
+      1017.6312,
+      521.1044,
+      1024.0
+     ],
+     "has_mask": true
+    }
+   ]
+  }
+ },
+ "C-close-roof": {
+  "size": [
+   1024,
+   1024
+  ],
+  "detect": {
+   "cold_ms": 4340,
+   "warm_ms": 3946,
+   "n_cold": 1,
+   "n_warm": 1,
+   "items": [
+    {
+     "label": "person",
+     "score": 1.0,
+     "cx": 0.4921875,
+     "cy": 0.47265625,
+     "h": 0.08151368796825409,
+     "w": 0.03816429153084755
+    }
+   ],
+   "stats": {
+    "preprocess_ms": 38.0,
+    "generation_ms": 3907.2
+   }
+  },
+  "segment": {
+   "cold_ms": 10123,
+   "warm_ms": 10951,
+   "n_cold": 1,
+   "n_warm": 1,
+   "items": [
+    {
+     "id": 1,
+     "centroid_norm": {
+      "x": 0.4907,
+      "y": 0.4722
+     },
+     "bbox_norm": {
+      "x1": 0.4717,
+      "y1": 0.4316,
+      "x2": 0.5098,
+      "y2": 0.5127
+     },
+     "area_fraction": 0.0019,
+     "image_region": "center"
+    }
+   ],
+   "stats": {
+    "preprocess_ms": 40.3,
+    "generation_ms": 10900.4
+   }
+  },
+  "segment_rles": [
+   {
+    "size": [
+     1024,
+     1024
+    ],
+    "counts": "R_S?4bo0;J7I6L4M2N10M43Ld0\\QOZNhm0i153nQOTNlm0m130N101N1NL6G:N1O21O2N4M2M4M2RROQNkm0l1RROXNkm0o1O10QOUROIim05ZROKfm06ZROHgm07ZROJfm04^ROHem05aROEbm07jRO^OZm0>gRO_O^m0:hROAoN0e_f?"
+   }
+  ],
+  "segment_areas": [
+   0.0019
+  ],
+  "falcon_lowres_detect": {
+   "cold_ms": 1583,
+   "warm_ms": 1301,
+   "n_warm": 1,
+   "items": [
+    {
+     "label": "person",
+     "score": 1.0,
+     "cx": 0.490234375,
+     "cy": 0.47265625,
+     "h": 0.08096324652433395,
+     "w": 0.03816429153084755
+    }
+   ]
+  },
+  "sam31": {
+   "detect_cold_ms": 1810,
+   "detect_warm_ms": 1812,
+   "segment_cold_ms": 1819,
+   "segment_warm_ms": 1819,
+   "n": 2,
+   "items": [
+    {
+     "label": "person",
+     "score": 0.9345,
+     "bbox_xyxy": [
+      483.5046,
+      446.6546,
+      533.0388,
+      534.028
+     ],
+     "has_mask": true
+    },
+    {
+     "label": "person",
+     "score": 0.1732,
+     "bbox_xyxy": [
+      507.5498,
+      240.5972,
+      513.993,
+      246.9991
+     ],
+     "has_mask": true
+    }
+   ]
+  }
+ }
+}
