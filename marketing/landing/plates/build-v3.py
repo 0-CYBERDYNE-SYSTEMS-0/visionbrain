@@ -80,7 +80,13 @@ ro_frag = read(os.path.join(V3, "readout-band.html"))
 m_ro = re.search(r'<div class="wrap readout">.*?(?=<section class="wrap" id="how">)', html, re.S)
 if m_ro and ro_frag:
     f = ro_frag.strip()
-    if 'class="readout"' not in f:
+    # Detect an existing wrapper STRUCTURALLY, not by a literal class string.
+    # A previous version tested `'class="readout"'`, which does NOT occur in
+    # `class="wrap readout"` — so the guard never matched, the band was wrapped a
+    # second time, and two nested grid containers shipped inside a build that had
+    # passed every gate. Nothing caught it because nesting creates no id clash and
+    # no text collision.
+    if not re.search(r'<div[^>]*class="[^"]*\breadout\b', f):
         f = '<div class="wrap readout">\n' + f + '\n  </div>'
     html = html[:m_ro.start()] + f + "\n\n  " + html[m_ro.end():]
     subs.append(f"readout band  <- v3/readout-band.html  ({len(f)} bytes, v2 was {m_ro.end()-m_ro.start()})")
@@ -88,6 +94,24 @@ elif m_ro:
     log.append("  -- readout band: no v3 file yet, kept v2")
 else:
     log.append("  !! readout band: anchor not found in v2")
+
+# ---- 3b. structural assertions: each substituted component must appear ONCE -
+# (guards against the double-wrap class of bug above; scans comment-stripped markup
+#  because the fragments' documentation comments quote tag names)
+_probe = re.sub(r'<!--.*?-->', '', html, flags=re.S)
+for label, pat, want in [
+    ("card row (.beats)",        r'class="beats"',                       1),
+    ("readout band wrapper",     r'<div[^>]*class="wrap readout"',       1),
+    ("readout rows",             r'<div[^>]*class="[^"]*\bro-measured\b', 2),
+    ("inline SVG plates",        r'<svg viewBox=',                       4),
+    ("images",                   r'<img ',                               3),
+    ("diagram containers",       r'<div class="diagram">',               4),
+]:
+    c = len(re.findall(pat, _probe))
+    if c != want:
+        log.append(f"  !! STRUCTURE: {label} appears {c}x, expected {want}")
+    else:
+        log.append(f"  ok structure: {label} x{c}")
 
 # ---- 4. the v3 CSS, appended to the page's single <style> block --------
 beats_css = read(os.path.join(V3, "beats.css"))
