@@ -8,9 +8,11 @@ VisionBrain is an aerial & camera vision AI toolkit running on Apple Silicon via
 
 For shared missions, adaptive agents, evidence/business integration, or coordinated
 work with the field bridge, read [NEXT_DEVELOPMENT_SPEC.md](NEXT_DEVELOPMENT_SPEC.md)
-and its bridge handoff before assigning implementation. It is the proposed shared
-contract; ratify CM-00 first. It does not authorize deployment or replace the
-existing UI rework plan. See [BUSINESS_CAPABILITY_RECON.md](BUSINESS_CAPABILITY_RECON.md)
+and its bridge handoff before assigning implementation. It is the shared contract
+for this cycle: CM-00 is ratified per
+[docs/CM00_DECISION_RECORD.md](docs/CM00_DECISION_RECORD.md), with implementation
+evidence still required before any capability claim. It does not authorize
+deployment or replace the existing UI rework plan. See [BUSINESS_CAPABILITY_RECON.md](BUSINESS_CAPABILITY_RECON.md)
 for product intent and source-assessment history.
 
 ```

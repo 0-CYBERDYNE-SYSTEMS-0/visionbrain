@@ -1,7 +1,9 @@
 # Next development spec: Connected Mission v1
 
-Date: 2026-09-11. Status: proposed implementation contract for lead review.
-Implementation checkboxes are deliberately unchecked. This document does not
+Date: 2026-09-11. Status: implementation contract for this cycle, ratified by CM-00
+([docs/CM00_DECISION_RECORD.md](docs/CM00_DECISION_RECORD.md), 2026-09-15).
+Implementation checkboxes are deliberately unchecked until their recorded evidence
+exists. This document does not
 authorize deployment, production writes, hardware purchases, or aircraft motion.
 
 ## 1. Deliverable and scope
