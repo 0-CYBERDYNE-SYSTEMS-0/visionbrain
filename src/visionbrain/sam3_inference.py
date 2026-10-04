@@ -107,6 +107,106 @@ class Sam31Detection:
         }
 
 
+def predict_multi_fast(
+    predictor,
+    image,
+    prompts: list[str],
+    score_threshold: float,
+    with_masks: bool,
+):
+    """Match mlx_vlm's SAM 3.1 predict_multi with less mask work.
+
+    Suppresses duplicates on boxes before any mask leaves the GPU, so only
+    surviving masks are converted and resized. With ``with_masks=False`` the
+    mask decoder is skipped and ``masks`` is None. Every other step, including
+    thresholding, suppression order and label order, follows predict_multi.
+    """
+    import mlx.core as mx
+    from mlx_vlm.models.sam3.generate import DetectionResult, _sigmoid, _resize_masks, nms
+
+    inputs = predictor.processor.preprocess_image(image)
+    pixel_values = mx.array(inputs["pixel_values"])
+    det = predictor.model.detector_model
+    det_features = det.vision_encoder(
+        pixel_values, need_det=True, need_interactive=False, need_propagation=False
+    )[0]
+    fpn_pos = [det._pos_enc(feat) for feat in det_features]
+    B, H_f, W_f, D = det_features[-1].shape
+    src = det_features[-1].reshape(B, H_f * W_f, D)
+    pos_flat = fpn_pos[-1].reshape(B, H_f * W_f, D)
+    mx.eval(src, pos_flat)
+
+    threshold = score_threshold or predictor.score_threshold
+    W, H = image.size
+    all_boxes, all_masks, all_scores, all_labels = [], [], [], []
+
+    for prompt in prompts:
+        inputs_embeds, attention_mask = predictor._get_input_embeddings(prompt)
+        encoded = det.detr_encoder(src, pos_flat, inputs_embeds, attention_mask)
+        mx.eval(encoded)
+        hs, ref_boxes, presence_logits = det.detr_decoder(
+            vision_features=encoded,
+            inputs_embeds=inputs_embeds,
+            vision_pos_encoding=pos_flat,
+            text_mask=attention_mask,
+            spatial_shape=(H_f, W_f),
+        )
+        cx, cy, w, h = (ref_boxes[-1][..., i] for i in range(4))
+        pred_boxes = mx.stack([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], axis=-1)
+        pred_logits = det.dot_product_scoring(hs, inputs_embeds, attention_mask)[-1].squeeze(-1)
+        presence = presence_logits[-1]
+        pred_masks = None
+        if with_masks:
+            pred_masks = det.mask_decoder(
+                hs[-1],
+                list(det_features),
+                encoder_hidden_states=encoded,
+                prompt_features=inputs_embeds,
+                prompt_mask=attention_mask,
+            )["pred_masks"]
+            mx.eval(pred_logits, pred_boxes, pred_masks, presence)
+        else:
+            mx.eval(pred_logits, pred_boxes, presence)
+
+        logits = np.array(pred_logits if pred_logits.ndim == 2 else pred_logits[None])[0]
+        boxes = np.array(pred_boxes if pred_boxes.ndim == 3 else pred_boxes[None])[0]
+        pres = presence if presence.ndim == 2 else presence[None]
+        scores = _sigmoid(logits).squeeze() * _sigmoid(np.array(pres[0]))
+        keep = scores > threshold
+        if not keep.any():
+            continue
+        kept_index = np.flatnonzero(keep)
+        boxes = boxes[keep]
+        boxes[:, [0, 2]] *= W
+        boxes[:, [1, 3]] *= H
+        boxes = np.clip(boxes, 0, max(H, W))
+        picked = nms(
+            DetectionResult(boxes=boxes, masks=np.arange(len(boxes)), scores=scores[keep])
+        )
+        if with_masks:
+            queries = mx.array(kept_index[picked.masks])
+            masks = np.array(pred_masks[0][queries])
+            masks = (_resize_masks(masks, (H, W)) > 0).astype(np.uint8)
+            all_masks.append(masks)
+        all_boxes.append(picked.boxes)
+        all_scores.append(picked.scores)
+        all_labels.extend([prompt] * len(picked.scores))
+
+    if not all_scores:
+        return DetectionResult(
+            boxes=np.zeros((0, 4)),
+            masks=np.zeros((0, 1, 1), dtype=np.uint8) if with_masks else None,
+            scores=np.zeros((0,)),
+            labels=[],
+        )
+    return DetectionResult(
+        boxes=np.concatenate(all_boxes),
+        masks=np.concatenate(all_masks) if with_masks else None,
+        scores=np.concatenate(all_scores),
+        labels=all_labels,
+    )
+
+
 def detect_multi(
     image: Image.Image,
     prompts: list[str],
@@ -114,6 +214,7 @@ def detect_multi(
     threshold: float = 0.15,
     resolution: int = 1008,
     task: str = "detect",
+    fast: bool = False,
 ) -> list[Sam31Detection]:
     """Run SAM 3.1 multi-prompt detection/segmentation on a still image.
 
@@ -126,6 +227,8 @@ def detect_multi(
         threshold: confidence threshold (lower = more detections)
         resolution: input resolution (1008 = native)
         task: "detect" (bboxes only) or "segment" (with masks)
+        fast: use predict_multi_fast (duplicate suppression before mask
+            resize; no mask decoding for "detect")
 
     Returns:
         list of Sam31Detection, one per found object
@@ -135,12 +238,17 @@ def detect_multi(
     model, processor, predictor = _ensure_sam31(threshold=threshold, resolution=resolution)
 
     t0 = time.perf_counter()
-    result = predict_multi(
-        predictor=predictor,
-        image=image,
-        prompts=prompts,
-        score_threshold=threshold,
-    )
+    if fast:
+        result = predict_multi_fast(
+            predictor, image, prompts, threshold, with_masks=task == "segment"
+        )
+    else:
+        result = predict_multi(
+            predictor=predictor,
+            image=image,
+            prompts=prompts,
+            score_threshold=threshold,
+        )
     print(f"  SAM 3.1 detect_multi: {len(result.scores)} detections in {time.perf_counter()-t0:.2f}s")
 
     detections = []
