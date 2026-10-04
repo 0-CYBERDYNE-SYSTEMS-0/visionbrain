@@ -39,7 +39,8 @@ DEFAULT_DETECT_EVERY = 6
 DEFAULT_BACKBONE_EVERY = 15
 DEFAULT_IOU_THRESHOLD = 0.3
 DEFAULT_MAX_LOST = 10
-DEFAULT_MAX_BACKBONE_AGE_MS = 3000
+# Matches the previous effective refresh interval at 12 fps (every 30 steps).
+DEFAULT_MAX_BACKBONE_AGE_MS = 2500
 _U32 = 1 << 32
 
 _lock = threading.Lock()
