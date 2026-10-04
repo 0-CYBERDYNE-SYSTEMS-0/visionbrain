@@ -214,7 +214,7 @@ def detect_multi(
     threshold: float = 0.15,
     resolution: int = 1008,
     task: str = "detect",
-    fast: bool = False,
+    fast: bool = True,
 ) -> list[Sam31Detection]:
     """Run SAM 3.1 multi-prompt detection/segmentation on a still image.
 
@@ -228,7 +228,7 @@ def detect_multi(
         resolution: input resolution (1008 = native)
         task: "detect" (bboxes only) or "segment" (with masks)
         fast: use predict_multi_fast (duplicate suppression before mask
-            resize; no mask decoding for "detect")
+            resize; no mask decoding for "detect"); False runs the stock path
 
     Returns:
         list of Sam31Detection, one per found object
