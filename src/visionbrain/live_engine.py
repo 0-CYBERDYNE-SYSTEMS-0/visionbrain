@@ -226,6 +226,7 @@ from typing import Any, Optional, Sequence
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .detection_core import mask_to_polygon
+from .inference_admission import AdmissionError, AdmissionHandle, InferenceAdmission
 
 __all__ = [
     "router",
@@ -1021,7 +1022,7 @@ _watch_model_ok = False      # current model answered at least once
 _watch_last_note = 0.0       # monotonic ts of the last error status note
 
 
-def _watch_loop(stop_event: threading.Event) -> None:
+def _watch_loop(stop_event: threading.Event, worker: "_EngineWorker") -> None:
     """Watcher body: periodically ask the VLM whether the condition holds.
 
     Skips ticks while the engine worker is not running or a previous ask is
@@ -1036,9 +1037,8 @@ def _watch_loop(stop_event: threading.Event) -> None:
         if stop_event.wait(interval):
             break
 
-        worker = _worker
         if not _alive(worker) or worker.stop_event.is_set():
-            continue
+            break
         condition = str(cfg.get("condition") or "").strip()
         if not condition:
             continue
@@ -1046,6 +1046,10 @@ def _watch_loop(stop_event: threading.Event) -> None:
             if _watch_busy:
                 continue
             _watch_busy = True
+        if not worker._register_native_job():
+            with _watch_lock:
+                _watch_busy = False
+            break
         try:
             # Imported here — inside the watcher thread — so this module
             # stays importable on hosts with no mlx stack at all.
@@ -1098,8 +1102,11 @@ def _watch_loop(stop_event: threading.Event) -> None:
             if not throttled:
                 worker.push({"type": "status", "note": f"watch error: {exc}"})
         finally:
-            with _watch_lock:
-                _watch_busy = False
+            try:
+                worker._finish_native_job()
+            finally:
+                with _watch_lock:
+                    _watch_busy = False
 
 
 # ── Ask / report — one in-flight slot shared by both (Android semantics) ─────
@@ -1172,7 +1179,10 @@ def _ask_once(worker: "_EngineWorker", question: str, snapshot: dict) -> None:
     except Exception as exc:  # noqa: BLE001 — report through the socket
         worker.push({"type": "error", "error": f"ask failed: {exc}"})
     finally:
-        _release_ask_slot()
+        try:
+            _release_ask_slot()
+        finally:
+            worker._finish_native_job()
 
 
 def _report_once(worker: "_EngineWorker", snapshot: dict, report_type: str) -> None:
@@ -1193,10 +1203,15 @@ def _report_once(worker: "_EngineWorker", snapshot: dict, report_type: str) -> N
     except Exception as exc:  # noqa: BLE001 — report through the socket
         worker.push({"type": "error", "error": f"report failed: {exc}"})
     finally:
-        _release_ask_slot()
+        try:
+            _release_ask_slot()
+        finally:
+            worker._finish_native_job()
 
 
-async def _apply_watch(payload: dict) -> bool:
+async def _apply_watch(
+    payload: dict, worker: Optional["_EngineWorker"] = None
+) -> bool:
     """Merge a ``set_watch`` payload into the watch config; start/stop the thread.
 
     Returns the resulting enabled flag. Joining the old watcher happens off
@@ -1213,14 +1228,30 @@ async def _apply_watch(payload: dict) -> bool:
         enabled = bool(merged["enabled"])
 
     if enabled:
+        if not _alive(worker) or worker._is_stopping():
+            with _watch_lock:
+                _watch_cfg = dict(_watch_cfg, enabled=False)
+            return False
+        start_error: Optional[Exception] = None
         with _watch_lock:
             if _watch_thread is None or not _watch_thread.is_alive():
                 _watch_stop = threading.Event()
+                worker._watch_stop = _watch_stop
                 _watch_thread = threading.Thread(
-                    target=_watch_loop, args=(_watch_stop,),
+                    target=_watch_loop, args=(_watch_stop, worker),
                     name="live-watch", daemon=True,
                 )
-                _watch_thread.start()
+                try:
+                    _watch_thread.start()
+                except Exception as exc:  # noqa: BLE001 — report through status
+                    start_error = exc
+                    _watch_stop = None
+                    _watch_thread = None
+                    worker._watch_stop = None
+                    _watch_cfg = dict(_watch_cfg, enabled=False)
+        if start_error is not None:
+            worker.push({"type": "status", "note": f"watch failed to start: {start_error}"})
+            return False
         return True
 
     with _watch_lock:
@@ -1263,6 +1294,7 @@ _HELD_EVERY = 5  # resend held boxes every Nth non-detect frame
 _MAX_RING_FRAMES = 150
 _MAX_CLIPS = 50
 _MAX_STREAM_READ_FAILS = 40  # consecutive url read failures before giving up
+_ENGINE_JOIN_TIMEOUT_S = 10.0
 # Worker-thread cap on joining its clip writer at exit. Must stay below the
 # event loop's 10s worker join so a hung encode cannot stall the loop's own
 # cleanup for long — the writer is a daemon and the process never cancels it.
@@ -1401,6 +1433,69 @@ class _EngineWorker:
         # grow during a slow encode.
         self._capture_queue: "queue.Queue[Optional[dict]]" = queue.Queue()
         self._capture_thread: Optional[threading.Thread] = None
+        self._native_condition = threading.Condition()
+        self._native_job_count = 0
+        self._stopping = False
+        self._admission_handle: Optional[AdmissionHandle] = None
+        self._watch_stop: Optional[threading.Event] = None
+
+    def _register_native_job(self) -> bool:
+        """Accept one Ask, Report, or Watch call before it can start."""
+        with self._native_condition:
+            if (
+                self._stopping
+                or self.stop_event.is_set()
+                or self._admission_handle is None
+            ):
+                return False
+            self._native_job_count += 1
+            return True
+
+    def _finish_native_job(self) -> None:
+        """Release one accepted native call and wake a draining worker."""
+        with self._native_condition:
+            self._native_job_count -= 1
+            if self._native_job_count == 0:
+                self._native_condition.notify_all()
+
+    def _is_stopping(self) -> bool:
+        with self._native_condition:
+            return self._stopping
+
+    def _begin_stopping(self) -> None:
+        with self._native_condition:
+            self._stopping = True
+        self.stop_event.set()
+        if self._watch_stop is not None:
+            self._watch_stop.set()
+
+    def _finish_native_owner(self) -> None:
+        """Hold admission through detector and accepted native job drain."""
+        self._begin_stopping()
+        with self._native_condition:
+            while self._native_job_count:
+                self._native_condition.wait()
+            handle = self._admission_handle
+            self._admission_handle = None
+        if handle is not None:
+            handle.release()
+
+    def _thread_entry(self) -> None:
+        """Wrap the detector entry so its admission survives accepted jobs."""
+        try:
+            with self._native_condition:
+                run_native = (
+                    not self._stopping
+                    and not self.stop_event.is_set()
+                    and self._admission_handle is not None
+                )
+            if run_native:
+                self.run()
+            else:
+                self._shutdown_capture_writer()
+        finally:
+            self._finish_native_owner()
+            self.push({"type": "engine_stopped"})
 
     def get_prompts(self) -> list[str]:
         """Return a copy of the current prompts (thread-safe)."""
@@ -1897,16 +1992,20 @@ class _EngineWorker:
         """Thread entry point — never lets an exception escape.
 
         The ``finally`` block is the ONE choke point every exit passes
-        (normal end, source failure, fatal error): after it announces the
-        stop it signals the clip writer shutdown (None sentinel) so no
-        writer thread outlives the worker.
+        (normal end, source failure, fatal error): it signals the clip writer
+        shutdown (None sentinel) so no writer thread outlives the worker.
         """
         try:
-            self._run()
+            with self._native_condition:
+                run_native = (
+                    not self._stopping
+                    and not self.stop_event.is_set()
+                )
+            if run_native:
+                self._run()
         except Exception as exc:  # noqa: BLE001 — report, don't crash the process
             self.push({"type": "status", "note": f"engine error: {exc}"})
         finally:
-            self.push({"type": "engine_stopped"})
             self._shutdown_capture_writer()
 
     def _run(self) -> None:
@@ -2378,350 +2477,448 @@ async def live_ws(websocket: WebSocket) -> None:
     _sinks.add(sink)
     sender = asyncio.create_task(_sender(websocket, sink))
 
-    while True:
-        # Receive controls (JSON text) and send frames concurrently: the
-        # sender task owns all frame traffic, this loop owns controls.
-        try:
-            raw = await websocket.receive_text()
-        except WebSocketDisconnect:
-            break
-        except Exception:  # noqa: BLE001 — malformed frame; treat as disconnect
-            break
-
-        try:
-            msg = json.loads(raw)
-        except ValueError:
-            await _safe_send_json(websocket, {"type": "status", "note": "invalid control — expected JSON"})
-            continue
-
-        action, payload = validate_control(msg)
-
-        if action == "unknown":
-            await _safe_send_json(websocket, {"type": "status", "note": "unknown or invalid control"})
-            continue
-        if action == "ignore":
-            continue
-
-        if action == "start":
-            # Legacy compatibility: the key validates, but the worker never
-            # sees it — features are recomputed every detection pass. The
-            # note goes out after the start settles so it cannot break a
-            # normal start.
-            backbone_note: Optional[str] = None
-            if "backbone_every" in payload:
-                del payload["backbone_every"]
-                backbone_note = (
-                    "backbone_every is deprecated and ignored — features "
-                    "are recomputed on every detection pass"
-                )
-            # Single-instance guard: decide under the lock without awaiting,
-            # then start the thread outside it (a threading.Lock must never
-            # be held across an await on the event loop thread).
-            created: Optional[_EngineWorker] = None
-            pending_zones: Optional[list[dict]] = None
-            pending_triggers: Optional[dict] = None
-            pending_targets: Optional[list[dict]] = None
-            with _engine_lock:
-                if not _alive(_worker):
-                    created = _EngineWorker(payload, _sinks)
-                    created.thread = threading.Thread(
-                        target=created.run, name="live-engine-worker", daemon=True
-                    )
-                    _worker = created
-                    # Consume any config staged before the worker existed.
-                    pending_zones = _pending_zones
-                    pending_triggers = _pending_triggers
-                    pending_targets = _pending_targets
-                    _pending_zones = None
-                    _pending_triggers = None
-                    _pending_targets = None
-            if created is None:
-                # Multi-viewer: an engine started by another dashboard keeps
-                # streaming to this socket — nothing to do but say so.
-                await _safe_send_json(
-                    websocket,
-                    {"type": "status",
-                     "note": "engine already running — attached as viewer (stop first to change source)"},
-                )
-            else:
-                if pending_zones is not None:
-                    created.set_zones(pending_zones)
-                if pending_triggers:
-                    created.set_triggers(pending_triggers)
-                # Staged targets replay in add order; the label stored at
-                # add time (client-supplied or the engine-side "target N"
-                # sequence) is kept verbatim by add_target.
-                for entry in pending_targets or []:
-                    created.add_target(entry["box"], entry.get("label"))
-                created.thread.start()
-            if backbone_note is not None:
-                await _safe_send_json(
-                    websocket, {"type": "status", "note": backbone_note}
-                )
-
-        elif action == "stop":
-            worker = _worker
-            if not _alive(worker):
-                await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
-            else:
-                # Loop exits after the current frame; engine_stopped follows.
-                worker.stop_event.set()
-
-        elif action == "shutdown":
-            worker = _worker
-            if not _alive(worker):
-                await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
-            else:
-                worker.stop_event.set()
-                await asyncio.to_thread(worker.thread.join, 10.0)
-                try:
-                    from . import sam3_inference
-
-                    sam3_inference._sam_model_cache.clear()
-                except Exception:  # noqa: BLE001 — best-effort model free
-                    pass
-                with _engine_lock:
-                    if _worker is worker:
-                        _worker = None
-                await _safe_send_json(websocket, {"type": "status", "note": "model freed"})
-
-        elif action == "set_prompts":
-            worker = _worker
-            if _alive(worker):
-                worker.set_prompts(payload["prompts"])
-                note = (
-                    "prompts updated"
-                    if payload["prompts"]
-                    else "detection paused (no prompts)"
-                )
-                await _safe_send_json(websocket, {"type": "status", "note": note})
-            else:
-                await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
-
-        elif action == "set_threshold":
-            worker = _worker
-            if _alive(worker):
-                worker.set_threshold(payload["threshold"])
-                await _safe_send_json(
-                    websocket,
-                    {"type": "status", "note": f"threshold {payload['threshold']:g}"},
-                )
-            else:
-                await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
-
-        elif action == "set_stream":
-            worker = _worker
-            if _alive(worker):
-                worker.set_stream(payload.get("jpeg_quality"), payload.get("send_width"))
-                await _safe_send_json(websocket, {"type": "status", "note": "stream retuned"})
-            else:
-                await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
-
-        elif action == "set_task":
-            worker = _worker
-            if _alive(worker):
-                worker.set_task(payload["task"])
-                await _safe_send_json(
-                    websocket,
-                    {"type": "status", "note": f"task {payload['task']}"},
-                )
-            else:
-                await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
-
-        elif action == "set_engine":
-            # The local engine runs SAM only; answer the hub-protocol chips
-            # honestly instead of silently no-oping.
-            extra = [k for k in ("falcon", "lfm") if payload.get(k)]
-            note = "local engine · SAM only"
-            if extra:
-                note += " — not available locally: " + ", ".join(extra)
-            await _safe_send_json(websocket, {"type": "status", "note": note})
-
-        elif action == "set_vlm":
-            from . import vlm_registry
+    try:
+        while True:
+            # Receive controls (JSON text) and send frames concurrently: the
+            # sender task owns all frame traffic, this loop owns controls.
+            try:
+                raw = await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
+            except Exception:  # noqa: BLE001 — malformed frame; treat as disconnect
+                break
 
             try:
-                vlm_registry.set_model(payload["model"])
-                await _safe_send_json(
-                    websocket,
-                    {"type": "status", "note": f"vlm · {payload['model']}"},
-                )
+                msg = json.loads(raw)
             except ValueError:
-                await _safe_send_json(
-                    websocket,
-                    {"type": "status",
-                     "note": f"unknown vlm {payload['model']!r} (gemma | lfm | lfm3b)"},
-                )
+                await _safe_send_json(websocket, {"type": "status", "note": "invalid control — expected JSON"})
+                continue
 
-        elif action == "ask":
-            worker = _worker
-            if not _alive(worker):
-                # Pinned error shape (ask/report path only): rejection (a).
-                await _safe_send_json(
-                    websocket,
-                    {"type": "error", "error": "no engine running — start the engine first"},
-                )
-            else:
-                # Grounding BEFORE the shared slot: capture ONE consistent
-                # server-owned evidence snapshot (frame + records under a
-                # single _frame_lock acquisition, plus prompts) and reject
-                # unarmed/unobserved requests without any VLM inference.
-                snapshot = worker.evidence_snapshot()
-                if snapshot is None:
-                    await _safe_send_json(
-                        websocket,
-                        {"type": "error",
-                         "error": "no current observation — start the engine and arm prompts"},
-                    )
-                elif not snapshot["prompts"]:
-                    await _safe_send_json(
-                        websocket,
-                        {"type": "error",
-                         "error": "prompts are paused — arm prompts to ask"},
-                    )
-                elif not _claim_ask_slot():
-                    await _safe_send_json(
-                        websocket,
-                        {"type": "error", "error": "ask/report already running"},
-                    )
-                else:
-                    await _safe_send_json(websocket, {"type": "ask_ack", "model": _vlm_label()})
-                    threading.Thread(
-                        target=_ask_once,
-                        args=(worker, payload["question"], snapshot),
-                        name="live-ask", daemon=True,
-                    ).start()
+            action, payload = validate_control(msg)
 
-        elif action == "report":
-            worker = _worker
-            if not _alive(worker):
-                # Pinned error shape (ask/report path only): rejection (a).
-                await _safe_send_json(
-                    websocket,
-                    {"type": "error", "error": "no engine running — start the engine first"},
-                )
-            else:
-                # Same evidence + grounding rule as ask: snapshot at
-                # dispatch, reject without inference, then claim the slot.
-                # Counts come from the snapshot's records SERVER-SIDE; the
-                # browser summary is never forwarded to the model.
-                snapshot = worker.evidence_snapshot()
-                if snapshot is None:
-                    await _safe_send_json(
-                        websocket,
-                        {"type": "error",
-                         "error": "no current observation — start the engine and arm prompts"},
-                    )
-                elif not snapshot["prompts"]:
-                    await _safe_send_json(
-                        websocket,
-                        {"type": "error",
-                         "error": "prompts are paused — arm prompts to report"},
-                    )
-                elif not _claim_ask_slot():
-                    await _safe_send_json(
-                        websocket,
-                        {"type": "error", "error": "ask/report already running"},
-                    )
-                else:
-                    threading.Thread(
-                        target=_report_once,
-                        args=(worker, snapshot, payload["report_type"]),
-                        name="live-report", daemon=True,
-                    ).start()
+            if action == "unknown":
+                await _safe_send_json(websocket, {"type": "status", "note": "unknown or invalid control"})
+                continue
+            if action == "ignore":
+                continue
 
-        elif action == "set_zones":
-            zones = payload["zones"]
-            worker = _worker
-            if _alive(worker):
-                # Worker rebuilds counters under its state lock on the next
-                # detect frame (which also resets line-cross totals).
-                worker.set_zones(zones)
-            else:
-                # No engine yet — hold pending, applied on the next start.
+            if action == "start":
+                # Legacy compatibility: the key validates, but the worker never
+                # sees it — features are recomputed every detection pass. The
+                # note goes out after the start settles so it cannot break a
+                # normal start.
+                backbone_note: Optional[str] = None
+                if "backbone_every" in payload:
+                    del payload["backbone_every"]
+                    backbone_note = (
+                        "backbone_every is deprecated and ignored — features "
+                        "are recomputed on every detection pass"
+                    )
+                # Single-instance guard: decide under the lock without awaiting,
+                # then start the thread outside it (a threading.Lock must never
+                # be held across an await on the event loop thread).
+                created: Optional[_EngineWorker] = None
+                pending_zones: Optional[list[dict]] = None
+                pending_triggers: Optional[dict] = None
+                pending_targets: Optional[list[dict]] = None
+                admission_note: Optional[str] = None
                 with _engine_lock:
-                    _pending_zones = zones
-            await _safe_send_json(
-                websocket, {"type": "status", "note": f"zones set ({len(zones)})"}
-            )
-
-        elif action == "add_prompt_box":
-            worker = _worker
-            if _alive(worker):
-                number = worker.add_target(payload["box"], payload.get("label"))
-                if number is None:
+                    if not _alive(_worker):
+                        try:
+                            admission = InferenceAdmission()
+                            handle = admission.try_acquire("visionbrain-local-live")
+                        except AdmissionError as exc:
+                            handle = None
+                            admission_note = f"inference admission unavailable: {exc}"
+                        if admission_note is None and handle is None:
+                            admission_note = (
+                                "inference admission busy: "
+                                f"{admission.describe_holder()}"
+                            )
+                        if handle is not None:
+                            try:
+                                created = _EngineWorker(payload, _sinks)
+                                created._admission_handle = handle
+                                created.thread = threading.Thread(
+                                    target=created._thread_entry,
+                                    name="live-engine-worker",
+                                    daemon=True,
+                                )
+                            except Exception as exc:  # noqa: BLE001 — release failed start
+                                handle.release()
+                                created = None
+                                admission_note = f"local engine failed to start: {exc}"
+                            if created is not None:
+                                _worker = created
+                                # Consume any config staged before the worker existed.
+                                pending_zones = _pending_zones
+                                pending_triggers = _pending_triggers
+                                pending_targets = _pending_targets
+                                _pending_zones = None
+                                _pending_triggers = None
+                                _pending_targets = None
+                if admission_note is not None:
                     await _safe_send_json(
-                        websocket,
-                        {"type": "status", "note": f"target limit reached ({_MAX_TARGETS})"},
+                        websocket, {"type": "status", "note": admission_note}
                     )
-                else:
-                    await _safe_send_json(
-                        websocket, {"type": "status", "note": f"target added ({number})"}
-                    )
-            else:
-                # No engine yet — stage the target, applied on the next
-                # start. Mutate under the lock, send OUTSIDE it (a
-                # threading.Lock must never be held across an await on the
-                # event loop thread — it is not coroutine-aware; a suspended
-                # send would block every other handler on acquire).
-                staged_ok: list[dict] | None = None
-                staged_full = False
-                with _engine_lock:
-                    staged = list(_pending_targets or [])
-                    if len(staged) >= _MAX_TARGETS:
-                        staged_full = True
-                    else:
-                        staged.append(payload)
-                        _pending_targets = staged
-                        staged_ok = staged
-                if staged_full:
-                    await _safe_send_json(
-                        websocket,
-                        {"type": "status", "note": f"target limit reached ({_MAX_TARGETS})"},
-                    )
-                else:
+                elif created is None:
+                    # Multi-viewer: an engine started by another dashboard keeps
+                    # streaming to this socket — nothing to do but say so.
                     await _safe_send_json(
                         websocket,
                         {"type": "status",
-                         "note": f"target added ({len(staged_ok or [])}) (starts with the engine)"},
+                         "note": "engine already running — attached as viewer (stop first to change source)"},
+                    )
+                else:
+                    if pending_zones is not None:
+                        created.set_zones(pending_zones)
+                    if pending_triggers:
+                        created.set_triggers(pending_triggers)
+                    # Staged targets replay in add order; the label stored at
+                    # add time (client-supplied or the engine-side "target N"
+                    # sequence) is kept verbatim by add_target.
+                    for entry in pending_targets or []:
+                        created.add_target(entry["box"], entry.get("label"))
+                    try:
+                        created.thread.start()
+                    except Exception as exc:  # noqa: BLE001 — release failed start
+                        created._finish_native_owner()
+                        with _engine_lock:
+                            if _worker is created:
+                                _worker = None
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "status", "note": f"local engine failed to start: {exc}"},
+                        )
+                if backbone_note is not None:
+                    await _safe_send_json(
+                        websocket, {"type": "status", "note": backbone_note}
                     )
 
-        elif action == "remove_targets":
-            worker = _worker
-            if _alive(worker):
-                worker.clear_targets()
-            else:
-                with _engine_lock:
-                    _pending_targets = None
-            await _safe_send_json(websocket, {"type": "status", "note": "targets cleared"})
+            elif action == "stop":
+                worker = _worker
+                if not _alive(worker):
+                    await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
+                else:
+                    # Loop exits after the current frame; engine_stopped follows.
+                    worker._begin_stopping()
 
-        elif action == "set_triggers":
-            worker = _worker
-            if _alive(worker):
-                worker.set_triggers(payload)
-            else:
-                with _engine_lock:
-                    merged = dict(_pending_triggers or TRIGGER_DEFAULTS)
-                    merged.update(payload)
-                    _pending_triggers = merged
-            await _safe_send_json(websocket, {"type": "status", "note": "triggers set"})
+            elif action == "shutdown":
+                worker = _worker
+                if worker is None:
+                    await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
+                else:
+                    worker._begin_stopping()
+                    if worker.thread is not None and worker.thread.is_alive():
+                        await asyncio.to_thread(
+                            worker.thread.join, _ENGINE_JOIN_TIMEOUT_S
+                        )
+                    freed = False
+                    cache_cleared = False
+                    with _engine_lock:
+                        if _worker is worker and not _alive(worker):
+                            try:
+                                from . import sam3_inference
 
-        elif action == "set_watch":
-            enabled = await _apply_watch(payload)
-            await _safe_send_json(
-                websocket,
-                {"type": "status", "note": "watch on" if enabled else "watch off"},
-            )
+                                sam3_inference._sam_model_cache.clear()
+                                cache_cleared = True
+                            except Exception:  # noqa: BLE001 — best-effort model free
+                                pass
+                            _worker = None
+                            freed = True
+                    if freed and cache_cleared:
+                        note = "model freed"
+                    elif freed:
+                        note = "engine stopped — model cache remains resident"
+                    elif _alive(worker):
+                        note = "engine draining — admission and model retained"
+                    else:
+                        note = "engine ownership changed — model retained"
+                    await _safe_send_json(websocket, {"type": "status", "note": note})
 
-    # Disconnect (or fatal receive error): drop this viewer's sink; the
-    # engine keeps streaming to remaining viewers and stops only when the
-    # LAST one leaves (or on an explicit stop/shutdown).
-    _sinks.discard(sink)
-    worker = _worker
-    if _alive(worker) and not _sinks:
-        worker.stop_event.set()
-        await asyncio.to_thread(worker.thread.join, 10.0)
-    sender.cancel()
-    with _engine_lock:
-        if _worker is not None and not _alive(_worker):
-            _worker = None
+            elif action == "set_prompts":
+                worker = _worker
+                if _alive(worker):
+                    worker.set_prompts(payload["prompts"])
+                    note = (
+                        "prompts updated"
+                        if payload["prompts"]
+                        else "detection paused (no prompts)"
+                    )
+                    await _safe_send_json(websocket, {"type": "status", "note": note})
+                else:
+                    await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
+
+            elif action == "set_threshold":
+                worker = _worker
+                if _alive(worker):
+                    worker.set_threshold(payload["threshold"])
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "status", "note": f"threshold {payload['threshold']:g}"},
+                    )
+                else:
+                    await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
+
+            elif action == "set_stream":
+                worker = _worker
+                if _alive(worker):
+                    worker.set_stream(payload.get("jpeg_quality"), payload.get("send_width"))
+                    await _safe_send_json(websocket, {"type": "status", "note": "stream retuned"})
+                else:
+                    await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
+
+            elif action == "set_task":
+                worker = _worker
+                if _alive(worker):
+                    worker.set_task(payload["task"])
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "status", "note": f"task {payload['task']}"},
+                    )
+                else:
+                    await _safe_send_json(websocket, {"type": "status", "note": "no engine running"})
+
+            elif action == "set_engine":
+                # The local engine runs SAM only; answer the hub-protocol chips
+                # honestly instead of silently no-oping.
+                extra = [k for k in ("falcon", "lfm") if payload.get(k)]
+                note = "local engine · SAM only"
+                if extra:
+                    note += " — not available locally: " + ", ".join(extra)
+                await _safe_send_json(websocket, {"type": "status", "note": note})
+
+            elif action == "set_vlm":
+                from . import vlm_registry
+
+                try:
+                    vlm_registry.set_model(payload["model"])
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "status", "note": f"vlm · {payload['model']}"},
+                    )
+                except ValueError:
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "status",
+                         "note": f"unknown vlm {payload['model']!r} (gemma | lfm | lfm3b)"},
+                    )
+
+            elif action == "ask":
+                worker = _worker
+                if not _alive(worker):
+                    # Pinned error shape (ask/report path only): rejection (a).
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "error", "error": "no engine running — start the engine first"},
+                    )
+                else:
+                    # Grounding BEFORE the shared slot: capture ONE consistent
+                    # server-owned evidence snapshot (frame + records under a
+                    # single _frame_lock acquisition, plus prompts) and reject
+                    # unarmed/unobserved requests without any VLM inference.
+                    snapshot = worker.evidence_snapshot()
+                    if snapshot is None:
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "error",
+                             "error": "no current observation — start the engine and arm prompts"},
+                        )
+                    elif not snapshot["prompts"]:
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "error",
+                             "error": "prompts are paused — arm prompts to ask"},
+                        )
+                    elif not _claim_ask_slot():
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "error", "error": "ask/report already running"},
+                        )
+                    elif not worker._register_native_job():
+                        _release_ask_slot()
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "error", "error": "engine is stopping — ask refused"},
+                        )
+                    else:
+                        handed_off = False
+                        try:
+                            await _safe_send_json(
+                                websocket,
+                                {"type": "ask_ack", "model": _vlm_label()},
+                            )
+                            threading.Thread(
+                                target=_ask_once,
+                                args=(worker, payload["question"], snapshot),
+                                name="live-ask", daemon=True,
+                            ).start()
+                            handed_off = True
+                        except BaseException as exc:  # noqa: BLE001 — include ack cancellation
+                            if handed_off:
+                                raise
+                            try:
+                                _release_ask_slot()
+                            finally:
+                                worker._finish_native_job()
+                            if isinstance(exc, Exception):
+                                worker.push({"type": "error", "error": f"ask failed: {exc}"})
+                            else:
+                                raise
+
+            elif action == "report":
+                worker = _worker
+                if not _alive(worker):
+                    # Pinned error shape (ask/report path only): rejection (a).
+                    await _safe_send_json(
+                        websocket,
+                        {"type": "error", "error": "no engine running — start the engine first"},
+                    )
+                else:
+                    # Same evidence + grounding rule as ask: snapshot at
+                    # dispatch, reject without inference, then claim the slot.
+                    # Counts come from the snapshot's records SERVER-SIDE; the
+                    # browser summary is never forwarded to the model.
+                    snapshot = worker.evidence_snapshot()
+                    if snapshot is None:
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "error",
+                             "error": "no current observation — start the engine and arm prompts"},
+                        )
+                    elif not snapshot["prompts"]:
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "error",
+                             "error": "prompts are paused — arm prompts to report"},
+                        )
+                    elif not _claim_ask_slot():
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "error", "error": "ask/report already running"},
+                        )
+                    elif not worker._register_native_job():
+                        _release_ask_slot()
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "error", "error": "engine is stopping — report refused"},
+                        )
+                    else:
+                        handed_off = False
+                        try:
+                            threading.Thread(
+                                target=_report_once,
+                                args=(worker, snapshot, payload["report_type"]),
+                                name="live-report", daemon=True,
+                            ).start()
+                            handed_off = True
+                        except BaseException as exc:  # noqa: BLE001 — release failed handoff
+                            if handed_off:
+                                raise
+                            try:
+                                _release_ask_slot()
+                            finally:
+                                worker._finish_native_job()
+                            if isinstance(exc, Exception):
+                                worker.push({"type": "error", "error": f"report failed: {exc}"})
+                            else:
+                                raise
+
+            elif action == "set_zones":
+                zones = payload["zones"]
+                worker = _worker
+                if _alive(worker):
+                    # Worker rebuilds counters under its state lock on the next
+                    # detect frame (which also resets line-cross totals).
+                    worker.set_zones(zones)
+                else:
+                    # No engine yet — hold pending, applied on the next start.
+                    with _engine_lock:
+                        _pending_zones = zones
+                await _safe_send_json(
+                    websocket, {"type": "status", "note": f"zones set ({len(zones)})"}
+                )
+
+            elif action == "add_prompt_box":
+                worker = _worker
+                if _alive(worker):
+                    number = worker.add_target(payload["box"], payload.get("label"))
+                    if number is None:
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "status", "note": f"target limit reached ({_MAX_TARGETS})"},
+                        )
+                    else:
+                        await _safe_send_json(
+                            websocket, {"type": "status", "note": f"target added ({number})"}
+                        )
+                else:
+                    # No engine yet — stage the target, applied on the next
+                    # start. Mutate under the lock, send OUTSIDE it (a
+                    # threading.Lock must never be held across an await on the
+                    # event loop thread — it is not coroutine-aware; a suspended
+                    # send would block every other handler on acquire).
+                    staged_ok: list[dict] | None = None
+                    staged_full = False
+                    with _engine_lock:
+                        staged = list(_pending_targets or [])
+                        if len(staged) >= _MAX_TARGETS:
+                            staged_full = True
+                        else:
+                            staged.append(payload)
+                            _pending_targets = staged
+                            staged_ok = staged
+                    if staged_full:
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "status", "note": f"target limit reached ({_MAX_TARGETS})"},
+                        )
+                    else:
+                        await _safe_send_json(
+                            websocket,
+                            {"type": "status",
+                             "note": f"target added ({len(staged_ok or [])}) (starts with the engine)"},
+                        )
+
+            elif action == "remove_targets":
+                worker = _worker
+                if _alive(worker):
+                    worker.clear_targets()
+                else:
+                    with _engine_lock:
+                        _pending_targets = None
+                await _safe_send_json(websocket, {"type": "status", "note": "targets cleared"})
+
+            elif action == "set_triggers":
+                worker = _worker
+                if _alive(worker):
+                    worker.set_triggers(payload)
+                else:
+                    with _engine_lock:
+                        merged = dict(_pending_triggers or TRIGGER_DEFAULTS)
+                        merged.update(payload)
+                        _pending_triggers = merged
+                await _safe_send_json(websocket, {"type": "status", "note": "triggers set"})
+
+            elif action == "set_watch":
+                enabled = await _apply_watch(payload, _worker)
+                await _safe_send_json(
+                    websocket,
+                    {"type": "status", "note": "watch on" if enabled else "watch off"},
+                )
+
+    finally:
+        _sinks.discard(sink)
+        worker = _worker
+        try:
+            if _alive(worker) and not _sinks:
+                worker._begin_stopping()
+                if worker.thread is not None:
+                    await asyncio.to_thread(
+                        worker.thread.join, _ENGINE_JOIN_TIMEOUT_S
+                    )
+        finally:
+            sender.cancel()
+            with _engine_lock:
+                if _worker is worker and worker is not None and not _alive(worker):
+                    _worker = None
