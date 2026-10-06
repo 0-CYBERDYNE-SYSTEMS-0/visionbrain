@@ -7,6 +7,7 @@ Falcon-Perception repo — it imports and calls, never modifies.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -137,6 +138,11 @@ def _ensure_falcon_path() -> None:
         sys.path.insert(0, str(falcon_root))
 
 
+def _selected_model_id(default_id: str) -> str:
+    """Falcon checkpoint selection: VB_FALCON_MODEL overrides, else default."""
+    return os.environ.get("VB_FALCON_MODEL", "").strip() or default_id
+
+
 def _ensure_model() -> tuple:
     """Load Falcon Perception model + tokenizer once, cache in process memory."""
     if "model" not in _model_cache:
@@ -152,10 +158,14 @@ def _ensure_model() -> tuple:
         )
         from falcon_perception.mlx.batch_inference import BatchInferenceEngine
 
-        print(f"Loading Falcon Perception ({PERCEPTION_MODEL_ID})...")
+        # VB_FALCON_MODEL overrides the checkpoint (e.g. the 300M detection
+        # variant); default stays the full Falcon-Perception.
+        model_id = _selected_model_id(PERCEPTION_MODEL_ID)
+
+        print(f"Loading Falcon Perception ({model_id})...")
         t0 = time.perf_counter()
         model, tokenizer, model_args = load_and_prepare_model(
-            hf_model_id=PERCEPTION_MODEL_ID,
+            hf_model_id=model_id,
             dtype="float16",
             backend="mlx",
         )

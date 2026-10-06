@@ -73,8 +73,31 @@ class TestLoader:
         ids = [r.hf_id for r in recs]
         assert loader.FALCON_OCR_HF_REPO in ids
         assert loader.falcon_perception_record().hf_id in ids
+        assert loader.falcon_perception_300m_record().hf_id in ids
         assert loader.sam31_record().hf_id in ids
-        assert len(ids) == 4
+        assert len(ids) == 5
+
+    def test_falcon_perception_300m_record(self):
+        from visionbrain.loader import (
+            FALCON_PERCEPTION_300M_REPO,
+            HF_CACHE,
+            falcon_perception_300m_record,
+        )
+        rec = falcon_perception_300m_record()
+        assert rec.hf_id == FALCON_PERCEPTION_300M_REPO == "tiiuae/Falcon-Perception-300M"
+        assert rec.cache_dir == HF_CACHE / "models--tiiuae--Falcon-Perception-300M"
+        # Detection-only variant: never emits masks regardless of cache state.
+        print(f"\n  Falcon 300M: cached={rec.is_cached} ({rec.disk_gb} GB), can_load={rec.can_load}, note={rec.note}")
+
+    def test_fp_model_id_env_override(self, monkeypatch):
+        import visionbrain.fp_inference as fp
+
+        monkeypatch.delenv("VB_FALCON_MODEL", raising=False)
+        assert fp._selected_model_id("tiiuae/Falcon-Perception") == "tiiuae/Falcon-Perception"
+        monkeypatch.setenv("VB_FALCON_MODEL", "tiiuae/Falcon-Perception-300M")
+        assert fp._selected_model_id("tiiuae/Falcon-Perception") == "tiiuae/Falcon-Perception-300M"
+        monkeypatch.setenv("VB_FALCON_MODEL", "   ")
+        assert fp._selected_model_id("tiiuae/Falcon-Perception") == "tiiuae/Falcon-Perception"
 
     def test_falcon_repo_accessible(self):
         from visionbrain.loader import FALCON_REPO, falcon_repo

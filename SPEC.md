@@ -104,7 +104,8 @@ VisionBrain/
 - `falcon_perception_record() -> ModelRecord`
 - `sam31_record() -> ModelRecord`
 - `falcon_ocr_record() -> ModelRecord` — registry-only entry for `tiiuae/Falcon-OCR` (0.3B OCR companion: text, tables, formulas); `can_load` is always False — upstream serving is vLLM/CUDA, no MLX inference path in VisionBrain yet
-- `all_records() -> list[ModelRecord]` — 4 entries: Falcon Perception, SAM 3.1, Ollama Gemma, Falcon-OCR
+- `falcon_perception_300m_record() -> ModelRecord` — status of `tiiuae/Falcon-Perception-300M` (0.3B detection-only variant: boxes, no masks)
+- `all_records() -> list[ModelRecord]` — 5 entries: Falcon Perception, Falcon Perception 300M, SAM 3.1, Ollama Gemma, Falcon-OCR
 - `print_status()`
 - `falcon_repo() -> Path`
 - `sam31_cache_path() -> Path | None`
@@ -113,6 +114,7 @@ VisionBrain/
 - SAM 3.1 uses `mlx-community/sam3.1-bf16` — public MLX-community conversion, no gated access needed
 - Gemma 4 e2b uses `gemma4:e2b` via Ollama — 7.2 GB, managed by Ollama (no HuggingFace cache needed)
 - Falcon-OCR uses `tiiuae/Falcon-OCR` — OCR companion (text, tables, formulas); registry-only, served upstream via vLLM/CUDA
+- Falcon Perception checkpoint is selectable via `VB_FALCON_MODEL` (raw HF id); default is `tiiuae/Falcon-Perception`, `tiiuae/Falcon-Perception-300M` is the 0.3B detection-only alternative (same `xy`/`hw` output contract, no masks)
 
 ---
 
