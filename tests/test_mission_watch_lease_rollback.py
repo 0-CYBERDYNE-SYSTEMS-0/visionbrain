@@ -81,9 +81,8 @@ def _runtime(store: _Store, adapter: _WatchAdapter) -> MissionRuntime:
     )
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["none", "false", "raises"])
-async def test_failed_watch_snapshot_commit_releases_applied_lease_without_timer(failure):
+def test_failed_watch_snapshot_commit_releases_applied_lease_without_timer(failure):
     store = _Store()
     adapter = _WatchAdapter()
     runtime = _runtime(store, adapter)
@@ -107,9 +106,9 @@ async def test_failed_watch_snapshot_commit_releases_applied_lease_without_timer
 
     if failure == "raises":
         with pytest.raises(OSError, match="injected durable write failure"):
-            await call
+            asyncio.run(call)
     else:
-        await call
+        asyncio.run(call)
 
     assert adapter.applied is not None
     assert adapter.released == [(adapter.applied, "watch_lease_commit_failed")]

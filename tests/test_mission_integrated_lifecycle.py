@@ -602,3 +602,73 @@ def test_update_brief_with_only_watch_task_applies_at_next_cycle(tmp_path, monke
             store.close()
 
     asyncio.run(scenario())
+
+
+def test_task_only_watch_task_update_survives_cycle_commit_race(tmp_path, monkeypatch):
+    from visionbrain import mission_runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "WATCH_MIN_INTERVAL_SECONDS", 1.0)
+
+    async def scenario():
+        source, watch = _Source(), _RecordingWatch()
+        source.available = True
+        runtime, store, _planner = _runtime(tmp_path, source, watch=watch)
+        commit_ready = asyncio.Event()
+        release_commit = asyncio.Event()
+        original_change_snapshot = runtime._change_snapshot
+        blocked = False
+
+        async def hold_cycle_commit(mission_id, generation, updated, kind, data):
+            nonlocal blocked
+            if kind == "cycle_finished" and not blocked:
+                blocked = True
+                commit_ready.set()
+                await release_commit.wait()
+            return await original_change_snapshot(
+                mission_id, generation, updated, kind, data
+            )
+
+        runtime._change_snapshot = hold_cycle_commit
+        try:
+            prepared = await _prepare_with(runtime, watch_task="detect")
+            snapshot = prepared["result"]["snapshot"]
+            mission_id = snapshot["mission_id"]
+            assert (await _activate(runtime, snapshot))["ok"]
+            await asyncio.wait_for(commit_ready.wait(), timeout=2.0)
+
+            before = store.get_mission(mission_id)
+            assert before["watch_task"] == "detect"
+            updated = await runtime.handle(
+                _command(
+                    "update_brief",
+                    request_id="watch-task-race-mask",
+                    mission_id=mission_id,
+                    revision=before["revision"],
+                    args={"watch_task": "segment"},
+                ),
+                Principal("installation"),
+                SCOPES,
+                integrated=True,
+            )
+            assert updated["ok"]
+            assert updated["result"]["snapshot"]["watch_task"] == "segment"
+            assert updated["result"]["snapshot"]["execution_generation"] == before["execution_generation"]
+            assert updated["result"]["snapshot"]["state"] == "running"
+
+            release_commit.set()
+            committed = await _wait_for(
+                lambda: (
+                    current
+                    if (current := store.get_mission(mission_id))
+                    and len(current.get("cycle_history", ())) >= 1
+                    else None
+                )
+            )
+            assert committed["watch_task"] == "segment"
+            assert committed["execution_generation"] == before["execution_generation"]
+        finally:
+            release_commit.set()
+            await runtime.close()
+            store.close()
+
+    asyncio.run(scenario())

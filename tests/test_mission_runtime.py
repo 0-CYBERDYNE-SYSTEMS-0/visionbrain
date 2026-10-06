@@ -700,8 +700,72 @@ def test_watch_lease_expiry_pauses_and_releases_only_that_lease(tmp_path, monkey
             created = await _create(runtime, mode="watch", source_binding=binding)
             await _resume(runtime, created["result"]["snapshot"], args={"source_binding": {"source_id": binding.source_id, "source_epoch": binding.source_epoch}})
             paused = await _wait_for(lambda: (store.get_mission(created["result"]["snapshot"]["mission_id"]) if store.get_mission(created["result"]["snapshot"]["mission_id"])["reason"] == "watch_lease_expired" else None))
+            await _wait_for(lambda: watch.released)
             assert paused["state"] == "paused"
             assert watch.released[-1] == ("lease-1", "watch_lease_expired")
+        finally:
+            await runtime.close()
+            store.close()
+
+    asyncio.run(scenario())
+
+
+def test_null_watch_proposal_does_not_renew_lease_and_expiry_releases_it(tmp_path, monkeypatch):
+    from visionbrain import mission_runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "WATCH_MIN_INTERVAL_SECONDS", 0.03)
+    monkeypatch.setattr(runtime_module, "WATCH_LEASE_SECONDS", 0.5)
+    binding = SourceBinding("scout-null-watch", "epoch-null-watch")
+    planner_calls = 0
+
+    class Source:
+        frame_id = 0
+
+        def __call__(self, _binding):
+            self.frame_id += 1
+            return SourceFrame(
+                _jpeg(), binding.source_id, binding.source_epoch,
+                self.frame_id, time.monotonic(),
+            )
+
+    def choose(_context):
+        nonlocal planner_calls
+        planner_calls += 1
+        proposal = WatchProposal(("container",), "detect") if planner_calls == 1 else None
+        return Decision(1, "finish", watch=proposal)
+
+    async def scenario():
+        watch = _Watch()
+        runtime, store, events = _new_runtime(
+            tmp_path,
+            _Planner(choose),
+            _Tools(ToolResult("empty")),
+            source_provider=Source(),
+            watch=watch,
+        )
+        try:
+            created = await _create(runtime, mode="watch", source_binding=binding)
+            snapshot = created["result"]["snapshot"]
+            resumed = await _resume(
+                runtime,
+                snapshot,
+                args={"source_binding": {"source_id": binding.source_id, "source_epoch": binding.source_epoch}},
+            )
+            assert resumed["ok"]
+            await _wait_for(
+                lambda: sum(event.kind == "cycle_finished" for event in events) >= 2
+            )
+
+            initial_expiry = watch.active.expires_at_ms
+            current = store.get_mission(snapshot["mission_id"])
+            assert len(watch.applied) == 1
+            assert current["watch_lease"]["expires_at_ms"] == initial_expiry
+
+            await _wait_for(lambda: watch.released, timeout=2.0)
+            expired = store.get_mission(snapshot["mission_id"])
+            assert expired["state"] == "paused"
+            assert expired["reason"] == "watch_lease_expired"
+            assert watch.released == [("lease-1", "watch_lease_expired")]
         finally:
             await runtime.close()
             store.close()

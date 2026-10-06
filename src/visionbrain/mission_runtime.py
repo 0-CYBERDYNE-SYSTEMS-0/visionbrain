@@ -1787,9 +1787,6 @@ class MissionRuntime:
                     continue
                 if snapshot["mode"] == MODE_WATCH:
                     watch_proposal = decision.watch
-                    if watch_proposal is None and snapshot.get("watch_lease"):
-                        lease = snapshot["watch_lease"]
-                        watch_proposal = WatchProposal(tuple(lease.get("targets", ())), lease.get("task", "detect"))
                     if watch_proposal is not None:
                         if self.clock.monotonic() >= deadline or not self._is_current(await asyncio.to_thread(self.store.get_mission, mission_id), generation, running=True):
                             await expire_deadline()
@@ -2389,6 +2386,15 @@ class MissionRuntime:
         if not self._is_current(snapshot, generation):
             return None
         now = self.clock.now_ms()
+        authoritative_fields = (
+            "watch_task",
+            "expertise",
+            "goal",
+            "brief_version",
+            "brief_sha256",
+            "brief_history",
+            "model_provenance",
+        )
 
         def operation(tx):
             current = tx.get_mission(mission_id)
@@ -2398,9 +2404,14 @@ class MissionRuntime:
             ):
                 return None
             merged = dict(updated)
+            for field in authoritative_fields:
+                if field in current:
+                    merged[field] = current[field]
+                else:
+                    merged.pop(field, None)
             merged["budget"] = current.get("budget", merged.get("budget"))
             merged["last_sequence"] = current.get("last_sequence", merged.get("last_sequence", 0))
-            return self._update_with_event(tx, snapshot, merged, kind, data, now)
+            return self._update_with_event(tx, current, merged, kind, data, now)
 
         try:
             result = await asyncio.to_thread(self.store.transact, operation)
