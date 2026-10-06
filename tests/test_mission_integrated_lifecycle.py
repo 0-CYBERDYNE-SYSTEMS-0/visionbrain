@@ -6,7 +6,7 @@ from io import BytesIO
 
 from PIL import Image
 
-from visionbrain.mission_contracts import Decision, Principal, SourceBinding, SourceFrame, WatchLease, WatchLeaseRelease, WatchProposal
+from visionbrain.mission_contracts import Decision, FindingProposal, Principal, SourceBinding, SourceFrame, WatchLease, WatchLeaseRelease, WatchProposal
 from visionbrain.mission_runtime import MissionRuntime
 from visionbrain.mission_store import MissionStore
 
@@ -652,6 +652,8 @@ def test_task_only_watch_task_update_survives_cycle_commit_race(tmp_path, monkey
             )
             assert updated["ok"]
             assert updated["result"]["snapshot"]["watch_task"] == "segment"
+            assert updated["result"]["snapshot"]["task"] == "segment"
+            assert updated["result"]["snapshot"]["watch_lease"]["task"] == "segment"
             assert updated["result"]["snapshot"]["execution_generation"] == before["execution_generation"]
             assert updated["result"]["snapshot"]["state"] == "running"
 
@@ -665,7 +667,111 @@ def test_task_only_watch_task_update_survives_cycle_commit_race(tmp_path, monkey
                 )
             )
             assert committed["watch_task"] == "segment"
+            assert committed["task"] == "segment"
+            assert committed["watch_lease"]["task"] == "segment"
             assert committed["execution_generation"] == before["execution_generation"]
+        finally:
+            release_commit.set()
+            await runtime.close()
+            store.close()
+
+    asyncio.run(scenario())
+
+
+def test_cycle_commit_preserves_concurrent_finding_review_and_evidence_tombstone(tmp_path, monkeypatch):
+    from visionbrain import mission_runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "WATCH_MIN_INTERVAL_SECONDS", 0.05)
+
+    class FindingPlanner(_Planner):
+        def plan(self, _context):
+            self.calls += 1
+            return Decision(
+                1,
+                "finish",
+                findings=(FindingProposal(f"inspection cycle {self.calls}", "visual_hypothesis", ()),),
+                watch=WatchProposal(("container",), "detect"),
+            )
+
+    async def scenario():
+        source, watch, planner = _Source(), _RecordingWatch(), FindingPlanner()
+        source.available = True
+        runtime, store, _planner = _runtime(tmp_path, source, planner, watch)
+        commit_ready = asyncio.Event()
+        release_commit = asyncio.Event()
+        original_change_snapshot = runtime._change_snapshot
+        hold_next_cycle_commit = False
+        held = False
+
+        async def hold_cycle_commit(mission_id, generation, updated, kind, data):
+            nonlocal held
+            if kind == "cycle_finished" and hold_next_cycle_commit and not held:
+                held = True
+                commit_ready.set()
+                await release_commit.wait()
+            return await original_change_snapshot(
+                mission_id, generation, updated, kind, data
+            )
+
+        runtime._change_snapshot = hold_cycle_commit
+        try:
+            prepared = await _prepare_with(runtime, watch_task="detect")
+            snapshot = prepared["result"]["snapshot"]
+            mission_id = snapshot["mission_id"]
+            assert (await _activate(runtime, snapshot))["ok"]
+            first_cycle = await _wait_for(
+                lambda: (
+                    current
+                    if (current := store.get_mission(mission_id))
+                    and len(current.get("cycle_history", ())) == 1
+                    else None
+                )
+            )
+            first_finding_id = first_cycle["findings"][0]["finding_id"]
+            first_evidence_id = first_cycle["findings"][0]["evidence_id"]
+            hold_next_cycle_commit = True
+
+            await asyncio.wait_for(commit_ready.wait(), timeout=2.0)
+            before_review = store.get_mission(mission_id)
+            reviewed = await runtime.handle(
+                _command(
+                    "review_finding",
+                    request_id="review-during-cycle-commit",
+                    mission_id=mission_id,
+                    revision=before_review["revision"],
+                    args={
+                        "finding_id": first_finding_id,
+                        "decision": "accepted",
+                        "note": "Reviewed while the next cycle was committing.",
+                    },
+                ),
+                Principal("operator"),
+                SCOPES,
+                integrated=True,
+            )
+            assert reviewed["ok"]
+            await asyncio.to_thread(
+                runtime._mark_evidence_unavailable, mission_id, first_evidence_id
+            )
+
+            release_commit.set()
+            committed = await _wait_for(
+                lambda: (
+                    current
+                    if (current := store.get_mission(mission_id))
+                    and len(current.get("cycle_history", ())) >= 2
+                    else None
+                )
+            )
+            finding_by_id = {
+                item["finding_id"]: item for item in committed["findings"]
+            }
+            evidence_by_id = {
+                item["evidence_id"]: item for item in committed["evidence"]
+            }
+            assert finding_by_id[first_finding_id]["review"]["decision"] == "accepted"
+            assert len(finding_by_id) == 2
+            assert evidence_by_id[first_evidence_id]["available"] is False
         finally:
             release_commit.set()
             await runtime.close()

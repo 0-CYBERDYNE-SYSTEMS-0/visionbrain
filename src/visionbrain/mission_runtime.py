@@ -541,6 +541,20 @@ class MissionRuntime:
             payload = dict(normalized)
             followup: list[tuple[str, int]] = []
             release_after: list[tuple[Mapping[str, Any], str]] = []
+            applied_watch_leases: list[WatchLease] = []
+
+            async def cleanup_applied_watch_leases() -> None:
+                leases = tuple(applied_watch_leases)
+                applied_watch_leases.clear()
+                for lease in leases:
+                    await asyncio.shield(
+                        self._release_lease(
+                            asdict(lease),
+                            "watch_task_update_not_committed",
+                            cancel_timer=False,
+                        )
+                    )
+
             preflight: dict[str, Any] = {
                 "draining_missions": {
                     key for key, task in self._tasks.items()
@@ -584,6 +598,7 @@ class MissionRuntime:
                         followup,
                         release_after,
                         preflight,
+                        applied_watch_leases,
                         self.clock.now_ms(),
                     )
                     return self._reply(normalized, True, result)
@@ -603,10 +618,23 @@ class MissionRuntime:
                 ))
             cancelled = False
             try:
-                saved = await asyncio.shield(worker)
-            except asyncio.CancelledError:
-                cancelled = True
-                saved = await asyncio.shield(worker)
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        if worker.cancelled():
+                            raise
+                        cancelled = True
+                saved = worker.result()
+            except BaseException:
+                await cleanup_applied_watch_leases()
+                raise
+            if saved.reply.get("ok"):
+                # The durable reply now owns the applied lease; the existing
+                # success path below installs its returned expiry timer.
+                applied_watch_leases.clear()
+            else:
+                await cleanup_applied_watch_leases()
             self._publish_events(saved.events)
             if not saved.replayed:
                 if saved.reply.get("ok"):
@@ -616,6 +644,26 @@ class MissionRuntime:
                             self._cancel_timer(self._closeup_timers, current_snapshot["mission_id"])
                         if current_snapshot.get("watch_lease") is None:
                             self._cancel_timer(self._lease_timers, current_snapshot["mission_id"])
+                        elif (
+                            normalized["command"] == "update_brief"
+                            and "watch_task" in normalized["args"]
+                            and current_snapshot.get("state") == "running"
+                        ):
+                            lease_data = current_snapshot["watch_lease"]
+                            lease = WatchLease(
+                                lease_id=str(lease_data["lease_id"]),
+                                mission_id=str(lease_data["mission_id"]),
+                                source_binding=_source_binding(lease_data["source_binding"]),
+                                configuration_revision=int(lease_data["configuration_revision"]),
+                                targets=tuple(lease_data["targets"]),
+                                task=str(lease_data["task"]),
+                                expires_at_ms=int(lease_data["expires_at_ms"]),
+                            )
+                            self._schedule_lease_timeout(
+                                str(current_snapshot["mission_id"]),
+                                int(current_snapshot["execution_generation"]),
+                                lease,
+                            )
                     if normalized["command"] in {"pause", "cancel", "decline_closeup"}:
                         self._interrupt_watch_pacing(normalized["mission_id"])
                 for mission_id, generation in followup:
@@ -748,6 +796,7 @@ class MissionRuntime:
         followup: list[tuple[str, int]],
         release_after: list[tuple[Mapping[str, Any], str]],
         preflight: Mapping[str, Any],
+        applied_watch_leases: list[WatchLease],
         now: int,
     ) -> dict[str, Any]:
         name, args = command["command"], command["args"]
@@ -1135,7 +1184,65 @@ class MissionRuntime:
                     return {"snapshot": snapshot, "brief_version": int(snapshot.get("brief_version", 1)), "execution_outcome": "unchanged"}
                 updated = dict(snapshot)
                 updated["watch_task"] = watch_task
-                updated = self._update_with_event(tx, snapshot, updated, "watch_task_updated", {"watch_task": watch_task, "snapshot": None}, now)
+                lease_data = snapshot.get("watch_lease")
+                if (
+                    snapshot.get("state") == "running"
+                    and isinstance(lease_data, Mapping)
+                    and lease_data.get("task") != watch_task
+                ):
+                    binding = self._binding_from_snapshot(snapshot)
+                    lease_binding = _source_binding(lease_data.get("source_binding"))
+                    if binding is None or binding != lease_binding:
+                        raise _CommandError("source_binding_mismatch", "active Watch lease does not match the mission source", result={"snapshot": snapshot})
+                    if int(lease_data.get("expires_at_ms", 0)) <= self.clock.now_ms():
+                        raise _CommandError("watch_lease_expired", "active Watch lease expired before the task change", result={"snapshot": snapshot})
+                    lease_revision = int(lease_data["configuration_revision"])
+                    configuration_revision = self._configuration_revision()
+                    if configuration_revision > lease_revision:
+                        raise _CommandError("configuration_revision_conflict", "a newer configuration owns the source", result={"snapshot": snapshot})
+                    request = WatchLeaseRequest(
+                        mission_id=mission_id,
+                        mission_revision=int(snapshot["revision"]),
+                        execution_generation=int(snapshot["execution_generation"]),
+                        source_binding=binding,
+                        expected_configuration_revision=max(lease_revision, configuration_revision),
+                        targets=tuple(lease_data["targets"]),
+                        task=watch_task,
+                        expires_at_ms=int(lease_data["expires_at_ms"]),
+                    )
+                    try:
+                        lease = self.watch_adapter.apply(request)
+                    except Exception as exc:
+                        raise _CommandError("watch_lease_rejected", "active Watch lease did not accept the task change", result={"snapshot": snapshot}) from exc
+                    if isinstance(lease, WatchLease):
+                        applied_watch_leases.append(lease)
+                    if (
+                        lease.lease_id != lease_data.get("lease_id")
+                        or lease.mission_id != mission_id
+                        or lease.source_binding != binding
+                        or tuple(lease.targets) != request.targets
+                        or lease.task != watch_task
+                        or lease.expires_at_ms != request.expires_at_ms
+                    ):
+                        raise _CommandError("watch_lease_invalid", "Watch task update changed the lease identity or expiry", result={"snapshot": snapshot})
+                    updated["watch_lease"] = asdict(lease)
+                    updated["configuration_revision"] = lease.configuration_revision
+                    updated["targets"] = list(lease.targets)
+                    updated["task"] = lease.task
+                updated = self._update_with_event(
+                    tx,
+                    snapshot,
+                    updated,
+                    "watch_task_updated",
+                    {
+                        "watch_task": watch_task,
+                        "task": updated.get("task", "detect"),
+                        "lease_id": (updated.get("watch_lease") or {}).get("lease_id"),
+                        "expires_at_ms": (updated.get("watch_lease") or {}).get("expires_at_ms"),
+                        "snapshot": None,
+                    },
+                    now,
+                )
                 self._replace_event_snapshot(tx, updated)
                 return {"snapshot": updated, "brief_version": int(updated.get("brief_version", 1)), "execution_outcome": "unchanged"}
             history = [dict(entry) for entry in snapshot.get("brief_history", []) if isinstance(entry, Mapping)]
@@ -2409,6 +2516,73 @@ class MissionRuntime:
                     merged[field] = current[field]
                 else:
                     merged.pop(field, None)
+            if kind == "cycle_finished":
+                for field in ("watch_lease", "configuration_revision", "targets", "task"):
+                    if field in current:
+                        merged[field] = current[field]
+                    else:
+                        merged.pop(field, None)
+                for field, identity, current_fields in (
+                    ("findings", "finding_id", ("review",)),
+                    ("evidence", "evidence_id", ("available", "availability_reason")),
+                ):
+                    current_rows = {
+                        row.get(identity): row
+                        for row in current.get(field, ())
+                        if isinstance(row, Mapping) and isinstance(row.get(identity), str)
+                    }
+                    merged_rows = []
+                    merged_ids = set()
+                    for row in merged.get(field, ()):
+                        if not isinstance(row, Mapping):
+                            continue
+                        value = dict(row)
+                        row_id = value.get(identity)
+                        latest = current_rows.get(row_id)
+                        if latest is not None:
+                            for current_field in current_fields:
+                                if current_field in latest:
+                                    value[current_field] = latest[current_field]
+                                else:
+                                    value.pop(current_field, None)
+                        if isinstance(row_id, str):
+                            merged_ids.add(row_id)
+                        merged_rows.append(value)
+                    merged_rows.extend(
+                        dict(row)
+                        for row_id, row in current_rows.items()
+                        if row_id not in merged_ids
+                    )
+                    merged[field] = merged_rows
+                unavailable_evidence_ids = {
+                    row.get("evidence_id")
+                    for row in merged.get("evidence", ())
+                    if isinstance(row, Mapping)
+                    and isinstance(row.get("evidence_id"), str)
+                    and row.get("available") is False
+                }
+                for finding in merged.get("findings", ()):
+                    if not isinstance(finding, dict):
+                        continue
+                    evidence_refs = finding.get("evidence_refs", ())
+                    referenced_evidence = set(evidence_refs) if isinstance(evidence_refs, (list, tuple, set)) else set()
+                    evidence_id = finding.get("evidence_id")
+                    if isinstance(evidence_id, str):
+                        referenced_evidence.add(evidence_id)
+                    if (
+                        finding.get("status") == "supported"
+                        and referenced_evidence.intersection(unavailable_evidence_ids)
+                    ):
+                        finding["status"] = "unresolved"
+                        finding["reason"] = "evidence_unavailable"
+                    localization = finding.get("localization")
+                    if (
+                        isinstance(localization, dict)
+                        and localization.get("status") == "supported"
+                        and localization.get("evidence_id") in unavailable_evidence_ids
+                    ):
+                        localization["status"] = "unresolved"
+                        localization["reason"] = "evidence_unavailable"
             merged["budget"] = current.get("budget", merged.get("budget"))
             merged["last_sequence"] = current.get("last_sequence", merged.get("last_sequence", 0))
             return self._update_with_event(tx, current, merged, kind, data, now)
@@ -2934,9 +3108,15 @@ class MissionRuntime:
         )
         return saved, lease
 
-    async def _release_lease(self, value: Mapping[str, Any], reason: str) -> WatchLeaseRelease | None:
+    async def _release_lease(
+        self,
+        value: Mapping[str, Any],
+        reason: str,
+        *,
+        cancel_timer: bool = True,
+    ) -> WatchLeaseRelease | None:
         mission_id = value.get("mission_id") if isinstance(value, Mapping) else None
-        if isinstance(mission_id, str):
+        if cancel_timer and isinstance(mission_id, str):
             self._cancel_timer(self._lease_timers, mission_id)
         try:
             lease = value if isinstance(value, WatchLease) else WatchLease(
