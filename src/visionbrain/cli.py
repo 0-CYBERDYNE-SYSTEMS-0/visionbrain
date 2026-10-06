@@ -19,6 +19,7 @@ from pathlib import Path
 from PIL import Image
 
 from . import __version__
+from .inference_admission import AdmissionError, InferenceAdmission
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1079,7 +1080,24 @@ def main() -> None:
         "fastscan": cmd_fastscan,
         "pilot-eval": cmd_pilot_eval,
     }
-    dispatch[args.command](args)
+    try:
+        admission = InferenceAdmission()
+        handle = admission.try_acquire(reason=f"visionbrain-cli-{args.command}")
+    except AdmissionError as exc:
+        print(f"ERROR: inference admission unavailable: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if handle is None:
+        print(
+            f"ERROR: inference admission busy: {admission.describe_holder()}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        dispatch[args.command](args)
+    finally:
+        handle.release()
 
 
 if __name__ == "__main__":
