@@ -1,5 +1,12 @@
 # Next development spec: Connected Mission v1
 
+The owner-approved bridge [MISSION_CONTRACT.md](../visionBrain-bridge/MISSION_CONTRACT.md)
+orders execution as of 2026-10-06; the dated CM-00 amendment extends the scoped
+Watch/hosted-planner/Scout-first program without replacing canonical ownership
+or evidence rules. Current dependency/gate truth is in the bridge
+[ledger](../visionBrain-bridge/docs/MISSION_STATUS.md). Historical checkboxes and
+status prose below are not current acceptance evidence.
+
 Date: 2026-09-11. Status: implementation contract for this cycle, ratified by CM-00
 ([docs/CM00_DECISION_RECORD.md](docs/CM00_DECISION_RECORD.md), 2026-09-15).
 Implementation checkboxes are deliberately unchecked until their recorded evidence

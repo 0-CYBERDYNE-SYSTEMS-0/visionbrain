@@ -1,5 +1,26 @@
 # CM-00 Decision Record — platform-first productization
 
+## 2026-10-06 execution amendment
+
+Owner authorization in the current session: “set up the proper workspace that
+you need and then use the team and implement this mission.”
+The bridge [MISSION_CONTRACT.md](../../visionBrain-bridge/MISSION_CONTRACT.md)
+orders the approved program. The dated amendments extend the historical cycle
+to bounded single-source Watch after deterministic replay, an optional
+asynchronous hosted planner and scoped trial, Scout acceptance before later DJI
+ground integration, and the complete performance/evaluation/evidence/delivery
+program with Packs 2/3 as configuration. Task-only MASK changes do not pause;
+other manual configuration takeover revokes adaptive ownership. Keep distinct
+perception (five-minute) and investigation (60-minute) human-wait profiles.
+
+All canonical source/evidence/state/admission rules remain binding. This is
+development approval, not model qualification or release acceptance. Paid trials
+still require defined provider/model/data/spend authorization. No automatic
+push/merge/publish/deploy/live restart/device replacement/model download or
+upgrade/aircraft actuation. Historical deferrals below remain preserved as
+history. Paired baseline and current gates are in the bridge
+[ledger](../../visionBrain-bridge/docs/MISSION_STATUS.md).
+
 Date: 2026-09-15  
 Authorized by: founder directive in the working session, acting as product owner and integration lead  
 Status: ratified for the next development cycle; implementation evidence remains required
