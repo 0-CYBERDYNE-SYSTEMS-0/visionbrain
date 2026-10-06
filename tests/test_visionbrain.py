@@ -1582,9 +1582,9 @@ class TestMlxCompat:
             pytest.skip("mlx_vlm not installed")
 
         from visionbrain.mlx_compat import ensure_lfm_projector_layernorm
-        from mlx_vlm.utils import load_config
 
         ensure_lfm_projector_layernorm()
+        from mlx_vlm.utils import load_config
 
         def make_case(name, layernorm_in_weights, declared):
             d = tmp_path / name
@@ -1596,6 +1596,7 @@ class TestMlxCompat:
             weight_map = {"language_model.model.embed_tokens.weight": "m.safetensors"}
             if layernorm_in_weights:
                 weight_map["multi_modal_projector.layer_norm.weight"] = "m.safetensors"
+                weight_map["multi_modal_projector.layer_norm.bias"] = "m.safetensors"
             (d / "model.safetensors.index.json").write_text(
                 json.dumps({"weight_map": weight_map})
             )
