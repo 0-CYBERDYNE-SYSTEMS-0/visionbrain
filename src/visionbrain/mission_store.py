@@ -43,6 +43,7 @@ MAX_EVENTS_PAGE = 200
 MAX_MISSIONS_PAGE = 100
 MAX_EVENT_HISTORY = 200
 MAX_EVENT_PAGE_BYTES = MAX_OUTBOUND_MESSAGE_BYTES - 2_048
+_EVIDENCE_ORIGINS = frozenset({"unknown", "watch_frame", "explicit_attachment", "generated_crop"})
 
 
 class MissionStoreError(Exception):
@@ -374,6 +375,17 @@ class StoreTransaction:
             "SELECT 1 FROM exported_evidence WHERE evidence_id = ?", (evidence_id,)
         ).fetchone() is not None
 
+    def _is_evidence_rolloff_eligible(self, evidence_id: str) -> bool:
+        """Check persisted kind and trusted origin for an evidence row."""
+        row = self._connection.execute(
+            "SELECT kind, origin FROM evidence WHERE evidence_id = ? AND available = 1",
+            (evidence_id,),
+        ).fetchone()
+        return row is not None and (
+            (row[0] == "frame" and row[1] == "watch_frame")
+            or (row[0] == "crop" and row[1] == "generated_crop")
+        )
+
     def pin_exported_evidence(self, mission_id: str, evidence_ids: list[str]) -> None:
         self._connection.executemany(
             "INSERT OR IGNORE INTO exported_evidence(evidence_id, mission_id) "
@@ -432,6 +444,7 @@ class StoreTransaction:
         *,
         kind: str,
         created_at_ms: int,
+        origin: str = "unknown",
         source_id: str | None = None,
         source_epoch: str | None = None,
         frame_id: int | None = None,
@@ -445,6 +458,8 @@ class StoreTransaction:
         model_provenance: Mapping[str, Any] | None = None,
         expected_sha256: str | None = None,
     ) -> dict[str, Any]:
+        if origin not in _EVIDENCE_ORIGINS:
+            raise ValueError("evidence origin is invalid")
         width, height = _jpeg_dimensions(jpeg_bytes)
         digest = hashlib.sha256(jpeg_bytes).hexdigest()
         if expected_sha256 is not None and digest != expected_sha256.lower():
@@ -504,8 +519,8 @@ class StoreTransaction:
         self._connection.execute(
             "INSERT INTO evidence(evidence_id, mission_id, sha256, bytes, width, height, kind, "
             "parent_evidence_id, source_id, source_epoch, frame_id, capture_time_ms, "
-            "created_at_ms, path, metadata_json, available) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+            "created_at_ms, path, metadata_json, available, origin) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
             (
                 evidence_id,
                 mission_id,
@@ -522,6 +537,7 @@ class StoreTransaction:
                 created_at_ms,
                 str(path),
                 _json(ref),
+                origin,
             ),
         )
         fingerprint = _file_fingerprint(path.stat())
@@ -734,7 +750,8 @@ class MissionStore:
                     created_at_ms INTEGER NOT NULL,
                     path TEXT NOT NULL UNIQUE,
                     metadata_json TEXT NOT NULL,
-                    available INTEGER NOT NULL DEFAULT 1
+                    available INTEGER NOT NULL DEFAULT 1,
+                    origin TEXT NOT NULL DEFAULT 'unknown'
                 );
                 CREATE TABLE IF NOT EXISTS evidence_file_state (
                     evidence_id TEXT PRIMARY KEY REFERENCES evidence(evidence_id),
@@ -780,6 +797,10 @@ class MissionStore:
             if "available" not in evidence_columns:
                 self._connection.execute(
                     "ALTER TABLE evidence ADD COLUMN available INTEGER NOT NULL DEFAULT 1"
+                )
+            if "origin" not in evidence_columns:
+                self._connection.execute(
+                    "ALTER TABLE evidence ADD COLUMN origin TEXT NOT NULL DEFAULT 'unknown'"
                 )
             self._connection.commit()
 

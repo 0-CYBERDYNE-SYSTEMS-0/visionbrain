@@ -209,6 +209,7 @@ def _seed_running_frames(store, snapshot, watch, *, protect_oldest=False, add_to
                 mission_id,
                 _jpeg((index % 255, 90, 175)),
                 kind="frame",
+                origin="watch_frame",
                 source_id=binding.source_id,
                 source_epoch=binding.source_epoch,
                 frame_id=index + 1,
@@ -1136,6 +1137,11 @@ def test_attach_and_crop_evidence_share_rolling_quota_policy(tmp_path):
             after_crop = store.get_mission(second["mission_id"])
             crop = next(ref for ref in after_crop["evidence"] if ref["evidence_id"] == record.evidence_ids[0])
             assert crop["kind"] == "crop" and crop["available"] is True
+            with store._lock:
+                crop_origin = store._connection.execute(
+                    "SELECT origin FROM evidence WHERE evidence_id = ?", (crop["evidence_id"],)
+                ).fetchone()[0]
+            assert crop_origin == "generated_crop"
             assert crop_refs[0]["evidence_id"] not in {ref["evidence_id"] for ref in _available_refs(store, second["mission_id"])}
             old_tool = next(record for record in store.tool_records(second["mission_id"]) if record["tool_result_id"] == "prior-tool-result")
             assert old_tool["evidence_availability"][crop_refs[0]["evidence_id"]] == {

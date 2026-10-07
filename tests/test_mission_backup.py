@@ -40,7 +40,7 @@ def _mission(mission_id="mission-1"):
     }
 
 
-def _seed_store(store, *, pin=True):
+def _seed_store(store, *, pin=True, origin="unknown", kind="imported"):
     jpeg = _jpeg()
 
     def seed(tx):
@@ -48,7 +48,8 @@ def _seed_store(store, *, pin=True):
         evidence = tx.save_evidence(
             "mission-1",
             jpeg,
-            kind="imported",
+            kind=kind,
+            origin=origin,
             source_id="source-original",
             source_epoch="epoch-original",
             frame_id=42,
@@ -85,7 +86,7 @@ def test_backup_restore_preserves_wal_records_pins_and_independent_media(tmp_pat
     restore_root = tmp_path / "restored"
     store = MissionStore(source_root / "missions.sqlite3", source_root / "evidence")
     try:
-        evidence, jpeg = _seed_store(store)
+        evidence, jpeg = _seed_store(store, origin="watch_frame", kind="frame")
         with store._lock:
             store._connection.execute("PRAGMA wal_autocheckpoint = 0")
         store.transact(lambda tx: tx.update_mission_activity(
@@ -121,8 +122,12 @@ def test_backup_restore_preserves_wal_records_pins_and_independent_media(tmp_pat
         assert replay.replayed is True
         assert replay.reply == {"ok": True, "reply": "memoized"}
         assert restored.read_evidence(evidence["evidence_id"])["jpeg_bytes"] == jpeg
+        assert restored._connection.execute(
+            "SELECT origin FROM evidence WHERE evidence_id = ?", (evidence["evidence_id"],)
+        ).fetchone()[0] == "watch_frame"
         restored.check_evidence_file(evidence["evidence_id"])
         evidence_ref = restored.evidence_refs("mission-1")[0]
+        assert "origin" not in evidence_ref
         assert (
             evidence_ref["source_id"], evidence_ref["source_epoch"],
             evidence_ref["frame_id"], evidence_ref["capture_time_ms"],

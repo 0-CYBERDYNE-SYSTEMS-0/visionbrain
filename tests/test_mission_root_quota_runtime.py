@@ -202,6 +202,14 @@ def _runtime(store, planner, tools, source, watch):
     )
 
 
+def _stored_origin(store, evidence_id):
+    with store._lock:
+        row = store._connection.execute(
+            "SELECT origin FROM evidence WHERE evidence_id = ?", (evidence_id,)
+        ).fetchone()
+    return row[0] if row else None
+
+
 def test_watch_root_full_pauses_and_explicit_resume_analyzes_fresh_frame(tmp_path, monkeypatch):
     from visionbrain import mission_runtime as runtime_module
 
@@ -226,7 +234,7 @@ def test_watch_root_full_pauses_and_explicit_resume_analyzes_fresh_frame(tmp_pat
             initial = created["result"]["snapshot"]
             old_crop = store.transact(
                 lambda tx: tx.save_evidence(
-                    initial["mission_id"], jpeg, kind="crop", created_at_ms=1
+                    initial["mission_id"], jpeg, kind="crop", origin="generated_crop", created_at_ms=1
                 )
             ).value
             old_crop_path = evidence_root / f"{old_crop['evidence_id']}.jpg"
@@ -250,6 +258,11 @@ def test_watch_root_full_pauses_and_explicit_resume_analyzes_fresh_frame(tmp_pat
             assert watch.applied
             assert watch.released == [(watch.applied[0].lease_id, "evidence_quota_full")]
             assert watch.active is None
+            saved_watch_frame = next(
+                ref for ref in paused["evidence"]
+                if ref.get("kind") == "frame" and ref.get("available", True)
+            )
+            assert _stored_origin(store, saved_watch_frame["evidence_id"]) == "watch_frame"
             assert orphan_path.read_bytes() == orphan
             assert not old_crop_path.exists()
             assert any(
@@ -407,6 +420,7 @@ def test_crop_root_full_pauses_inspect_and_records_rejected_artifact(tmp_path):
             old_crop = store.transact(
                 lambda tx: tx.save_evidence(
                     snapshot["mission_id"], jpeg, kind="crop", created_at_ms=1,
+                    origin="generated_crop",
                     parent_evidence_id=input_id,
                 )
             ).value
@@ -510,7 +524,9 @@ def test_attach_root_rolloff_protects_references_and_replays_committed_refusal(t
                     ("newer", "crop", 70),
                 ):
                     rows[key] = tx.save_evidence(
-                        mission_id, jpeg, kind=kind, created_at_ms=created_at
+                        mission_id, jpeg, kind=kind,
+                        origin="generated_crop" if kind == "crop" else "unknown",
+                        created_at_ms=created_at,
                     )
                 tx.pin_exported_evidence(mission_id, [rows["exported"]["evidence_id"]])
                 current = tx.get_mission(mission_id)
@@ -641,7 +657,9 @@ def test_root_rolloff_retry_rescans_after_unlink_failure_or_competing_writer(tmp
                 )
                 mission_id = snapshot["mission_id"]
                 crop = store.transact(
-                    lambda tx: tx.save_evidence(mission_id, jpeg, kind="crop", created_at_ms=1)
+                    lambda tx: tx.save_evidence(
+                        mission_id, jpeg, kind="crop", origin="generated_crop", created_at_ms=1
+                    )
                 ).value
                 crop_path = evidence_root / f"{crop['evidence_id']}.jpg"
                 latest = attached["result"]["snapshot"]
@@ -657,7 +675,9 @@ def test_root_rolloff_retry_rescans_after_unlink_failure_or_competing_writer(tmp
                 ).value
                 # The close-up source is protected; use a second, unreferenced crop as the eligible row.
                 eligible = store.transact(
-                    lambda tx: tx.save_evidence(mission_id, jpeg, kind="crop", created_at_ms=2)
+                    lambda tx: tx.save_evidence(
+                        mission_id, jpeg, kind="crop", origin="generated_crop", created_at_ms=2
+                    )
                 ).value
                 eligible_path = evidence_root / f"{eligible['evidence_id']}.jpg"
                 current = store.get_mission(mission_id)
@@ -740,6 +760,115 @@ def test_root_rolloff_retry_rescans_after_unlink_failure_or_competing_writer(tmp
     asyncio.run(run_case("unlink_failure"))
     monkeypatch.undo()
     asyncio.run(run_case("competing_writer"))
+
+
+def test_explicit_unknown_and_watch_frame_origins_gate_both_rolloff_paths(tmp_path):
+    jpeg = _jpeg()
+
+    async def run_case(quota_kind):
+        evidence_root = tmp_path / quota_kind / "evidence"
+        store = MissionStore(
+            tmp_path / quota_kind / "missions.sqlite3",
+            evidence_root,
+            quota_bytes=1_000_000,
+            root_quota_bytes=1_000_000,
+        )
+        runtime = _runtime(store, _Planner(watch=False), _Tools(), lambda _binding: None, _Watch())
+        try:
+            created = await _create(runtime, mode="inspect", request_id=f"origin-{quota_kind}-create")
+            snapshot = created["result"]["snapshot"]
+            attached = await runtime.handle(
+                _command("attach_evidence", f"origin-{quota_kind}-input", snapshot["mission_id"], snapshot["revision"], _attachment(jpeg)),
+                Principal("installation", evidence_kind="frame", source_id="camera", source_epoch="epoch-1", frame_id=1),
+                SCOPES,
+            )
+            assert attached["ok"], attached
+            mission_id = snapshot["mission_id"]
+            attached_id = attached["result"]["evidence_id"]
+            assert _stored_origin(store, attached_id) == "explicit_attachment"
+
+            def seed(tx):
+                rows = [
+                    tx.save_evidence(mission_id, jpeg, kind="frame", origin="explicit_attachment", created_at_ms=1),
+                    tx.save_evidence(mission_id, jpeg, kind="frame", origin="unknown", created_at_ms=2),
+                    tx.save_evidence(mission_id, jpeg, kind="frame", origin="watch_frame", created_at_ms=3),
+                ]
+                current = tx.get_mission(mission_id)
+                current["evidence"].extend(rows)
+                if quota_kind == "count":
+                    from visionbrain.mission_contracts import MAX_MISSION_EVIDENCE
+
+                    count, _bytes = tx.evidence_usage(mission_id)
+                    for index in range(MAX_MISSION_EVIDENCE - count):
+                        filler = tx.save_evidence(
+                            mission_id, jpeg, kind="imported", origin="unknown",
+                            created_at_ms=10 + index,
+                        )
+                        current["evidence"].append(filler)
+                saved = tx.update_mission(
+                    current, expected_revision=current["revision"], updated_at_ms=int(time.time() * 1000)
+                )
+                return rows, saved
+
+            rows, snapshot = store.transact(seed).value
+            explicit, unknown, automatic = rows
+            paths = {
+                "attached": evidence_root / f"{attached_id}.jpg",
+                "explicit": evidence_root / f"{explicit['evidence_id']}.jpg",
+                "unknown": evidence_root / f"{unknown['evidence_id']}.jpg",
+                "automatic": evidence_root / f"{automatic['evidence_id']}.jpg",
+            }
+
+            caller_origin = await runtime.handle(
+                _command(
+                    "attach_evidence", f"origin-{quota_kind}-caller-origin", mission_id,
+                    snapshot["revision"], _attachment(jpeg) | {"origin": "watch_frame"},
+                ),
+                Principal("installation"), SCOPES,
+            )
+            assert caller_origin["error"]["code"] == "invalid_request"
+            assert store.get_mission(mission_id) == snapshot
+
+            usage = store._root_evidence_usage()
+            if quota_kind == "root":
+                store.root_quota_bytes = usage
+            elif quota_kind == "mission":
+                store.quota_bytes = store.transact(lambda tx: tx.total_evidence_usage()[1]).value
+
+            result = await runtime.handle(
+                _command(
+                    "attach_evidence", f"origin-{quota_kind}-rolloff", mission_id,
+                    snapshot["revision"], _attachment(jpeg),
+                ),
+                Principal("installation", evidence_kind="frame", source_id="camera", source_epoch="epoch-1", frame_id=2),
+                SCOPES,
+            )
+            if quota_kind == "root":
+                assert result["error"]["code"] == "evidence_quota_full"
+                saved = result["result"]["snapshot"]
+            else:
+                assert result["ok"], result
+                saved = result["result"]["snapshot"]
+                new_id = result["result"]["evidence_id"]
+                assert _stored_origin(store, new_id) == "explicit_attachment"
+
+            assert paths["attached"].exists()
+            assert paths["explicit"].exists()
+            assert paths["unknown"].exists()
+            assert not paths["automatic"].exists()
+            assert any(
+                ref.get("evidence_id") == automatic["evidence_id"]
+                and ref.get("availability_reason") == "rolled_off"
+                for ref in saved["evidence"]
+            )
+            assert all("origin" not in ref for ref in saved["evidence"])
+        finally:
+            await runtime.close()
+            store.close()
+
+    asyncio.run(run_case("root"))
+    asyncio.run(run_case("mission"))
+    asyncio.run(run_case("count"))
 
 
 def test_watch_accounting_incomplete_pauses_with_distinct_operator_reason(tmp_path, monkeypatch):

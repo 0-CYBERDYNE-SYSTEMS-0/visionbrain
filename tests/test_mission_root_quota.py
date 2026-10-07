@@ -4,6 +4,7 @@ from io import BytesIO
 import fcntl
 import multiprocessing
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,14 @@ def _mission(mission_id="mission-1"):
         "updated_at_ms": 1,
         "last_sequence": 0,
     }
+
+
+def _stored_origin(store, evidence_id):
+    with store._lock:
+        row = store._connection.execute(
+            "SELECT origin FROM evidence WHERE evidence_id = ?", (evidence_id,)
+        ).fetchone()
+    return row[0] if row else None
 
 
 def _concurrent_root_save(database_path, evidence_root, jpeg, barrier, results):
@@ -139,6 +148,80 @@ def test_root_quota_refusal_carries_measured_usage_and_incoming_bytes(tmp_path):
         assert not list(evidence_root.glob("*.jpg"))
     finally:
         store.close()
+
+
+def test_evidence_origins_persist_across_reopen_without_public_metadata(tmp_path):
+    database = tmp_path / "missions.sqlite3"
+    root = tmp_path / "evidence"
+    jpeg = _jpeg()
+    store = MissionStore(database, root, quota_bytes=1_000_000, root_quota_bytes=1_000_000)
+    try:
+        def seed(tx):
+            tx.insert_mission(_mission())
+            return {
+                "watch": tx.save_evidence(
+                    "mission-1", jpeg, kind="frame", origin="watch_frame", created_at_ms=1
+                ),
+                "explicit": tx.save_evidence(
+                    "mission-1", jpeg, kind="frame", origin="explicit_attachment", created_at_ms=2
+                ),
+                "crop": tx.save_evidence(
+                    "mission-1", jpeg, kind="crop", origin="generated_crop", created_at_ms=3
+                ),
+                "unknown": tx.save_evidence("mission-1", jpeg, kind="frame", created_at_ms=4),
+            }
+
+        records = store.transact(seed).value
+        assert all("origin" not in record for record in records.values())
+    finally:
+        store.close()
+
+    reopened = MissionStore(database, root, quota_bytes=1_000_000, root_quota_bytes=1_000_000)
+    try:
+        origins = {
+            name: _stored_origin(reopened, record["evidence_id"])
+            for name, record in records.items()
+        }
+        assert origins == {
+            "watch": "watch_frame",
+            "explicit": "explicit_attachment",
+            "crop": "generated_crop",
+            "unknown": "unknown",
+        }
+        assert reopened.transact(lambda tx: (
+            tx._is_evidence_rolloff_eligible(records["watch"]["evidence_id"]),
+            tx._is_evidence_rolloff_eligible(records["explicit"]["evidence_id"]),
+            tx._is_evidence_rolloff_eligible(records["crop"]["evidence_id"]),
+            tx._is_evidence_rolloff_eligible(records["unknown"]["evidence_id"]),
+        )).value == (True, False, True, False)
+        assert all("origin" not in ref for ref in reopened.evidence_refs("mission-1"))
+    finally:
+        reopened.close()
+
+
+def test_legacy_evidence_origin_migrates_to_protected_unknown(tmp_path):
+    database = tmp_path / "missions.sqlite3"
+    root = tmp_path / "evidence"
+    store = MissionStore(database, root, quota_bytes=1_000_000, root_quota_bytes=1_000_000)
+    try:
+        store.transact(lambda tx: tx.insert_mission(_mission()))
+        evidence = store.transact(lambda tx: tx.save_evidence(
+            "mission-1", _jpeg(), kind="frame", origin="watch_frame", created_at_ms=1
+        )).value
+    finally:
+        store.close()
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("ALTER TABLE evidence DROP COLUMN origin")
+
+    migrated = MissionStore(database, root, quota_bytes=1_000_000, root_quota_bytes=1_000_000)
+    try:
+        assert _stored_origin(migrated, evidence["evidence_id"]) == "unknown"
+        assert not migrated.transact(
+            lambda tx: tx._is_evidence_rolloff_eligible(evidence["evidence_id"])
+        ).value
+    finally:
+        migrated.close()
 
 
 def test_default_root_quota_is_decimal_100_gb():

@@ -1086,6 +1086,7 @@ class MissionRuntime:
                     jpeg,
                     kind=("closeup" if is_closeup else principal.evidence_kind if principal.evidence_kind in {"imported", "closeup", "frame"} else "imported"),
                     created_at_ms=now,
+                    origin="explicit_attachment",
                     source_id=principal.source_id,
                     source_epoch=principal.source_epoch,
                     frame_id=principal.frame_id,
@@ -2779,6 +2780,7 @@ class MissionRuntime:
                         mission_id,
                         artifact.jpeg_bytes,
                         kind=artifact.kind,
+                        origin="generated_crop",
                         parent_evidence_id=artifact.parent_evidence_id,
                         crop_box=artifact.crop_box,
                         input_transform=asdict(artifact.input_transform) if artifact.input_transform else None,
@@ -2876,6 +2878,7 @@ class MissionRuntime:
                     mission_id,
                     frame.jpeg_bytes,
                     kind="frame",
+                    origin="watch_frame",
                     source_id=frame.source_id,
                     source_epoch=frame.source_epoch,
                     frame_id=frame.frame_id,
@@ -3198,7 +3201,8 @@ class MissionRuntime:
         ):
             candidates = [
                 ref for ref in tx.list_evidence(snapshot["mission_id"])
-                if ref.get("kind") in {"frame", "crop"}
+                if ref.get("evidence_id")
+                and tx._is_evidence_rolloff_eligible(str(ref["evidence_id"]))
                 and ref.get("evidence_id") not in protected
                 and not tx.evidence_is_exported(str(ref.get("evidence_id", "")))
                 and (
@@ -3229,18 +3233,16 @@ class MissionRuntime:
         *,
         protected_evidence_ids: Collection[str] = (),
     ) -> None:
-        """Tombstone oldest safe crop rows after a measured root refusal."""
+        """Tombstone oldest safe crops and automatic Watch frames after root refusal."""
         bytes_to_clear = root_usage_bytes + incoming_bytes - int(self.store.root_quota_bytes)
         if bytes_to_clear <= 0:
             return
         protected = self._protected_evidence_ids(snapshot, protected_evidence_ids)
         for candidate in tx.list_evidence(snapshot["mission_id"]):
             evidence_id = str(candidate.get("evidence_id", ""))
-            # Explicit attachments may also be stored as ``frame``; without a
-            # persisted origin marker, only generated crops are unambiguous.
             if (
-                candidate.get("kind") != "crop"
-                or not evidence_id
+                not evidence_id
+                or not tx._is_evidence_rolloff_eligible(evidence_id)
                 or evidence_id in protected
                 or tx.evidence_is_exported(evidence_id)
                 or (
