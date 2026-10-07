@@ -1098,25 +1098,33 @@ class MissionRuntime:
                 )
             except QuotaAccountingIncomplete:
                 reason = "evidence_quota_accounting_unavailable"
-                saved, lease = self._pause_for_evidence_quota(tx, snapshot, now, reason=reason)
+                saved, lease = self._pause_for_evidence_quota(
+                    tx, snapshot, now, reason=reason, preserve_closeup_wait=is_closeup
+                )
                 if lease:
                     release_after.append((lease, reason))
                 self._replace_event_snapshot(tx, saved)
                 raise _CommandError(
                     reason,
+                    "Evidence storage could not be accounted safely; resolve the storage issue and retry the requested close-up."
+                    if is_closeup else
                     "Evidence storage could not be accounted safely; resolve the storage issue and explicitly resume.",
-                    result={"snapshot": saved, "execution_outcome": "paused"},
+                    result={"snapshot": saved, "execution_outcome": "waiting_evidence" if is_closeup else "paused"},
                 )
             except QuotaExceeded:
                 reason = "evidence_quota_full"
-                saved, lease = self._pause_for_evidence_quota(tx, snapshot, now, reason=reason)
+                saved, lease = self._pause_for_evidence_quota(
+                    tx, snapshot, now, reason=reason, preserve_closeup_wait=is_closeup
+                )
                 if lease:
                     release_after.append((lease, reason))
                 self._replace_event_snapshot(tx, saved)
                 raise _CommandError(
                     reason,
+                    "Evidence storage is at its configured limit; free space or remove eligible evidence, then retry the requested close-up."
+                    if is_closeup else
                     "Evidence storage is at its configured limit; free space or remove eligible evidence, then explicitly resume.",
-                    result={"snapshot": saved, "execution_outcome": "paused"},
+                    result={"snapshot": saved, "execution_outcome": "waiting_evidence" if is_closeup else "paused"},
                 )
             updated = dict(snapshot)
             updated.setdefault("evidence", []).append(evidence)
@@ -3173,14 +3181,23 @@ class MissionRuntime:
         now: int,
         *,
         reason: str = "evidence_quota_full",
+        preserve_closeup_wait: bool = False,
     ):
         updated = dict(snapshot)
         lease = updated.get("watch_lease")
-        updated["state"], updated["reason"] = "paused", reason
+        updated["state"], updated["reason"] = ("waiting_evidence" if preserve_closeup_wait else "paused"), reason
         if reason == "evidence_quota_accounting_unavailable":
-            updated["activity"] = "Evidence storage could not be accounted safely; resolve the storage issue, then resume explicitly."
+            updated["activity"] = (
+                "Evidence storage could not be accounted safely; resolve the storage issue, then retry the requested close-up."
+                if preserve_closeup_wait else
+                "Evidence storage could not be accounted safely; resolve the storage issue, then resume explicitly."
+            )
         else:
-            updated["activity"] = "Evidence storage is at its configured limit; free space or remove eligible evidence, then resume explicitly."
+            updated["activity"] = (
+                "Evidence storage is at its configured limit; free space or remove eligible evidence, then retry the requested close-up."
+                if preserve_closeup_wait else
+                "Evidence storage is at its configured limit; free space or remove eligible evidence, then resume explicitly."
+            )
         updated["execution_generation"] = int(snapshot.get("execution_generation", 0)) + 1
         updated["cycle_id"] = None
         updated["watch_lease"] = None
