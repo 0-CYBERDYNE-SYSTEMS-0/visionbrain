@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import selectors
 import subprocess
@@ -11,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from visionbrain import cli, loader
+from visionbrain import cli, loader, pilot_eval
+from visionbrain.frame_selector import FrameScores
 from visionbrain.inference_admission import InferenceAdmission
 
 
@@ -66,6 +68,33 @@ def _set_detect_args(monkeypatch) -> None:
         sys,
         "argv",
         ["visionbrain", "detect", "--image", "unused.png", "--query", "test"],
+    )
+
+
+def _set_pilot_eval_args(monkeypatch, video_path: Path, ground_truth_path: Path) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "visionbrain",
+            "pilot-eval",
+            "--video",
+            str(video_path),
+            "--ground-truth",
+            str(ground_truth_path),
+        ],
+    )
+
+
+def _empty_scores() -> FrameScores:
+    return FrameScores(
+        video_path="video.mp4",
+        total_frames=0,
+        fps=30.0,
+        duration_s=0.0,
+        frames_scored=0,
+        is_relevant=False,
+        quick_answer="",
     )
 
 
@@ -128,6 +157,114 @@ def test_cli_exception_releases_admission(tmp_path, monkeypatch) -> None:
         cli.main()
 
     assert _can_acquire(lock_path)
+
+
+def test_pilot_eval_busy_refuses_before_default_scoring(
+    tmp_path, monkeypatch
+) -> None:
+    lock_path = tmp_path / "inference.lock"
+    monkeypatch.setenv("VB_INFERENCE_LOCK", str(lock_path))
+    calls = []
+    monkeypatch.setattr(
+        pilot_eval,
+        "_default_score_fn",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    ground_truth = {"query": "person", "events": []}
+
+    with _held_by_child(lock_path):
+        with pytest.raises(RuntimeError, match="inference admission busy") as exc:
+            pilot_eval.run_pilot_eval("video.mp4", ground_truth)
+
+    assert calls == []
+    assert "external-holder" in str(exc.value)
+
+
+def test_pilot_eval_releases_admission_after_default_scorer_failure(
+    tmp_path, monkeypatch
+) -> None:
+    lock_path = tmp_path / "inference.lock"
+    monkeypatch.setenv("VB_INFERENCE_LOCK", str(lock_path))
+    observed = []
+
+    def fail_scoring(*args, **kwargs):
+        observed.append(_can_acquire(lock_path))
+        raise RuntimeError("scorer failed")
+
+    monkeypatch.setattr(pilot_eval, "_default_score_fn", fail_scoring)
+    ground_truth = {"query": "person", "events": []}
+
+    with pytest.raises(RuntimeError, match="scorer failed"):
+        pilot_eval.run_pilot_eval("video.mp4", ground_truth)
+
+    assert observed == [False]
+    assert _can_acquire(lock_path)
+
+
+def test_pilot_eval_injected_scorer_remains_lock_free_when_busy(
+    tmp_path, monkeypatch
+) -> None:
+    lock_path = tmp_path / "inference.lock"
+    monkeypatch.setenv("VB_INFERENCE_LOCK", str(lock_path))
+    ground_truth = {"query": "person", "events": []}
+
+    with _held_by_child(lock_path):
+        report = pilot_eval.run_pilot_eval(
+            "video.mp4", ground_truth, score_fn=lambda *args, **kwargs: _empty_scores()
+        )
+
+    assert report.events_total == 0
+
+
+def test_cli_pilot_eval_uses_function_owned_admission_once(
+    tmp_path, monkeypatch
+) -> None:
+    lock_path = tmp_path / "inference.lock"
+    monkeypatch.setenv("VB_INFERENCE_LOCK", str(lock_path))
+    video_path = tmp_path / "video.mp4"
+    ground_truth_path = tmp_path / "ground-truth.json"
+    video_path.write_bytes(b"synthetic")
+    ground_truth_path.write_text(json.dumps({"query": "person", "events": []}))
+    _set_pilot_eval_args(monkeypatch, video_path, ground_truth_path)
+    observed = []
+
+    def score_while_admitted(*args, **kwargs):
+        observed.append(_can_acquire(lock_path))
+        return _empty_scores()
+
+    monkeypatch.setattr(pilot_eval, "_default_score_fn", score_while_admitted)
+    cli.main()
+
+    assert observed == [False]
+    assert _can_acquire(lock_path)
+
+
+def test_cli_pilot_eval_surfaces_busy_before_default_scoring(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    lock_path = tmp_path / "inference.lock"
+    monkeypatch.setenv("VB_INFERENCE_LOCK", str(lock_path))
+    video_path = tmp_path / "video.mp4"
+    ground_truth_path = tmp_path / "ground-truth.json"
+    video_path.write_bytes(b"synthetic")
+    ground_truth_path.write_text(json.dumps({"query": "person", "events": []}))
+    _set_pilot_eval_args(monkeypatch, video_path, ground_truth_path)
+    calls = []
+    monkeypatch.setattr(
+        pilot_eval,
+        "_default_score_fn",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    with _held_by_child(lock_path):
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+    assert exc.value.code == 1
+    assert calls == []
+    diagnostic = capsys.readouterr().err
+    assert "inference admission busy" in diagnostic
+    assert "external-holder" in diagnostic
 
 
 def test_cli_admission_filesystem_error_fails_closed(tmp_path, monkeypatch, capsys) -> None:

@@ -867,6 +867,9 @@ def cmd_pilot_eval(args: argparse.Namespace) -> None:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     for line in report.summary():
         print(line)
@@ -1080,6 +1083,10 @@ def main() -> None:
         "fastscan": cmd_fastscan,
         "pilot-eval": cmd_pilot_eval,
     }
+    if args.command == "pilot-eval":
+        dispatch[args.command](args)
+        return
+
     try:
         admission = InferenceAdmission()
         handle = admission.try_acquire(reason=f"visionbrain-cli-{args.command}")

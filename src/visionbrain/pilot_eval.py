@@ -273,6 +273,9 @@ def run_pilot_eval(
 ) -> PilotReport:
     """Replay a video through the frame scorer and measure against ground truth.
 
+    The default scorer runs under host inference admission. An injected
+    ``score_fn`` is used directly and remains suitable for model-free tests.
+
     Args:
         video_path: Path to the recorded video to replay.
         ground_truth: Parsed ground-truth JSON (see module docstring).
@@ -299,25 +302,39 @@ def run_pilot_eval(
 
     Raises:
         ValueError: On malformed ground truth (see validate_ground_truth).
+        RuntimeError: If host inference admission is busy or unavailable.
     """
     normalized = validate_ground_truth(ground_truth)
     query = normalized["query"]
     events = normalized["events"]
 
+    admission_handle = None
     if score_fn is None:
+        from .inference_admission import InferenceAdmission
+
+        admission = InferenceAdmission()
+        admission_handle = admission.try_acquire("visionbrain-pilot-eval")
+        if admission_handle is None:
+            raise RuntimeError(
+                f"inference admission busy: {admission.describe_holder()}"
+            )
         score_fn = _default_score_fn
     if frame_reader is None:
         frame_reader = _default_frame_reader
 
     t_start = time.perf_counter()
-    scores = score_fn(
-        video_path,
-        query,
-        sample_every_n_seconds=sample_every_n_seconds,
-        max_frames=max_frames,
-        resolution=resolution,
-        min_relevance=min_relevance,
-    )
+    try:
+        scores = score_fn(
+            video_path,
+            query,
+            sample_every_n_seconds=sample_every_n_seconds,
+            max_frames=max_frames,
+            resolution=resolution,
+            min_relevance=min_relevance,
+        )
+    finally:
+        if admission_handle is not None:
+            admission_handle.release()
     runtime_s = time.perf_counter() - t_start
 
     frame_scores: list["FrameScore"] = list(getattr(scores, "frame_scores", []) or [])
