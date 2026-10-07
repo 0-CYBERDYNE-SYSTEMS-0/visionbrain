@@ -196,6 +196,70 @@ async def _wait_for(predicate, *, timeout=2.0):
     raise AssertionError("condition was not met before timeout")
 
 
+def test_preview_packet_requires_exact_revision_and_empty_args_before_reading(tmp_path, monkeypatch):
+    runtime, store, _events = _new_runtime(tmp_path, _Planner(lambda _context: None), _Tools())
+    reads = []
+    read_rows = store.read_mission_record_rows
+
+    def counted_read(mission_id, *, tx=None):
+        reads.append(mission_id)
+        return read_rows(mission_id, tx=tx)
+
+    monkeypatch.setattr(store, "read_mission_record_rows", counted_read)
+    base = {
+        "type": "mission_command",
+        "schema_version": 1,
+        "request_id": "preview-validation-1",
+        "mission_id": "mission-1",
+        "expected_revision": 1,
+        "command": "preview_packet",
+        "args": {},
+    }
+    invalid = [
+        {**base, "args": {"unexpected": True}},
+        {**base, "unexpected": True},
+        {key: value for key, value in base.items() if key != "args"},
+        {key: value for key, value in base.items() if key != "expected_revision"},
+        {**base, "expected_revision": True},
+        {**base, "expected_revision": 1.0},
+    ]
+
+    for index, command in enumerate(invalid):
+        command = {**command, "request_id": f"preview-validation-{index + 1}"}
+        reply = asyncio.run(runtime.handle(command, "operator-1", {"mission:read"}))
+        assert reply["ok"] is False
+        assert reply["error"]["code"] == "invalid_request"
+    assert reads == []
+
+
+def test_preview_packet_requires_read_scope_before_metadata_read(tmp_path, monkeypatch):
+    runtime, store, _events = _new_runtime(tmp_path, _Planner(lambda _context: None), _Tools())
+    reads = []
+    read_rows = store.read_mission_record_rows
+
+    def counted_read(mission_id, *, tx=None):
+        reads.append(mission_id)
+        return read_rows(mission_id, tx=tx)
+
+    monkeypatch.setattr(store, "read_mission_record_rows", counted_read)
+    reply = asyncio.run(runtime.handle(
+        {
+            "type": "mission_command",
+            "schema_version": 1,
+            "request_id": "preview-denied-1",
+            "mission_id": "mission-1",
+            "expected_revision": 1,
+            "command": "preview_packet",
+            "args": {},
+        },
+        "operator-1",
+        {"mission:control"},
+    ))
+    assert reply["ok"] is False
+    assert reply["error"]["code"] == "unauthorized"
+    assert reads == []
+
+
 def _seed_running_frames(store, snapshot, watch, *, protect_oldest=False, add_tool_record=False):
     mission_id = snapshot["mission_id"]
     binding = SourceBinding("scout-1", "41")

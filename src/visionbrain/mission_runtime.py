@@ -94,8 +94,8 @@ from .mission_store import (
     RevisionConflict,
     _jpeg_dimensions,
 )
-from .mission_record_projection import project_mission_records
-from .mission_records import Record
+from .mission_record_projection import MissionRecordProjectionError, project_mission_records
+from .mission_records import Record, RecordValidationError, record_to_dict
 from .mission_packet_preview import PacketPreview, build_packet_preview
 
 DEFAULT_GOAL = "Identify visible items relevant to this expertise and explain what needs a closer look."
@@ -554,7 +554,8 @@ class MissionRuntime:
         integrated: bool = False,
     ) -> dict[str, Any]:
         """Validate authorization and idempotently handle one mission command."""
-        await self._ensure_recovered()
+        if not isinstance(command, Mapping) or command.get("command") != "preview_packet":
+            await self._ensure_recovered()
         if self._closed:
             return self._reply(command if isinstance(command, Mapping) else {}, False, error=("runtime_closed", "mission runtime is closed"))
         if not isinstance(command, Mapping):
@@ -641,7 +642,7 @@ class MissionRuntime:
                 except _CommandError as exc:
                     return self._reply(normalized, False, exc.result, (exc.code, str(exc)))
 
-            if normalized["command"] in {"get", "list", "events_since", "export", "get_evidence"}:
+            if normalized["command"] in {"get", "list", "events_since", "export", "get_evidence", "preview_packet"}:
                 worker = asyncio.create_task(asyncio.to_thread(self.store.perform_read, operation))
             else:
                 worker = asyncio.create_task(asyncio.to_thread(
@@ -752,23 +753,29 @@ class MissionRuntime:
         if command.get("type") != "mission_command" or command.get("schema_version") != MISSION_SCHEMA_VERSION:
             raise _CommandError("invalid_request", "mission.v1 command envelope is invalid")
         name = command.get("command")
-        if name not in {"capabilities", "create", "prepare", "activate", "update_brief", "attach_evidence", "resume", "pause", "cancel", "get", "list", "events_since", "get_evidence", "review_finding", "decline_closeup", "export"}:
+        if name not in {"capabilities", "create", "prepare", "activate", "update_brief", "attach_evidence", "resume", "pause", "cancel", "get", "list", "events_since", "get_evidence", "review_finding", "decline_closeup", "export", "preview_packet"}:
             raise _CommandError("invalid_request", "unknown mission command")
         mission_id = command.get("mission_id")
         if name in {"create", "prepare", "list", "capabilities"}:
             if mission_id is not None:
                 raise _CommandError("invalid_request", f"{name} does not accept mission_id")
-        elif not isinstance(mission_id, str) or not mission_id or len(mission_id) > 128:
+        elif not isinstance(mission_id, str) or not mission_id.strip() or len(mission_id) > 128:
             raise _CommandError("invalid_request", "mission_id is required")
         if name == "prepare" and "expected_revision" in command:
             raise _CommandError("invalid_request", "prepare does not accept expected_revision")
         args = command.get("args", {})
         if not isinstance(args, Mapping):
             raise _CommandError("invalid_request", "args must be an object")
+        if name == "preview_packet" and ("args" not in command or bool(args)):
+            raise _CommandError("invalid_request", "preview_packet args must be an empty object")
         normalized = dict(command)
         normalized["args"] = dict(args)
         if "expected_revision" in command and not _integer(command["expected_revision"]):
             raise _CommandError("invalid_request", "expected_revision must be an integer")
+        if name == "preview_packet" and (
+            not _integer(command.get("expected_revision")) or command["expected_revision"] < 0
+        ):
+            raise _CommandError("invalid_request", "preview_packet requires a non-negative expected_revision")
         if name in {"attach_evidence", "activate", "update_brief", "resume", "pause", "cancel", "review_finding", "decline_closeup"}:
             if not _integer(command.get("expected_revision")):
                 raise _CommandError("invalid_request", f"{name} requires expected_revision")
@@ -829,7 +836,7 @@ class MissionRuntime:
 
     @staticmethod
     def _required_scopes(command: str) -> frozenset[str]:
-        if command in {"capabilities", "get", "list", "events_since", "export"}:
+        if command in {"capabilities", "get", "list", "events_since", "export", "preview_packet"}:
             return frozenset({SCOPE_MISSION_READ})
         if command == "get_evidence":
             return frozenset({SCOPE_MISSION_READ, SCOPE_MISSION_EVIDENCE})
@@ -974,6 +981,84 @@ class MissionRuntime:
             if snapshot is None:
                 raise KeyError(mission_id)
             return {"snapshot": self._verify_snapshot_evidence(mission_id, snapshot, tx=tx)}
+        if name == "preview_packet":
+            rows = self.store.read_mission_record_rows(mission_id, tx=tx)
+            if rows is None:
+                raise KeyError(mission_id)
+            snapshot = rows["snapshot"]
+            snapshot_revision = snapshot.get("revision")
+            if not _integer(snapshot_revision) or snapshot_revision < 1:
+                raise _CommandError(
+                    "packet_projection_error",
+                    "mission revision metadata is invalid",
+                    result={
+                        "mission_revision": None,
+                        "projection_error": {"reason": "invalid_mission_revision", "path": "snapshot.revision"},
+                    },
+                )
+            if snapshot_revision != command["expected_revision"]:
+                raise RevisionConflict(snapshot)
+            if snapshot.get("state") not in {"completed", "paused"}:
+                raise _CommandError(
+                    "packet_not_ready",
+                    "mission must be completed or paused before packet preview",
+                    result={
+                        "mission_revision": snapshot_revision,
+                        "mission_state": snapshot.get("state"),
+                    },
+                )
+            if snapshot.get("watch_lease") is not None:
+                raise _CommandError(
+                    "packet_projection_error",
+                    "mission still has an active Watch lease",
+                    result={
+                        "mission_revision": snapshot_revision,
+                        "projection_error": {"reason": "active_watch_lease", "path": "snapshot.watch_lease"},
+                    },
+                )
+            try:
+                preview = build_packet_preview(rows)
+            except MissionRecordProjectionError as exc:
+                raise _CommandError(
+                    "packet_projection_error",
+                    "mission records cannot be projected into a packet",
+                    result={
+                        "mission_revision": snapshot_revision,
+                        "projection_error": {"reason": exc.reason, "path": exc.path},
+                    },
+                ) from exc
+            except RecordValidationError as exc:
+                raise _CommandError(
+                    "packet_projection_error",
+                    "packet record bundle failed validation",
+                    result={
+                        "mission_revision": snapshot_revision,
+                        "projection_error": {"reason": exc.reason, "path": exc.path},
+                    },
+                ) from exc
+            except ValueError as exc:
+                raise _CommandError(
+                    "packet_projection_error",
+                    "mission metadata cannot be projected into a packet",
+                    result={
+                        "mission_revision": snapshot_revision,
+                        "projection_error": {"reason": "invalid_packet_projection", "path": ""},
+                    },
+                ) from exc
+            return {
+                "envelope_version": 1,
+                "kind": "inspection_packet_preview",
+                "verification": {
+                    "basis": "persisted_metadata_only",
+                    "fresh_media_verified": False,
+                },
+                "mission_id": preview.packet.mission_id,
+                "mission_revision": preview.packet.mission_revision,
+                "packet": record_to_dict(preview.packet),
+                "bundle": [record_to_dict(record) for record in preview.records],
+                "canonical_json": preview.canonical_json,
+                "content_sha256": preview.content_sha256,
+            }
         if name == "events_since":
             cursor = args.get("cursor", 0)
             limit = args.get("limit", 100)
@@ -1591,7 +1676,11 @@ class MissionRuntime:
             "schema_version": MISSION_SCHEMA_VERSION,
             "request_id": command.get("request_id"),
             "mission_id": command.get("mission_id"),
-            "revision": (result or {}).get("snapshot", {}).get("revision") if isinstance((result or {}).get("snapshot"), Mapping) else None,
+            "revision": (
+                (result or {}).get("snapshot", {}).get("revision")
+                if isinstance((result or {}).get("snapshot"), Mapping)
+                else (result or {}).get("mission_revision")
+            ),
             "ok": bool(ok),
             "result": dict(result or {}),
             "error": error_obj,
@@ -1612,12 +1701,19 @@ class MissionRuntime:
             if isinstance(current_snapshot, Mapping):
                 reply["mission_id"] = current_snapshot.get("mission_id", reply["mission_id"])
                 reply["revision"] = current_snapshot.get("revision")
-            reply["result"] = {}
+            if command.get("command") == "preview_packet":
+                reply["result"] = {
+                    "recovery": "get",
+                    "mission_id": reply["mission_id"],
+                    "revision": reply["revision"],
+                }
+            else:
+                reply["result"] = {}
             reply["ok"] = False
             reply["error"] = {
                 "code": "result_too_large",
                 "message": "mission response exceeds 256 KiB; read the authoritative mission snapshot",
-                "retryable": True,
+                "retryable": command.get("command") != "preview_packet",
                 "outcome_unknown": bool(mutation),
             }
         return reply

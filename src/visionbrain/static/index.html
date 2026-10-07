@@ -305,6 +305,19 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
   .p-line{min-width:10px;flex-basis:10px;margin:0 2px 16px}
   .hud-val{font-size:12px;max-width:90px}
 }
+.gc-mission-inspector{flex:0 0 auto;max-height:44vh;overflow:auto;border:1px solid var(--rule-strong);background:rgba(20,22,18,.72);padding:9px 10px;display:flex;flex-direction:column;gap:7px;font-size:10px}
+.gc-mi-head,.gc-mi-row{display:flex;gap:7px;align-items:center;flex-wrap:wrap;min-width:0}
+.gc-mi-head{justify-content:space-between;color:var(--accent);letter-spacing:.12em}
+.gc-mi-row input,.gc-mi-row select{min-width:110px;max-width:100%;height:28px;background:var(--surface-2);color:var(--ink-1);border:1px solid var(--rule-strong);padding:4px 7px;font:10px var(--font-mono)}
+.gc-mi-row input[type=password]{width:min(280px,52vw)}
+.gc-mi-note,.gc-mi-status{color:var(--ink-3);font-size:9px;line-height:1.45;overflow-wrap:anywhere}
+.gc-mi-status{color:var(--ink-2)}
+.gc-mi-detail{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:7px;min-width:0}
+.gc-mi-box{min-width:0;border-top:1px solid var(--rule);padding-top:6px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2);line-height:1.45}
+.gc-mi-packet{max-height:26vh;overflow:auto;margin:0;border-top:1px solid var(--rule);padding-top:6px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2);font:9px/1.45 var(--font-mono)}
+#gc-mi-media{display:none;max-width:100%;max-height:30vh;object-fit:contain;align-self:flex-start;border:1px solid var(--rule-strong)}
+#gc-mi-more[hidden]{display:none}
+@media (max-width:700px){.gc-mi-detail{grid-template-columns:1fr}.gc-mission-inspector{max-height:38vh}}
 
 /* ════════ VIEWPORT RESPONSIVENESS ════════ */
 @media (max-width:1180px){
@@ -508,6 +521,35 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
         <span id="live-status" style="font-size:11px;color:var(--ink-2)">ws://127.0.0.1:8765</span>
         <span id="live-stats" style="font-family:var(--font-mono);font-size:10px;color:var(--ink-2);font-variant-numeric:tabular-nums"></span>
       </div>
+      <section class="gc-mission-inspector" aria-label="Read-only mission inspector">
+        <div class="gc-mi-head"><span>MISSION INSPECTOR · READ ONLY</span><span id="gc-mi-connection">Hub only</span></div>
+        <div class="gc-mi-row">
+          <label for="gc-mi-token">Mission access token</label>
+          <input id="gc-mi-token" type="password" autocomplete="off" spellcheck="false" placeholder="enter mission credential">
+          <button class="btn-browse" id="gc-mi-refresh">list missions</button>
+          <button class="btn-browse" id="gc-mi-more" hidden>older</button>
+        </div>
+        <div class="gc-mi-note">Token is kept only in this page. Reconnect after changing it. The inspector sends read commands only.</div>
+        <div class="gc-mi-row">
+          <label for="gc-mi-mission">MISSION</label><select id="gc-mi-mission"><option value="">select a mission</option></select>
+          <label for="gc-mi-finding">FINDING</label><select id="gc-mi-finding" disabled><option value="">select a finding</option></select>
+          <label for="gc-mi-evidence">EVIDENCE</label><select id="gc-mi-evidence" disabled><option value="">select evidence</option></select>
+        </div>
+        <div id="gc-mi-status" class="gc-mi-status" role="status">Connect to the field hub with a mission credential.</div>
+        <div id="gc-mi-summary" class="gc-mi-box">No mission selected.</div>
+        <div class="gc-mi-row">
+          <button class="btn-browse" id="gc-mi-preview" disabled>preview draft packet</button>
+          <span class="gc-mi-note">Metadata-only: availability and stale status reflect the last persisted record state; media is not freshly checked. Preview does not export or approve a packet.</span>
+        </div>
+        <div id="gc-mi-packet-status" class="gc-mi-status" role="status">No packet preview selected.</div>
+        <pre id="gc-mi-packet" class="gc-mi-packet">No preview available.</pre>
+        <img id="gc-mi-media" alt="Verified canonical mission evidence">
+        <div id="gc-mi-evidence-status" class="gc-mi-status"></div>
+        <div class="gc-mi-detail">
+          <div id="gc-mi-finding-detail" class="gc-mi-box">No finding selected.</div>
+          <div id="gc-mi-review-detail" class="gc-mi-box">Review attribution appears with the selected finding.</div>
+        </div>
+      </section>
       <div id="live-local-panel" style="display:none;flex-direction:column;gap:10px">
         <div class="cf"><label>SOURCE</label>
           <select id="live-src" onchange="liveSrcChange(this.value)">
@@ -869,7 +911,7 @@ async function authFetch(url, opts){
   if (t) { opts.headers = Object.assign({}, opts.headers, {'X-Auth-Token': t}); }
   let r = await fetch(url, opts);
   if (r.status === 401 && t === '') {
-    const tok = prompt('Server requires an access token (VB_TOKEN):');
+    const tok = prompt('Server requires an access token:');
     if (tok) {
       try { localStorage.setItem('vb.token', tok); } catch(e){}
       return authFetch(url, opts);
@@ -1901,6 +1943,12 @@ const LIVE = { ws: null, connected: false, lastDets: [], lastDetsAt: null, img: 
                connectedAt: null, startingAt: null, lastFrameAt: null,
                ask: null,
                stats: { firstId: null, lastId: null, recv: 0, stamps: [] }, statsPaintAt: 0 };
+let MISSION_CREDENTIAL = '';
+window.groundControlMissionSession = () => ({
+  hub: LIVE.mode === 'hub',
+  connected: LIVE.connected,
+  credentialMatches: !!MISSION_CREDENTIAL && MISSION_CREDENTIAL === (document.getElementById('gc-mi-token')?.value.trim() || ''),
+});
 
 const LIVE_PALETTE = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6','#bcf60c'];
 
@@ -1911,7 +1959,13 @@ function liveToggle() { LIVE.connected ? liveDisconnect() : liveConnect(); }
 function wireSocket(ws) {
   const btn = document.getElementById('live-connect');
   ws.onopen = () => {
-    ws.send(JSON.stringify({ type: 'hello', role: 'dashboard' }));
+    const hello = { type: 'hello', role: 'dashboard' };
+    if (LIVE.mode === 'hub') {
+      hello.protocol_version = '1.1';
+      hello.capabilities = ['mission.v1'];
+      if (MISSION_CREDENTIAL) hello.token = MISSION_CREDENTIAL;
+    }
+    ws.send(JSON.stringify(hello));
     LIVE.connected = true;
     LIVE.connectedAt = Date.now();
     btn.textContent = 'disconnect';
@@ -1974,15 +2028,18 @@ function wireSocket(ws) {
 
 function liveConnect() {
   let ws;
+  MISSION_CREDENTIAL = document.getElementById('gc-mi-token')?.value.trim() || '';
   try { ws = new WebSocket('ws://127.0.0.1:8765'); } catch (e) { liveStatus('✗ ' + e.message); return; }
   ws.binaryType = 'arraybuffer';
   LIVE.ws = ws;
   wireSocket(ws);
+  window.groundControlMissionInspector?.bindSocket(ws);
 }
 
 // ── LOCAL ENGINE mode — the dashboard streams SAM 3.1 itself via /api/live/ws ──
 function liveSetMode(m) {
   if (LIVE.mode === m) return;
+  window.groundControlMissionInspector?.bindSocket(null);
   // Hub and local engine are mutually exclusive — drop any existing socket.
   if (LIVE.ws) {
     const old = LIVE.ws;
@@ -2718,6 +2775,172 @@ function liveRecToggle() {
   document.getElementById('live-rec-btn').textContent = '■ stop (0s)';
   liveStatus('● recording annotated view');
 }
+</script>
+<script type="module">
+import {createGroundControlMissionInspector} from './groundcontrol_missions.mjs';
+
+const mi = createGroundControlMissionInspector({onChange: renderGroundControlMissionInspector});
+window.groundControlMissionInspector = mi;
+const miElements = {
+  connection: document.getElementById('gc-mi-connection'),
+  status: document.getElementById('gc-mi-status'),
+  mission: document.getElementById('gc-mi-mission'),
+  finding: document.getElementById('gc-mi-finding'),
+  evidence: document.getElementById('gc-mi-evidence'),
+  summary: document.getElementById('gc-mi-summary'),
+  findingDetail: document.getElementById('gc-mi-finding-detail'),
+  reviewDetail: document.getElementById('gc-mi-review-detail'),
+  evidenceStatus: document.getElementById('gc-mi-evidence-status'),
+  preview: document.getElementById('gc-mi-preview'),
+  packetStatus: document.getElementById('gc-mi-packet-status'),
+  packet: document.getElementById('gc-mi-packet'),
+  media: document.getElementById('gc-mi-media'),
+  more: document.getElementById('gc-mi-more'),
+};
+let missionOptionsKey = '';
+let findingOptionsKey = '';
+let evidenceOptionsKey = '';
+let missionMediaKey = '';
+let missionMediaUrl = '';
+
+function resetMissionMedia() {
+  if (missionMediaUrl) URL.revokeObjectURL(missionMediaUrl);
+  missionMediaUrl = '';
+  missionMediaKey = '';
+  miElements.media.removeAttribute('src');
+  miElements.media.style.display = 'none';
+}
+
+function renderGroundControlMissionInspector(state) {
+  const session = window.groundControlMissionSession?.() || {};
+  miElements.connection.textContent = session.hub ? (state.connected ? 'Hub connected' : 'Hub disconnected') : 'Unavailable in local engine mode';
+  miElements.status.textContent = state.status;
+  const snapshot = state.snapshot;
+  miElements.preview.disabled = !session.hub || !session.connected || !session.credentialMatches || !snapshot ||
+    !['completed', 'paused'].includes(snapshot.state) || snapshot.cycle_id !== null || snapshot.watch_lease !== null;
+  miElements.packetStatus.textContent = state.packetPreviewStatus || 'No packet preview selected.';
+  miElements.packet.textContent = state.packetPreview
+    ? JSON.stringify({packet: state.packetPreview.packet, bundle: state.packetPreview.bundle,
+      content_sha256: state.packetPreview.contentSha256}, null, 2)
+    : 'No preview available.';
+  miElements.more.hidden = !state.moreMissions;
+  const missionKey = state.missions.map((item) => `${item.mission_id}:${item.revision}:${item.state}:${item.updated_at_ms}`).join('|');
+  if (missionKey !== missionOptionsKey) {
+    missionOptionsKey = missionKey;
+    miElements.mission.replaceChildren(new Option('select a mission', ''));
+    for (const item of state.missions) {
+      const label = `${item.mission_id} · ${item.state || 'unknown'} · r${item.revision ?? '?'}`;
+      miElements.mission.add(new Option(label, item.mission_id));
+    }
+  }
+  miElements.mission.value = state.selectedMissionId || '';
+
+  miElements.summary.textContent = snapshot
+    ? `MISSION ${snapshot.mission_id}\nSTATE ${snapshot.state || 'unknown'} · REVISION ${snapshot.revision}\nSOURCE ${snapshot.source_binding?.source_id || 'unknown'} · EPOCH ${snapshot.source_binding?.source_epoch ?? 'unknown'}\nFINDINGS ${Array.isArray(snapshot.findings) ? snapshot.findings.length : 0}\nACTIVITY ${snapshot.activity || 'none recorded'}`
+    : 'No current mission snapshot selected.';
+
+  const findings = Array.isArray(snapshot?.findings) ? snapshot.findings : [];
+  const nextFindingKey = snapshot ? `${snapshot.mission_id}:${snapshot.revision}:${findings.map((item) => item.finding_id).join('|')}` : '';
+  if (nextFindingKey !== findingOptionsKey) {
+    findingOptionsKey = nextFindingKey;
+    miElements.finding.replaceChildren(new Option('select a finding', ''));
+    for (const item of findings) {
+      const label = `${item.claim || item.finding_id} · ${item.status || 'unknown'}`;
+      miElements.finding.add(new Option(label, item.finding_id));
+    }
+  }
+  miElements.finding.disabled = !snapshot || findings.length === 0;
+  miElements.finding.value = state.selectedFindingId || '';
+  const finding = findings.find((item) => item.finding_id === state.selectedFindingId);
+  miElements.findingDetail.textContent = finding
+    ? `FINDING ${finding.finding_id}\n${finding.claim || 'No claim text'}\nSTATUS ${finding.status || 'unknown'} · ${finding.reason || 'no reason recorded'}\nPRIMARY ${finding.evidence_id || 'unknown'}\nREFERENCES ${(finding.evidence_refs || []).join(', ') || 'none recorded'}`
+    : 'No finding selected.';
+  const review = finding?.review;
+  if (!review) {
+    miElements.reviewDetail.textContent = finding ? 'No attributed review recorded.' : 'Review attribution appears with the selected finding.';
+  } else {
+    const reviewedAt = Number.isFinite(review.time_ms) ? `${new Date(review.time_ms).toISOString()} UTC` : 'time unknown';
+    miElements.reviewDetail.textContent = `REVIEW ${review.decision || 'unknown'}\nACTOR ${review.actor || 'unknown'}\n${review.note || 'No review note.'}\n${reviewedAt}`;
+  }
+  const evidenceKey = `${state.selectedFindingId || ''}:${state.evidenceIds.join('|')}`;
+  if (evidenceKey !== evidenceOptionsKey) {
+    evidenceOptionsKey = evidenceKey;
+    miElements.evidence.replaceChildren(new Option('select evidence', ''));
+    for (const evidenceId of state.evidenceIds) {
+      const record = snapshot?.evidence?.find((item) => item.evidence_id === evidenceId);
+      const unavailable = record?.available === false ? ` · unavailable: ${record.availability_reason || 'reason unknown'}` : '';
+      miElements.evidence.add(new Option(`${state.evidenceLabels[evidenceId] || 'Evidence'} · ${evidenceId}${unavailable}`, evidenceId));
+    }
+  }
+  miElements.evidence.disabled = !finding || state.evidenceIds.length === 0;
+  miElements.evidence.value = state.selectedEvidenceId || '';
+  miElements.evidenceStatus.textContent = state.evidenceStatus;
+
+  if (!state.media) {
+    resetMissionMedia();
+  } else {
+    const mediaKey = `${state.media.missionId}:${state.media.findingId}:${state.media.evidenceId}:${state.media.revision}:${state.media.sha256}`;
+    if (mediaKey !== missionMediaKey) {
+      resetMissionMedia();
+      missionMediaKey = mediaKey;
+      missionMediaUrl = URL.createObjectURL(new Blob([state.media.bytes], {type: 'image/jpeg'}));
+      miElements.media.onload = () => {
+        if (missionMediaKey !== mediaKey) return;
+        if (miElements.media.naturalWidth !== state.media?.width || miElements.media.naturalHeight !== state.media?.height) {
+          resetMissionMedia();
+          miElements.evidenceStatus.textContent = 'Unavailable · browser decode dimensions differ from verified JPEG dimensions.';
+          return;
+        }
+        miElements.media.style.display = 'block';
+      };
+      miElements.media.onerror = () => {
+        if (missionMediaKey !== mediaKey) return;
+        resetMissionMedia();
+        miElements.evidenceStatus.textContent = 'Unavailable · browser could not decode verified JPEG.';
+      };
+      miElements.media.src = missionMediaUrl;
+    }
+  }
+}
+
+function missionReadSession() {
+  const session = window.groundControlMissionSession?.() || {};
+  if (!session.hub || !session.connected) return 'Connect the field hub first.';
+  if (!session.credentialMatches) return 'Enter the mission access token and reconnect to the field hub.';
+  return '';
+}
+
+document.getElementById('gc-mi-refresh').addEventListener('click', async () => {
+  const reason = missionReadSession();
+  if (reason) { miElements.status.textContent = reason; return; }
+  await mi.refreshMissions();
+});
+miElements.more.addEventListener('click', async () => {
+  const reason = missionReadSession();
+  if (reason) { miElements.status.textContent = reason; return; }
+  await mi.loadMoreMissions();
+});
+miElements.mission.addEventListener('change', async () => {
+  const reason = missionReadSession();
+  if (reason) { miElements.status.textContent = reason; return; }
+  if (miElements.mission.value) await mi.selectMission(miElements.mission.value);
+});
+miElements.finding.addEventListener('change', () => {
+  mi.setFinding(miElements.finding.value);
+  const primary = mi.state.evidenceIds[0];
+  if (primary) mi.selectEvidence(primary);
+});
+miElements.evidence.addEventListener('change', () => mi.selectEvidence(miElements.evidence.value));
+miElements.preview.addEventListener('click', async () => {
+  const reason = missionReadSession();
+  if (reason) { miElements.packetStatus.textContent = `Unavailable · ${reason}`; return; }
+  await mi.previewSelectedPacket();
+});
+document.getElementById('gc-mi-token').addEventListener('input', () => {
+  const session = window.groundControlMissionSession?.() || {};
+  if (session.connected && !session.credentialMatches) miElements.status.textContent = 'Credential changed · reconnect to apply it.';
+  renderGroundControlMissionInspector(mi.state);
+});
 </script>
 </body>
 </html>
