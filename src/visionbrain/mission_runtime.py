@@ -96,6 +96,7 @@ from .mission_store import (
 )
 from .mission_record_projection import project_mission_records
 from .mission_records import Record
+from .mission_packet_preview import PacketPreview, build_packet_preview
 
 DEFAULT_GOAL = "Identify visible items relevant to this expertise and explain what needs a closer look."
 MODEL_KEYS = ("gemma", "lfm", "lfm3b")
@@ -412,6 +413,13 @@ class MissionRuntime:
             rows["evidence_rows"],
             rows["tool_rows"],
         )
+
+    async def preview_packet(self, mission_id: str) -> PacketPreview:
+        """Return a draft packet from persisted metadata without fresh media verification."""
+        rows = await asyncio.to_thread(self.store.read_mission_record_rows, mission_id)
+        if rows is None:
+            raise KeyError(mission_id)
+        return await asyncio.to_thread(build_packet_preview, rows)
 
     def _model_status(self, key: str) -> tuple[bool, str | None, str | None, str | None]:
         """Return local readiness and checkpoint provenance without loading models."""
