@@ -2035,6 +2035,93 @@ def test_cancel_watch_during_native_planner_call_releases_lease_and_discards_lat
     asyncio.run(scenario())
 
 
+def test_cancel_during_native_tool_call_retains_stale_result_without_committing_evidence(tmp_path):
+    entered, release = threading.Event(), threading.Event()
+
+    class BlockingTools(_Tools):
+        def execute(self, request, _context):
+            self.calls.append(request)
+            entered.set()
+            release.wait()
+            return ToolResult(
+                "ok",
+                items=(GeometryItem("container-1", "container", 0.97, (0.1, 0.2, 0.7, 0.8)),),
+                text="late tool output",
+                artifacts=(EvidenceArtifact(_jpeg((170, 80, 40)), "crop", request.input_evidence_id),),
+            )
+
+    async def scenario():
+        planner = _Planner(lambda _context: Decision(1, "detect_objects", {"targets": ["container"]}))
+        tools = BlockingTools()
+        runtime, store, _events = _new_runtime(tmp_path, planner, tools)
+        try:
+            created = await _create(runtime)
+            attached = await _attach(runtime, created["result"]["snapshot"])
+            snapshot = attached["result"]["snapshot"]
+            resumed = await _resume(runtime, snapshot)
+            assert resumed["ok"]
+            original_generation = resumed["result"]["snapshot"]["execution_generation"]
+            assert await asyncio.to_thread(entered.wait, 1)
+            task = runtime._tasks[snapshot["mission_id"]]
+
+            cancelled = await runtime.handle(
+                {
+                    "type": "mission_command",
+                    "schema_version": 1,
+                    "request_id": "cancel-during-native-tool",
+                    "command": "cancel",
+                    "mission_id": snapshot["mission_id"],
+                    "expected_revision": store.get_mission(snapshot["mission_id"])["revision"],
+                    "args": {},
+                },
+                Principal("installation"),
+                SCOPES,
+            )
+            assert cancelled["ok"]
+            cancelled_snapshot = cancelled["result"]["snapshot"]
+            assert cancelled_snapshot["state"] == "cancelled"
+            assert cancelled_snapshot["reason"] == "operator_cancelled"
+            release.set()
+            await asyncio.wait_for(task, timeout=1)
+
+            final = store.get_mission(snapshot["mission_id"])
+            assert final["revision"] == cancelled_snapshot["revision"]
+            assert final["state"] == "cancelled"
+            assert final["findings"] == []
+            assert final["cycle_history"] == []
+            assert len(final["evidence"]) == 1
+
+            stale_event = next(
+                event
+                for event in store.events_since(snapshot["mission_id"], 0)["events"]
+                if event["kind"] == "stale_tool_result"
+            )
+            assert stale_event["data"]["record"]["text"] == "late tool output"
+            assert stale_event["data"]["snapshot"]["state"] == "cancelled"
+            assert stale_event["data"]["snapshot"]["reason"] == "operator_cancelled"
+            assert stale_event["data"]["snapshot"]["execution_generation"] != original_generation
+
+            records = store.tool_records(snapshot["mission_id"])
+            assert len(records) == 1
+            record = records[0]
+            assert record["status"] == "ok"
+            assert record["items"][0]["item_id"] == "container-1"
+            assert record["evidence_ids"] == []
+            with store._lock:
+                generation, is_current = store._connection.execute(
+                    "SELECT execution_generation, is_current FROM tool_records WHERE mission_id = ?",
+                    (snapshot["mission_id"],),
+                ).fetchone()
+            assert generation == original_generation
+            assert is_current == 0
+        finally:
+            release.set()
+            await runtime.close()
+            store.close()
+
+    asyncio.run(scenario())
+
+
 def test_shutdown_wait_is_bounded_without_closing_planner_before_native_return(tmp_path, monkeypatch):
     from visionbrain import mission_runtime as runtime_module
 

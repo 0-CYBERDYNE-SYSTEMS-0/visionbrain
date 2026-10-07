@@ -256,8 +256,12 @@ Suggested starting bounds for the fixture: one active
 investigation, ten tool calls, 180 seconds of active investigation time, and an
 explicit timeout for human evidence/approval waits. CM-00 records final values.
 A timeout stops new dispatch; it must not claim native inference already running
-has been safely interrupted. Late results from an obsolete execution generation are retained
-as historical evidence but cannot resume or mutate a cancelled mission.
+has been safely interrupted. Late perception/tool outputs from an obsolete
+execution generation are retained only as historical records with their old
+generation; they cannot become current mission evidence. A planner `Decision`
+is an untrusted proposal, not evidence, so an obsolete decision is discarded
+without creating findings, targets, or cycle history. Neither kind of late
+result can resume or mutate a cancelled mission.
 
 The controller may retarget a bounded prompt set, ground an expression, crop an
 identified observation, run supported OCR, inspect sandbox records, or request a
