@@ -1679,10 +1679,10 @@ class TestLiveTracking:
 
     def test_backbone_cache_respects_backbone_every(self):
         tracker, _det, bb_calls = self._make_tracker(backbone_every=2)
-        for f in range(1, 7):  # detect ticks 0,2,4 → backbone recomputes on each
+        for f in range(1, 7):  # three detect passes; refresh on passes 0 and 2
             tracker.step("img", ["plane"], "detect", 200, 200,
                          frame_id=f, timestamp_ms=f * 100)
-        assert len(bb_calls) == 3
+        assert len(bb_calls) == 2
 
     def test_empty_scene_keeps_detect_every_throttle(self):
         """A detect that finds nothing must not force a full detect every

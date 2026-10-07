@@ -236,6 +236,8 @@ def test_shutdown_timeout_retains_worker_cache_and_admission_until_retry(
     cache_module = ModuleType("visionbrain.sam3_inference")
     cache_module._sam_model_cache = {"sentinel": object()}
     monkeypatch.setitem(sys.modules, "visionbrain.sam3_inference", cache_module)
+    import visionbrain
+    monkeypatch.setattr(visionbrain, "sam3_inference", cache_module, raising=False)
     client = _client(le)
     try:
         with client.websocket_connect("/api/live/ws") as ws:

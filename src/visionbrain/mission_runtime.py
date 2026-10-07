@@ -362,7 +362,13 @@ def _validate_action(decision: Decision, *, allowed_tools: set[str], grounded_it
 
 
 class MissionRuntime:
-    """One durable visual-inspection authority with bounded Inspect and Watch."""
+    """One durable visual-inspection authority with bounded Inspect and Watch.
+
+    The embedding process owns host-wide inference admission. When the injected
+    planner or tools can run local inference, that owner must acquire admission
+    before starting the runtime and retain it until shutdown has drained all
+    accepted native work. This runtime's executor serializes only its own calls.
+    """
 
     def __init__(
         self,

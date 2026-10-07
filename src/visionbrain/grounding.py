@@ -190,8 +190,6 @@ def _main() -> None:
     """
     import sys
 
-    from . import vlm_registry
-
     if len(sys.argv) < 3:
         print(
             "usage: python -m visionbrain.grounding <image> <target> [target ...]",
@@ -199,23 +197,35 @@ def _main() -> None:
         )
         raise SystemExit(2)
 
-    from PIL import Image
+    from .inference_admission import AdmissionError, InferenceAdmission
 
-    image_path, targets = sys.argv[1], sys.argv[2:]
-    image = Image.open(image_path)
-    prompt = build_grounding_prompt(targets)
+    try:
+        admission = InferenceAdmission()
+        handle = admission.try_acquire("visionbrain-grounding")
+    except AdmissionError as exc:
+        raise SystemExit(f"inference admission unavailable: {exc}") from exc
+    if handle is None:
+        raise SystemExit(f"inference admission busy: {admission.describe_holder()}")
 
-    vlm_registry.set_model("lfm")
-    reply = vlm_registry.ask(prompt, image=image)
+    with handle:
+        from . import vlm_registry
+        from PIL import Image
 
-    print(f"=== raw LFM reply ({vlm_registry.current_model()}) " + "=" * 20)
-    print(reply)
-    print("=== parsed boxes " + "=" * 40)
-    boxes = parse_grounding_boxes(reply, image.size[0], image.size[1])
-    if not boxes:
-        print("  [none]")
-    for box in boxes:
-        print(f"  {box['label']!r}: {box['bbox_xyxy']}")
+        image_path, targets = sys.argv[1], sys.argv[2:]
+        image = Image.open(image_path)
+        prompt = build_grounding_prompt(targets)
+
+        vlm_registry.set_model("lfm")
+        reply = vlm_registry.ask(prompt, image=image)
+
+        print(f"=== raw LFM reply ({vlm_registry.current_model()}) " + "=" * 20)
+        print(reply)
+        print("=== parsed boxes " + "=" * 40)
+        boxes = parse_grounding_boxes(reply, image.size[0], image.size[1])
+        if not boxes:
+            print("  [none]")
+        for box in boxes:
+            print(f"  {box['label']!r}: {box['bbox_xyxy']}")
 
 
 if __name__ == "__main__":

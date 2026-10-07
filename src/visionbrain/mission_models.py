@@ -1046,7 +1046,7 @@ class VisionBrainPlanner:
 
 
 class LocalMissionPlanner(VisionBrainPlanner):
-    """Mission planner requiring the host's shared GPU admission lock."""
+    """Mission planner using the embedding process's shared GPU lock."""
 
     def __init__(self, *, gpu_lock: Any) -> None:
         if gpu_lock is None:
@@ -1354,7 +1354,7 @@ class LocalMissionTools(VisionBrainTools):
 
 
 def build_local_tools(planner: VisionBrainPlanner, *, gpu_lock: Any) -> LocalMissionTools:
-    """Construct the runtime's single dispatcher with shared host admission."""
+    """Construct the runtime's single dispatcher using its shared GPU lock."""
     return LocalMissionTools(planner=planner, gpu_lock=gpu_lock)
 
 

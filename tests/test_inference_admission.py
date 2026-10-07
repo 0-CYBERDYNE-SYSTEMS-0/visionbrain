@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
 import selectors
 import subprocess
 import sys
@@ -12,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from visionbrain import cli, loader, pilot_eval
+from PIL import Image
+
+from visionbrain import cli, loader, pilot_eval, vlm_registry
 from visionbrain.frame_selector import FrameScores
 from visionbrain.inference_admission import InferenceAdmission
 
@@ -83,6 +86,14 @@ def _set_pilot_eval_args(monkeypatch, video_path: Path, ground_truth_path: Path)
             "--ground-truth",
             str(ground_truth_path),
         ],
+    )
+
+
+def _set_grounding_args(monkeypatch, image_path: Path) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["visionbrain.grounding", str(image_path), "person"],
     )
 
 
@@ -282,6 +293,57 @@ def test_cli_admission_filesystem_error_fails_closed(tmp_path, monkeypatch, caps
     assert exc.value.code == 1
     assert calls == []
     assert "inference admission unavailable" in capsys.readouterr().err
+
+
+def test_grounding_cli_busy_refuses_before_model_call(tmp_path, monkeypatch):
+    lock_path = tmp_path / "inference.lock"
+    monkeypatch.setenv("VB_INFERENCE_LOCK", str(lock_path))
+    image_path = tmp_path / "frame.png"
+    Image.new("RGB", (8, 8)).save(image_path)
+    _set_grounding_args(monkeypatch, image_path)
+    calls = []
+    monkeypatch.setattr(
+        vlm_registry, "set_model", lambda _model: calls.append("set_model")
+    )
+    monkeypatch.setattr(
+        vlm_registry, "ask", lambda *args, **kwargs: calls.append("ask")
+    )
+
+    with _held_by_child(lock_path):
+        with pytest.raises(SystemExit, match="inference admission busy"):
+            runpy.run_module("visionbrain.grounding", run_name="__main__")
+
+    assert calls == []
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_grounding_cli_holds_admission_for_model_call_and_releases_after(
+    tmp_path, monkeypatch, raises
+):
+    lock_path = tmp_path / "inference.lock"
+    monkeypatch.setenv("VB_INFERENCE_LOCK", str(lock_path))
+    image_path = tmp_path / "frame.png"
+    Image.new("RGB", (8, 8)).save(image_path)
+    _set_grounding_args(monkeypatch, image_path)
+    observed = []
+
+    def ask(*_args, **_kwargs):
+        observed.append(_can_acquire(lock_path))
+        if raises:
+            raise RuntimeError("model call failed")
+        return "NONE"
+
+    monkeypatch.setattr(vlm_registry, "set_model", lambda _model: None)
+    monkeypatch.setattr(vlm_registry, "ask", ask)
+
+    if raises:
+        with pytest.raises(RuntimeError, match="model call failed"):
+            runpy.run_module("visionbrain.grounding", run_name="__main__")
+    else:
+        runpy.run_module("visionbrain.grounding", run_name="__main__")
+
+    assert observed == [False]
+    assert _can_acquire(lock_path)
 
 
 def test_status_help_and_version_remain_lock_free(tmp_path, monkeypatch):
