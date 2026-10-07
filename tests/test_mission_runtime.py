@@ -780,7 +780,7 @@ def test_null_watch_proposal_does_not_renew_lease_and_expiry_releases_it(tmp_pat
     from visionbrain import mission_runtime as runtime_module
 
     monkeypatch.setattr(runtime_module, "WATCH_MIN_INTERVAL_SECONDS", 0.03)
-    monkeypatch.setattr(runtime_module, "WATCH_LEASE_SECONDS", 0.5)
+    monkeypatch.setattr(runtime_module, "WATCH_LEASE_SECONDS", 2.0)
     binding = SourceBinding("scout-null-watch", "epoch-null-watch")
     planner_calls = 0
 
@@ -818,19 +818,25 @@ def test_null_watch_proposal_does_not_renew_lease_and_expiry_releases_it(tmp_pat
                 args={"source_binding": {"source_id": binding.source_id, "source_epoch": binding.source_epoch}},
             )
             assert resumed["ok"]
+            mission_id = snapshot["mission_id"]
+            await _wait_for(lambda: store.get_mission(mission_id).get("watch_lease"))
+            initial_expiry = watch.active.expires_at_ms
             await _wait_for(
-                lambda: sum(event.kind == "cycle_finished" for event in events) >= 2
+                lambda: sum(event.kind == "cycle_finished" for event in events) >= 4
             )
 
-            initial_expiry = watch.active.expires_at_ms
-            current = store.get_mission(snapshot["mission_id"])
+            current = store.get_mission(mission_id)
+            assert planner_calls >= 4
             assert len(watch.applied) == 1
             assert current["watch_lease"]["expires_at_ms"] == initial_expiry
 
-            await _wait_for(lambda: watch.released, timeout=2.0)
-            expired = store.get_mission(snapshot["mission_id"])
+            await _wait_for(lambda: watch.released, timeout=3.0)
+            expired = store.get_mission(mission_id)
             assert expired["state"] == "paused"
             assert expired["reason"] == "watch_lease_expired"
+            assert expired["watch_lease"] is None
+            assert len(watch.applied) == 1
+            assert sum(event.kind == "watch_lease_applied" for event in events) == 1
             assert watch.released == [("lease-1", "watch_lease_expired")]
         finally:
             await runtime.close()
@@ -1938,7 +1944,13 @@ def test_cancel_watch_during_native_planner_call_releases_lease_and_discards_lat
             return Decision(
                 1,
                 "finish",
-                findings=(FindingProposal("Late finding", "visual_hypothesis"),),
+                findings=(
+                    FindingProposal(
+                        "Late finding",
+                        "visual_hypothesis",
+                        (context.input_evidence_id,),
+                    ),
+                ),
                 watch=WatchProposal(("late-target",), "detect"),
             )
 
