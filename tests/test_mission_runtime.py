@@ -1907,6 +1907,122 @@ def test_deadline_invalidates_before_native_drain_and_resume_is_rejected_while_b
     asyncio.run(scenario())
 
 
+def test_cancel_watch_during_native_planner_call_releases_lease_and_discards_late_result(tmp_path, monkeypatch):
+    from visionbrain import mission_runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "WATCH_MIN_INTERVAL_SECONDS", 0.001)
+    binding = SourceBinding("scout-cancel-inflight", "epoch-cancel-inflight")
+    entered, release = threading.Event(), threading.Event()
+
+    class Source:
+        frame_id = 0
+
+        def __call__(self, _binding):
+            self.frame_id += 1
+            return SourceFrame(
+                _jpeg(), binding.source_id, binding.source_epoch,
+                self.frame_id, time.monotonic(),
+            )
+
+    class BlockingPlanner(_Planner):
+        def plan(self, context):
+            self.calls += 1
+            if self.calls == 1:
+                return Decision(
+                    1,
+                    "finish",
+                    watch=WatchProposal(("container",), "detect"),
+                )
+            entered.set()
+            release.wait()
+            return Decision(
+                1,
+                "finish",
+                findings=(FindingProposal("Late finding", "visual_hypothesis"),),
+                watch=WatchProposal(("late-target",), "detect"),
+            )
+
+    async def scenario():
+        watch = _Watch()
+        planner = BlockingPlanner(None)
+        runtime, store, _events = _new_runtime(
+            tmp_path,
+            planner,
+            _Tools(ToolResult("empty")),
+            source_provider=Source(),
+            watch=watch,
+        )
+        try:
+            created = await _create(runtime, mode="watch", source_binding=binding)
+            snapshot = created["result"]["snapshot"]
+            resumed = await _resume(
+                runtime,
+                snapshot,
+                args={"source_binding": {"source_id": binding.source_id, "source_epoch": binding.source_epoch}},
+            )
+            assert resumed["ok"]
+            mission_id = snapshot["mission_id"]
+
+            await _wait_for(lambda: bool(store.get_mission(mission_id).get("watch_lease")))
+            assert await asyncio.to_thread(entered.wait, 1)
+            before_cancel = store.get_mission(mission_id)
+            assert before_cancel["state"] == "running"
+            assert before_cancel["watch_lease"]["targets"] == ["container"]
+            assert watch.active is not None
+            assert watch.active.lease_id == before_cancel["watch_lease"]["lease_id"]
+            assert planner.calls == 2
+
+            cycle_count_before = sum(
+                event["kind"] == "cycle_finished"
+                for event in store.events_since(mission_id, 0)["events"]
+            )
+            task = runtime._tasks[mission_id]
+            assert runtime._native_lane_active
+            cancelled = await runtime.handle(
+                {
+                    "type": "mission_command",
+                    "schema_version": 1,
+                    "request_id": "cancel-watch-native-call",
+                    "command": "cancel",
+                    "mission_id": mission_id,
+                    "expected_revision": before_cancel["revision"],
+                    "args": {},
+                },
+                Principal("installation"),
+                SCOPES,
+            )
+            assert cancelled["ok"]
+            assert cancelled["result"]["snapshot"]["state"] == "cancelled"
+            assert cancelled["result"]["snapshot"]["watch_lease"] is None
+            assert watch.released == [(before_cancel["watch_lease"]["lease_id"], "operator_cancelled")]
+            assert watch.active is None
+            assert not task.done()
+            assert runtime._native_lane_active
+
+            release.set()
+            await asyncio.wait_for(task, timeout=1)
+
+            final = store.get_mission(mission_id)
+            assert final["state"] == "cancelled"
+            assert final["watch_lease"] is None
+            assert final["findings"] == []
+            assert len(final["cycle_history"]) == 1
+            assert len(watch.applied) == 1
+            assert watch.applied[0].targets == ("container",)
+            assert watch.released == [(before_cancel["watch_lease"]["lease_id"], "operator_cancelled")]
+            assert sum(
+                event["kind"] == "cycle_finished"
+                for event in store.events_since(mission_id, 0)["events"]
+            ) == cycle_count_before
+            assert not runtime._native_lane_active
+        finally:
+            release.set()
+            await runtime.close()
+            store.close()
+
+    asyncio.run(scenario())
+
+
 def test_shutdown_wait_is_bounded_without_closing_planner_before_native_return(tmp_path, monkeypatch):
     from visionbrain import mission_runtime as runtime_module
 
