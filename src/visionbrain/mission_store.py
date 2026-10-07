@@ -1013,6 +1013,12 @@ class MissionStore:
             ).fetchall()
         return [json.loads(row[0]) for row in rows]
 
+    def backup_to(self, destination: str | Path) -> Path:
+        """Create an offline backup under this store's mutation lock."""
+        from .mission_backup import backup_mission_store
+
+        return backup_mission_store(self, destination)
+
     def close(self) -> None:
         with self._lock:
             self._connection.close()
