@@ -92,6 +92,8 @@ from .mission_store import (
     RevisionConflict,
     _jpeg_dimensions,
 )
+from .mission_record_projection import project_mission_records
+from .mission_records import Record
 
 DEFAULT_GOAL = "Identify visible items relevant to this expertise and explain what needs a closer look."
 MODEL_KEYS = ("gemma", "lfm", "lfm3b")
@@ -384,6 +386,20 @@ class MissionRuntime:
         self._recovery_lock = asyncio.Lock()
         self._recovered = False
         self._closed = False
+
+    async def get_record_bundle(self, mission_id: str) -> tuple[Record, ...]:
+        """Read and project one persisted mission record bundle."""
+        await self._ensure_recovered()
+
+        def read_and_project() -> tuple[Record, ...]:
+            rows = self.store.read_mission_record_rows(mission_id)
+            if rows is None:
+                raise KeyError(mission_id)
+            return project_mission_records(
+                rows["snapshot"], rows["evidence_rows"], rows["tool_rows"]
+            )
+
+        return await asyncio.to_thread(read_and_project)
 
     def _model_status(self, key: str) -> tuple[bool, str | None, str | None, str | None]:
         """Return local readiness and checkpoint provenance without loading models."""
