@@ -23,6 +23,16 @@ if (!existsSync(fixturePath)) {
   );
 }
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+const v2FixturePath = resolve(
+  process.env.VISIONBRAIN_MISSION_RECORDS_V2_FIXTURE ??
+    resolve(testDirectory, "../../visionBrain-bridge/contracts/mission-records/v2/record_golden.json"),
+);
+if (!existsSync(v2FixturePath)) {
+  throw new Error(
+    `Finding schema-2 fixture is required at ${v2FixturePath}. Set VISIONBRAIN_MISSION_RECORDS_V2_FIXTURE to the paired bridge contracts/mission-records/v2/record_golden.json path.`,
+  );
+}
+const v2Fixture = JSON.parse(readFileSync(v2FixturePath, "utf8"));
 
 function applyMutation(record, mutation) {
   const copy = structuredClone(record);
@@ -84,6 +94,70 @@ for (const vector of fixture.bundle_cases) {
     assert.strictEqual(validateBundle(roundTripped), roundTripped);
   });
 }
+
+test("V2 delta fixture metadata remains additive and bounded", () => {
+  assert.equal(v2Fixture.fixture_version, 1);
+  assert.equal(v2Fixture.record_schema_version, 2);
+  assert.deepEqual(v2Fixture.supported_record_versions, [1, 2]);
+  assert.equal(v2Fixture.scenarios.length, 4);
+  assert.equal(v2Fixture.dynamic_checks.implemented, false);
+  assert.equal(v2Fixture.dynamic_checks.status, "not_implemented");
+  assert.equal(v2Fixture.scenarios[3].v1_client_rejection.expected_reason, "unsupported_record_version");
+});
+
+for (const scenario of v2Fixture.scenarios) {
+  for (const vector of scenario.variants ?? [scenario]) {
+    test(`V2 bundle fixture: ${vector.name ?? scenario.name}`, () => {
+      const records = structuredClone(vector.records);
+      if (!vector.valid) {
+        assertReason(vector.expected_reason, () => validateBundle(records));
+        return;
+      }
+      assert.strictEqual(validateBundle(records), records);
+      const roundTripped = records.map((record) => parseRecord(serializeRecord(record)));
+      assert.deepEqual(roundTripped, records);
+      assert.strictEqual(validateBundle(roundTripped), roundTripped);
+    });
+  }
+}
+
+test("Finding schema 2 requires unique bounded text references", () => {
+  const record = structuredClone(v2Fixture.scenarios[0].records.find((item) => item.record_type === "finding"));
+  assert.strictEqual(validateRecord(record), record);
+
+  const missing = structuredClone(record);
+  delete missing.text_refs;
+  assertReason("missing_field", () => validateRecord(missing));
+
+  const empty = {...record, text_refs: []};
+  assertReason("missing_text_reference", () => validateRecord(empty));
+
+  const atLimit = {...record, text_refs: ["tr-0", "tr-1", "tr-2", "tr-3"]};
+  assert.strictEqual(validateRecord(atLimit), atLimit);
+
+  const tooMany = {...record, text_refs: ["tr-0", "tr-1", "tr-2", "tr-3", "tr-4"]};
+  assertReason("too_many_text_references", () => validateRecord(tooMany));
+
+  const duplicate = {...record, text_refs: [record.text_refs[0], record.text_refs[0]]};
+  assertReason("duplicate_id", () => validateRecord(duplicate));
+
+  const maxLength = {...record, text_refs: ["r".repeat(128)]};
+  assert.strictEqual(validateRecord(maxLength), maxLength);
+
+  const tooLong = {...record, text_refs: ["r".repeat(129)]};
+  assertReason("invalid_text", () => validateRecord(tooLong));
+
+  const wrongClaimType = {...record, claim_type: "localized_object"};
+  assertReason("unexpected_text_reference", () => validateRecord(wrongClaimType));
+});
+
+test("schema 2 remains Finding-only and V1 Findings reject the added field", () => {
+  const observation = structuredClone(v2Fixture.scenarios[0].records.find((item) => item.record_type === "observation"));
+  assertReason("unsupported_record_version", () => validateRecord({...observation, record_schema_version: 2}));
+
+  const finding = structuredClone(fixture.record_cases.find((item) => item.valid && item.record.record_type === "finding").record);
+  assertReason("unknown_field", () => validateRecord({...finding, text_refs: []}));
+});
 
 test("invalid JSON is rejected without coercing inputs", () => {
   assertReason("invalid_json", () => parseRecord("{"));

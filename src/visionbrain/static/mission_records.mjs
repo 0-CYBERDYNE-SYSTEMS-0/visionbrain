@@ -1,7 +1,9 @@
-/* Read-only browser/Node codec for released mission record schema version 1. */
+/* Read-only browser/Node codec for released mission record schemas 1 and 2. */
 
 export const RECORD_SCHEMA_VERSION = 1;
+const FINDING_TEXT_CITATION_SCHEMA_VERSION = 2;
 const MAX_EVIDENCE_BYTES = 2 * 1024 * 1024;
+const MAX_FINDING_TEXT_REFS = 4;
 const MAX_POLYGON_POINTS = 64;
 const MAX_I63 = 9_223_372_036_854_775_807;
 
@@ -87,6 +89,18 @@ function strings(value, path) {
     if (seen.has(item)) fail("duplicate_id", `${path}[${index}]`);
     seen.add(item);
   });
+}
+
+function textReferences(value, path) {
+  const refs = list(value, path);
+  if (refs.length > MAX_FINDING_TEXT_REFS) fail("too_many_text_references", path);
+  const seen = new Set();
+  refs.forEach((item, index) => {
+    text(item, `${path}[${index}]`, {max: 128});
+    if (seen.has(item)) fail("duplicate_id", `${path}[${index}]`);
+    seen.add(item);
+  });
+  return refs;
 }
 
 function ints(value, path, min) {
@@ -241,9 +255,15 @@ export function validateRecord(record) {
   object(record, "record");
   const kind = record.record_type;
   if (!Object.hasOwn(fields, kind)) fail("unknown_record_type", "record_type");
-  exact(record, [...fields[kind], "record_type"], "record");
+  const recordFields = kind === "finding" && record.record_schema_version === FINDING_TEXT_CITATION_SCHEMA_VERSION
+    ? [...fields[kind], "text_refs", "record_type"]
+    : [...fields[kind], "record_type"];
+  exact(record, recordFields, "record");
   int(record.record_schema_version, "record_schema_version", {min: 1});
-  if (record.record_schema_version !== RECORD_SCHEMA_VERSION) fail("unsupported_record_version", "record_schema_version");
+  if (record.record_schema_version !== RECORD_SCHEMA_VERSION
+    && !(kind === "finding" && record.record_schema_version === FINDING_TEXT_CITATION_SCHEMA_VERSION)) {
+    fail("unsupported_record_version", "record_schema_version");
+  }
 
   if (kind === "observation") {
     text(record.observation_id, "observation_id", {max: 128});
@@ -313,6 +333,11 @@ export function validateRecord(record) {
     text(record.mission_id, "mission_id", {max: 128});
     text(record.claim, "claim", {max: 500});
     choice(record.claim_type, ["localized_object", "text_read", "visual_hypothesis"], "invalid_claim_type", "claim_type");
+    if (record.record_schema_version === FINDING_TEXT_CITATION_SCHEMA_VERSION) {
+      const refs = textReferences(record.text_refs, "text_refs");
+      if (record.claim_type === "text_read" && refs.length === 0) fail("missing_text_reference", "text_refs");
+      if (record.claim_type !== "text_read" && refs.length > 0) fail("unexpected_text_reference", "text_refs");
+    }
     choice(record.visual_state, ["candidate", "supported", "unresolved"], "invalid_visual_state", "visual_state");
     text(record.reason, "reason", {max: 256});
     text(record.evidence_id, "evidence_id", {max: 128});
@@ -495,6 +520,16 @@ export function validateBundle(records, capability = null) {
       if (observation.mission_id !== finding.mission_id) fail("finding_tool_mission_mismatch", `finding:${finding.finding_id}`);
       if (finding.observation_ids.length && !finding.observation_ids.includes(observation.observation_id)) fail("finding_tool_observation_mismatch", `finding:${finding.finding_id}`);
       if (finding.source_binding !== null && observation.source_id !== null && (finding.source_binding.source_id !== observation.source_id || finding.source_binding.source_epoch !== observation.source_epoch)) fail("finding_tool_lineage_mismatch", `finding:${finding.finding_id}`);
+    }
+    for (const toolId of finding.text_refs ?? []) {
+      const entry = toolOutputs.get(toolId);
+      if (!entry) fail("missing_reference", `finding.text_refs:${toolId}`);
+      const [observation, result] = entry;
+      if (observation.mission_id !== finding.mission_id) fail("finding_tool_mission_mismatch", `finding:${finding.finding_id}`);
+      if (!finding.observation_ids.includes(observation.observation_id)) fail("finding_tool_observation_mismatch", `finding:${finding.finding_id}`);
+      if (finding.source_binding !== null && observation.source_id !== null && (finding.source_binding.source_id !== observation.source_id || finding.source_binding.source_epoch !== observation.source_epoch)) fail("finding_tool_lineage_mismatch", `finding:${finding.finding_id}`);
+      if (result.tool !== "read_text") fail("finding_text_tool_mismatch", `finding:${finding.finding_id}`);
+      if (result.status !== "ok") fail("finding_text_tool_status_mismatch", `finding:${finding.finding_id}`);
     }
     if (finding.review !== null && finding.review.finding_id !== finding.finding_id) fail("review_finding_mismatch", "finding.review");
     if (finding.localization !== null && !evidenceRefs.has(finding.localization.evidence_id)) fail("finding_localization_evidence_mismatch", `finding:${finding.finding_id}`);
