@@ -73,6 +73,15 @@ class QuotaExceeded(MissionStoreError):
     """Persisting evidence would exceed the configured durable media quota."""
 
 
+class RootQuotaExceeded(QuotaExceeded):
+    """The measured evidence root usage plus an incoming item exceeds its quota."""
+
+    def __init__(self, root_usage_bytes: int, incoming_bytes: int) -> None:
+        super().__init__("mission evidence root quota exceeded")
+        self.root_usage_bytes = int(root_usage_bytes)
+        self.incoming_bytes = int(incoming_bytes)
+
+
 class QuotaAccountingIncomplete(QuotaExceeded):
     """Evidence-root usage could not be measured safely within configured bounds."""
 
@@ -446,7 +455,7 @@ class StoreTransaction:
         self._ensure_root_quota_guard()
         root_used = self._store._root_evidence_usage()
         if root_used + len(jpeg_bytes) > self._store.root_quota_bytes:
-            raise QuotaExceeded("mission evidence root quota exceeded")
+            raise RootQuotaExceeded(root_used, len(jpeg_bytes))
         mission_count, mission_used = self.evidence_usage(mission_id)
         if mission_count >= MAX_MISSION_EVIDENCE:
             raise QuotaExceeded(

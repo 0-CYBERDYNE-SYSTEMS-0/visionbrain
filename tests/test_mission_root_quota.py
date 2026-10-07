@@ -15,6 +15,7 @@ from visionbrain.mission_store import (
     MissionStore,
     QuotaAccountingIncomplete,
     QuotaExceeded,
+    RootQuotaExceeded,
 )
 
 
@@ -111,6 +112,31 @@ def test_unindexed_orphan_bytes_remain_charged_after_store_restart(tmp_path):
         assert actual_root_bytes == 64
         assert orphan.exists()
         assert len(store.evidence_refs("mission-1")) == 0
+    finally:
+        store.close()
+
+
+def test_root_quota_refusal_carries_measured_usage_and_incoming_bytes(tmp_path):
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    orphan = evidence_root / "unindexed-orphan"
+    orphan.write_bytes(b"orphan-bytes")
+    jpeg = _jpeg()
+    store = MissionStore(
+        tmp_path / "missions.sqlite3",
+        evidence_root,
+        quota_bytes=1_000_000,
+        root_quota_bytes=len(jpeg) + orphan.stat().st_size - 1,
+    )
+    try:
+        store.transact(lambda tx: tx.insert_mission(_mission()))
+        with pytest.raises(RootQuotaExceeded) as raised:
+            store.transact(
+                lambda tx: tx.save_evidence("mission-1", jpeg, kind="imported", created_at_ms=1)
+            )
+        assert raised.value.root_usage_bytes == orphan.stat().st_size
+        assert raised.value.incoming_bytes == len(jpeg)
+        assert not list(evidence_root.glob("*.jpg"))
     finally:
         store.close()
 

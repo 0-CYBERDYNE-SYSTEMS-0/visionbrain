@@ -156,6 +156,16 @@ def _command(name, request_id, mission_id=None, revision=None, args=None):
     return message
 
 
+def _attachment(jpeg, *, closeup_request_id=None):
+    args = {
+        "jpeg_b64": base64.b64encode(jpeg).decode(),
+        "sha256": hashlib.sha256(jpeg).hexdigest(),
+    }
+    if closeup_request_id is not None:
+        args["closeup_request_id"] = closeup_request_id
+    return args
+
+
 async def _wait_for(predicate, timeout=3.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -199,7 +209,7 @@ def test_watch_root_full_pauses_and_explicit_resume_analyzes_fresh_frame(tmp_pat
     binding = SourceBinding("quota-watch-source", "epoch-1")
     jpeg = _jpeg()
     orphan = b"legacy orphan bytes" * 4
-    root_limit = 2 * len(jpeg) + len(orphan) - 1
+    root_limit = 2 * len(jpeg) + len(orphan)
     evidence_root = tmp_path / "evidence"
     store = MissionStore(tmp_path / "missions.sqlite3", evidence_root, root_quota_bytes=root_limit)
     orphan_path = evidence_root / "unindexed-orphan.bin"
@@ -214,6 +224,12 @@ def test_watch_root_full_pauses_and_explicit_resume_analyzes_fresh_frame(tmp_pat
             created = await _create(runtime, mode="watch", binding=binding)
             assert created["ok"]
             initial = created["result"]["snapshot"]
+            old_crop = store.transact(
+                lambda tx: tx.save_evidence(
+                    initial["mission_id"], jpeg, kind="crop", created_at_ms=1
+                )
+            ).value
+            old_crop_path = evidence_root / f"{old_crop['evidence_id']}.jpg"
             resumed = await runtime.handle(
                 _command(
                     "resume", "quota-resume", initial["mission_id"], initial["revision"],
@@ -235,9 +251,15 @@ def test_watch_root_full_pauses_and_explicit_resume_analyzes_fresh_frame(tmp_pat
             assert watch.released == [(watch.applied[0].lease_id, "evidence_quota_full")]
             assert watch.active is None
             assert orphan_path.read_bytes() == orphan
+            assert not old_crop_path.exists()
+            assert any(
+                ref.get("evidence_id") == old_crop["evidence_id"]
+                and ref.get("availability_reason") == "rolled_off"
+                for ref in paused["evidence"]
+            )
             media = tuple(evidence_root.glob("*.jpg"))
             assert len(media) == 1 and media[0].stat().st_size == len(jpeg)
-            assert sum(path.stat().st_size for path in evidence_root.iterdir() if path.is_file()) + len(jpeg) > root_limit
+            assert sum(path.stat().st_size for path in evidence_root.iterdir() if path.is_file()) + len(jpeg) == root_limit
             assert source.calls >= 3 and tools.calls == 1
 
             # Correcting space does not schedule a background retry.
@@ -361,7 +383,7 @@ def test_crop_root_full_pauses_inspect_and_records_rejected_artifact(tmp_path):
     evidence_root = tmp_path / "evidence"
     store = MissionStore(
         tmp_path / "missions.sqlite3", evidence_root,
-        root_quota_bytes=2 * len(jpeg) + len(orphan) - 1,
+        root_quota_bytes=2 * len(jpeg) + len(orphan),
     )
     orphan_path = evidence_root / "unindexed-orphan.bin"
     orphan_path.write_bytes(orphan)
@@ -382,6 +404,13 @@ def test_crop_root_full_pauses_inspect_and_records_rejected_artifact(tmp_path):
             )
             assert attached["ok"], attached
             input_id = attached["result"]["evidence_id"]
+            old_crop = store.transact(
+                lambda tx: tx.save_evidence(
+                    snapshot["mission_id"], jpeg, kind="crop", created_at_ms=1,
+                    parent_evidence_id=input_id,
+                )
+            ).value
+            old_crop_path = evidence_root / f"{old_crop['evidence_id']}.jpg"
             tools.result = ToolResult(
                 "ok",
                 artifacts=(EvidenceArtifact(jpeg, "crop", input_id, (0.1, 0.1, 0.8, 0.8)),),
@@ -399,6 +428,13 @@ def test_crop_root_full_pauses_inspect_and_records_rejected_artifact(tmp_path):
                 else None
             ))
             assert paused["input_evidence_id"] == input_id
+            assert not old_crop_path.exists()
+            assert orphan_path.read_bytes() == orphan
+            assert any(
+                ref.get("evidence_id") == old_crop["evidence_id"]
+                and ref.get("availability_reason") == "rolled_off"
+                for ref in paused["evidence"]
+            )
             assert tools.calls == 1
             records = store.tool_records(snapshot["mission_id"])
             assert len(records) == 1
@@ -410,6 +446,300 @@ def test_crop_root_full_pauses_inspect_and_records_rejected_artifact(tmp_path):
             store.close()
 
     asyncio.run(scenario())
+
+
+def test_attach_root_rolloff_protects_references_and_replays_committed_refusal(tmp_path, monkeypatch):
+    from visionbrain import mission_store as store_module
+
+    jpeg = _jpeg()
+    other_frame = _jpeg((30, 120, 185))
+    incoming = _jpeg((190, 80, 25))
+    evidence_root = tmp_path / "evidence"
+    store = MissionStore(tmp_path / "missions.sqlite3", evidence_root, root_quota_bytes=10_000_000)
+    runtime = _runtime(store, _Planner(watch=False), _Tools(), lambda _binding: None, _Watch())
+    cleanup_calls = []
+    original_cleanup = store_module._cleanup_retired_paths
+
+    def observe_cleanup(paths):
+        if paths:
+            cleanup_calls.append(tuple(paths))
+            saved = store.get_mission(mission_id)
+            assert saved["state"] == "waiting_evidence"
+            assert saved["reason"] == "evidence_quota_full"
+            assert any(
+                ref.get("evidence_id") == oldest_eligible["evidence_id"]
+                and ref.get("availability_reason") == "rolled_off"
+                for ref in saved["evidence"]
+            )
+            assert (evidence_root / f"{oldest_eligible['evidence_id']}.jpg").exists()
+        return original_cleanup(paths)
+
+    mission_id = None
+    oldest_eligible = None
+    monkeypatch.setattr(store_module, "_cleanup_retired_paths", observe_cleanup)
+
+    async def scenario():
+        nonlocal mission_id, oldest_eligible
+        try:
+            created = await _create(runtime, mode="inspect", request_id="protected-create")
+            snapshot = created["result"]["snapshot"]
+            mission_id = snapshot["mission_id"]
+            first = await runtime.handle(
+                _command("attach_evidence", "explicit-frame-one", mission_id, snapshot["revision"], _attachment(jpeg)),
+                Principal("installation", evidence_kind="frame", source_id="camera", source_epoch="epoch-1", frame_id=1),
+                SCOPES,
+            )
+            assert first["ok"], first
+            second = await runtime.handle(
+                _command("attach_evidence", "explicit-frame-two", mission_id, first["result"]["snapshot"]["revision"], _attachment(other_frame)),
+                Principal("installation", evidence_kind="frame", source_id="camera", source_epoch="epoch-1", frame_id=2),
+                SCOPES,
+            )
+            assert second["ok"], second
+            snapshot = second["result"]["snapshot"]
+            rows = {}
+
+            def seed(tx):
+                for key, kind, created_at in (
+                    ("closeup", "closeup", 10),
+                    ("accepted", "crop", 20),
+                    ("rejected", "crop", 30),
+                    ("observed", "crop", 40),
+                    ("exported", "crop", 50),
+                    ("oldest", "crop", 60),
+                    ("newer", "crop", 70),
+                ):
+                    rows[key] = tx.save_evidence(
+                        mission_id, jpeg, kind=kind, created_at_ms=created_at
+                    )
+                tx.pin_exported_evidence(mission_id, [rows["exported"]["evidence_id"]])
+                current = tx.get_mission(mission_id)
+                current["state"] = "waiting_evidence"
+                current["reason"] = "closeup_requested"
+                current["closeup_request"] = {
+                    "request_id": "closeup-1",
+                    "evidence_id": rows["closeup"]["evidence_id"],
+                    "expires_at_ms": int(time.time() * 1000) + 60_000,
+                }
+                current["findings"] = [
+                    {"finding_id": "accepted-finding", "evidence_id": rows["accepted"]["evidence_id"], "review": {"decision": "accepted"}},
+                    {"finding_id": "rejected-finding", "evidence_id": rows["rejected"]["evidence_id"], "review": {"decision": "rejected"}},
+                    {"finding_id": "observed-finding", "observations": [{"evidence_id": rows["observed"]["evidence_id"]}]},
+                ]
+                current["evidence"] = list(current.get("evidence", ())) + list(rows.values())
+                return tx.update_mission(
+                    current, expected_revision=int(current["revision"]), updated_at_ms=int(time.time() * 1000)
+                )
+
+            snapshot = store.transact(seed).value
+            mission_id = snapshot["mission_id"]
+            oldest_eligible = rows["oldest"]
+            protected_ids = {
+                first["result"]["evidence_id"],
+                second["result"]["evidence_id"],
+                rows["closeup"]["evidence_id"],
+                rows["accepted"]["evidence_id"],
+                rows["rejected"]["evidence_id"],
+                rows["observed"]["evidence_id"],
+                rows["exported"]["evidence_id"],
+            }
+            protected_paths = {evidence_root / f"{evidence_id}.jpg" for evidence_id in protected_ids}
+            oldest_path = evidence_root / f"{oldest_eligible['evidence_id']}.jpg"
+            newer_path = evidence_root / f"{rows['newer']['evidence_id']}.jpg"
+            initial_root_usage = store._root_evidence_usage()
+            store.root_quota_bytes = initial_root_usage + len(incoming) - len(jpeg)
+
+            invalid = await runtime.handle(
+                _command("attach_evidence", "attach-unauthorized", mission_id, snapshot["revision"], _attachment(incoming)),
+                Principal("observer"), {"mission:read"},
+            )
+            stale = await runtime.handle(
+                _command("attach_evidence", "attach-stale", mission_id, snapshot["revision"] - 1,
+                         _attachment(incoming, closeup_request_id="closeup-1")),
+                Principal("installation"), SCOPES,
+            )
+            wrong_closeup = await runtime.handle(
+                _command("attach_evidence", "attach-wrong-closeup", mission_id, snapshot["revision"],
+                         _attachment(incoming, closeup_request_id="wrong-closeup")),
+                Principal("installation"), SCOPES,
+            )
+            assert invalid["error"]["code"] == "unauthorized"
+            assert stale["error"]["code"] == "revision_conflict"
+            assert wrong_closeup["error"]["code"] == "closeup_mismatch"
+            assert cleanup_calls == []
+            assert all(path.exists() for path in protected_paths | {oldest_path, newer_path})
+            assert store.get_mission(mission_id) == snapshot
+
+            original = _command(
+                "attach_evidence", "attach-root-rolloff", mission_id, snapshot["revision"],
+                _attachment(incoming, closeup_request_id="closeup-1"),
+            )
+            refused = await runtime.handle(original, Principal("installation"), SCOPES)
+            assert not refused["ok"]
+            assert refused["error"]["code"] == "evidence_quota_full"
+            assert refused["result"]["execution_outcome"] == "waiting_evidence"
+            assert refused["result"]["snapshot"]["closeup_request"] == snapshot["closeup_request"]
+            assert cleanup_calls == [(oldest_path,)]
+            assert not oldest_path.exists()
+            assert newer_path.exists()
+            assert all(path.exists() for path in protected_paths)
+
+            replay = await runtime.handle(original, Principal("installation"), SCOPES)
+            assert replay == refused
+            conflict = dict(original)
+            conflict["args"] = _attachment(_jpeg((5, 5, 5)), closeup_request_id="closeup-1")
+            conflicting_replay = await runtime.handle(conflict, Principal("installation"), SCOPES)
+            assert conflicting_replay["error"]["code"] == "invalid_request"
+            assert cleanup_calls == [(oldest_path,)]
+            assert store.get_mission(mission_id)["state"] == "waiting_evidence"
+
+            updated = refused["result"]["snapshot"]
+            retry = await runtime.handle(
+                _command("attach_evidence", "attach-root-rolloff-retry", mission_id, updated["revision"],
+                         _attachment(incoming, closeup_request_id="closeup-1")),
+                Principal("installation"), SCOPES,
+            )
+            assert retry["ok"], retry
+            assert retry["result"]["snapshot"]["closeup_request"] is None
+            assert replay == refused
+            assert len(cleanup_calls) == 1
+        finally:
+            await runtime.close()
+            store.close()
+
+    asyncio.run(scenario())
+
+
+def test_root_rolloff_retry_rescans_after_unlink_failure_or_competing_writer(tmp_path, monkeypatch):
+    from pathlib import Path
+    from visionbrain import mission_store as store_module
+
+    async def run_case(case):
+        jpeg = _jpeg()
+        evidence_root = tmp_path / case / "evidence"
+        store = MissionStore(tmp_path / case / "missions.sqlite3", evidence_root, root_quota_bytes=10_000_000)
+        runtime = _runtime(store, _Planner(watch=False), _Tools(), lambda _binding: None, _Watch())
+        other_store = None
+        cleanup_calls = []
+        original_cleanup = store_module._cleanup_retired_paths
+
+        def observe_cleanup(paths):
+            if paths:
+                cleanup_calls.extend(paths)
+            return original_cleanup(paths)
+
+        async def scenario():
+            nonlocal other_store
+            try:
+                monkeypatch.setattr(store_module, "_cleanup_retired_paths", observe_cleanup)
+                created = await _create(runtime, mode="inspect", request_id=f"{case}-create")
+                snapshot = created["result"]["snapshot"]
+                attached = await runtime.handle(
+                    _command("attach_evidence", f"{case}-input", snapshot["mission_id"], snapshot["revision"], _attachment(jpeg)),
+                    Principal("installation", evidence_kind="frame", source_id="camera", source_epoch="epoch-1", frame_id=1),
+                    SCOPES,
+                )
+                mission_id = snapshot["mission_id"]
+                crop = store.transact(
+                    lambda tx: tx.save_evidence(mission_id, jpeg, kind="crop", created_at_ms=1)
+                ).value
+                crop_path = evidence_root / f"{crop['evidence_id']}.jpg"
+                latest = attached["result"]["snapshot"]
+                now = int(time.time() * 1000)
+                current = dict(latest)
+                current.update(
+                    state="waiting_evidence",
+                    reason="closeup_requested",
+                    closeup_request={"request_id": "closeup-retry", "evidence_id": crop["evidence_id"], "expires_at_ms": now + 60_000},
+                )
+                latest = store.transact(
+                    lambda tx: tx.update_mission(current, expected_revision=current["revision"], updated_at_ms=now)
+                ).value
+                # The close-up source is protected; use a second, unreferenced crop as the eligible row.
+                eligible = store.transact(
+                    lambda tx: tx.save_evidence(mission_id, jpeg, kind="crop", created_at_ms=2)
+                ).value
+                eligible_path = evidence_root / f"{eligible['evidence_id']}.jpg"
+                current = store.get_mission(mission_id)
+                current["evidence"].extend([crop, eligible])
+                latest = store.transact(
+                    lambda tx: tx.update_mission(current, expected_revision=current["revision"], updated_at_ms=now + 1)
+                ).value
+                # Make the eligible crop older while keeping the close-up crop first but protected.
+                store.root_quota_bytes = store._root_evidence_usage()
+
+                if case == "unlink_failure":
+                    original_unlink = Path.unlink
+
+                    def fail_target(path, *args, **kwargs):
+                        if path == eligible_path:
+                            raise OSError("injected unlink failure")
+                        return original_unlink(path, *args, **kwargs)
+
+                    monkeypatch.setattr(Path, "unlink", fail_target)
+
+                refusal = await runtime.handle(
+                    _command("attach_evidence", f"{case}-first", mission_id, latest["revision"],
+                             _attachment(jpeg, closeup_request_id="closeup-retry")),
+                    Principal("installation"), SCOPES,
+                )
+                assert refusal["error"]["code"] == "evidence_quota_full"
+                assert cleanup_calls == [eligible_path]
+                assert crop_path.exists()
+                assert store.get_mission(mission_id)["state"] == "waiting_evidence"
+                assert (eligible_path.exists()) is (case == "unlink_failure")
+                replay = await runtime.handle(
+                    _command("attach_evidence", f"{case}-first", mission_id, latest["revision"],
+                             _attachment(jpeg, closeup_request_id="closeup-retry")),
+                    Principal("installation"), SCOPES,
+                )
+                assert replay == refusal
+                assert cleanup_calls == [eligible_path]
+
+                if case == "competing_writer":
+                    other_store = MissionStore(
+                        tmp_path / case / "other.sqlite3", evidence_root,
+                        root_quota_bytes=store.root_quota_bytes,
+                    )
+                    # The neighboring database's own mission is not a candidate for this runtime.
+                    other_store.transact(lambda tx: tx.insert_mission({
+                        "mission_id": "other-mission", "revision": 1, "state": "ready", "updated_at_ms": now,
+                        "evidence": [], "findings": [],
+                    }))
+                    competing = other_store.transact(
+                        lambda tx: tx.save_evidence("other-mission", jpeg, kind="imported", created_at_ms=now)
+                    ).value
+                    competing_path = evidence_root / f"{competing['evidence_id']}.jpg"
+                    assert competing_path.exists()
+
+                # A fresh request must scan physical bytes and refuse without another eligible row.
+                paused = store.get_mission(mission_id)
+                retry = await runtime.handle(
+                    _command("attach_evidence", f"{case}-second", mission_id, paused["revision"],
+                             _attachment(jpeg, closeup_request_id="closeup-retry")),
+                    Principal("installation"), SCOPES,
+                )
+                assert retry["error"]["code"] == "evidence_quota_full"
+                assert cleanup_calls == [eligible_path]
+                assert store.get_mission(mission_id)["state"] == "waiting_evidence"
+                assert store.get_mission(mission_id)["reason"] == "evidence_quota_full"
+                assert crop_path.exists()
+                if case == "unlink_failure":
+                    assert eligible_path.exists()
+                else:
+                    assert not eligible_path.exists()
+                    assert competing_path.exists()
+            finally:
+                await runtime.close()
+                if other_store is not None:
+                    other_store.close()
+                store.close()
+
+        await scenario()
+
+    asyncio.run(run_case("unlink_failure"))
+    monkeypatch.undo()
+    asyncio.run(run_case("competing_writer"))
 
 
 def test_watch_accounting_incomplete_pauses_with_distinct_operator_reason(tmp_path, monkeypatch):

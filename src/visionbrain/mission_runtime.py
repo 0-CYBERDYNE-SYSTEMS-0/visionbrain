@@ -90,6 +90,7 @@ from .mission_store import (
     MissionStore,
     QuotaAccountingIncomplete,
     QuotaExceeded,
+    RootQuotaExceeded,
     RevisionConflict,
     _jpeg_dimensions,
 )
@@ -1109,6 +1110,28 @@ class MissionRuntime:
                     "Evidence storage could not be accounted safely; resolve the storage issue and retry the requested close-up."
                     if is_closeup else
                     "Evidence storage could not be accounted safely; resolve the storage issue and explicitly resume.",
+                    result={"snapshot": saved, "execution_outcome": "waiting_evidence" if is_closeup else "paused"},
+                )
+            except RootQuotaExceeded as exc:
+                self._roll_off_root_only_evidence(
+                    tx,
+                    snapshot,
+                    exc.root_usage_bytes,
+                    exc.incoming_bytes,
+                    protected_evidence_ids=(snapshot.get("input_evidence_id"),),
+                )
+                reason = "evidence_quota_full"
+                saved, lease = self._pause_for_evidence_quota(
+                    tx, snapshot, now, reason=reason, preserve_closeup_wait=is_closeup
+                )
+                if lease:
+                    release_after.append((lease, reason))
+                self._replace_event_snapshot(tx, saved)
+                raise _CommandError(
+                    reason,
+                    "Evidence storage is at its configured limit; free space or remove eligible evidence, then retry the requested close-up."
+                    if is_closeup else
+                    "Evidence storage is at its configured limit; free space or remove eligible evidence, then explicitly resume.",
                     result={"snapshot": saved, "execution_outcome": "waiting_evidence" if is_closeup else "paused"},
                 )
             except QuotaExceeded:
@@ -2770,6 +2793,19 @@ class MissionRuntime:
                     snapshot = paused
                     current = False
                     break
+                except RootQuotaExceeded as exc:
+                    self._roll_off_root_only_evidence(
+                        tx,
+                        snapshot,
+                        exc.root_usage_bytes,
+                        exc.incoming_bytes,
+                        protected_evidence_ids=(input_evidence_id,),
+                    )
+                    quota_reason = "evidence_quota_full"
+                    paused, quota_lease = self._pause_for_evidence_quota(tx, snapshot, now, reason=quota_reason)
+                    snapshot = paused
+                    current = False
+                    break
                 except QuotaExceeded:
                     quota_reason = "evidence_quota_full"
                     paused, quota_lease = self._pause_for_evidence_quota(tx, snapshot, now, reason=quota_reason)
@@ -2851,6 +2887,16 @@ class MissionRuntime:
                 )
             except QuotaAccountingIncomplete:
                 reason = "evidence_quota_accounting_unavailable"
+                paused, lease = self._pause_for_evidence_quota(tx, snapshot, now, reason=reason)
+                return None, {"watch_lease": lease, "snapshot": paused, "release_reason": reason}
+            except RootQuotaExceeded as exc:
+                self._roll_off_root_only_evidence(
+                    tx,
+                    snapshot,
+                    exc.root_usage_bytes,
+                    exc.incoming_bytes,
+                )
+                reason = "evidence_quota_full"
                 paused, lease = self._pause_for_evidence_quota(tx, snapshot, now, reason=reason)
                 return None, {"watch_lease": lease, "snapshot": paused, "release_reason": reason}
             except QuotaExceeded:
@@ -3173,6 +3219,48 @@ class MissionRuntime:
             mission_count, _mission_bytes = tx.evidence_usage(snapshot["mission_id"])
             total_bytes = tx.total_evidence_usage()[1]
         return True
+
+    def _roll_off_root_only_evidence(
+        self,
+        tx,
+        snapshot: dict[str, Any],
+        root_usage_bytes: int,
+        incoming_bytes: int,
+        *,
+        protected_evidence_ids: Collection[str] = (),
+    ) -> None:
+        """Tombstone oldest safe crop rows after a measured root refusal."""
+        bytes_to_clear = root_usage_bytes + incoming_bytes - int(self.store.root_quota_bytes)
+        if bytes_to_clear <= 0:
+            return
+        protected = self._protected_evidence_ids(snapshot, protected_evidence_ids)
+        for candidate in tx.list_evidence(snapshot["mission_id"]):
+            evidence_id = str(candidate.get("evidence_id", ""))
+            # Explicit attachments may also be stored as ``frame``; without a
+            # persisted origin marker, only generated crops are unambiguous.
+            if (
+                candidate.get("kind") != "crop"
+                or not evidence_id
+                or evidence_id in protected
+                or tx.evidence_is_exported(evidence_id)
+                or (
+                    not any(ref.get("evidence_id") == evidence_id for ref in snapshot.get("evidence", ()))
+                    and len(snapshot.get("evidence", ())) >= MAX_MISSION_EVIDENCE_HISTORY - 1
+                )
+            ):
+                continue
+            size_bytes = int(candidate.get("bytes", 0))
+            if size_bytes <= 0:
+                continue
+            tombstone = tx.retire_evidence(evidence_id)
+            if tombstone is None:
+                continue
+            self._apply_evidence_tombstone(snapshot, tombstone)
+            # Stored sizes bound phase-one cleanup only. The next save performs a
+            # fresh root scan; these pending unlinks are never admission credit.
+            bytes_to_clear -= size_bytes
+            if bytes_to_clear <= 0:
+                break
 
     def _pause_for_evidence_quota(
         self,
