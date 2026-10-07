@@ -496,6 +496,7 @@ Adaptive Watch target choice. Vision proposes candidates on the admitted frame. 
 - **Provenance:** `JevChoice.model` and the decision record's `decision_model` store the model string the response reported. That string may be the requested slug `typesafe/jev-1.13` or the dated resolved version `typesafe/jev-1.13-20260917`.
 - **Request:** top-level `state` and `model`, plus one `choice` question under `questions.selection`. No user, session, or trace identifier is sent. The adapter sends no OpenRouter `provider` preferences; current account settings are preserved.
 - **Reply:** `answers.selection` must have `type: "choice"`. `choice` must be a criteria key. `probabilities` must cover exactly the criteria keys, sum to 1 within 0.01, and rank `choice` highest. `confidence` must lie in [0, 1].
+- **Local candidate generation:** `autotarget.v3` constrains generated labels to 40 characters and other fields to 56, requesting concrete visible object labels and up to eight words per description. Up to four candidates remain available. Parser compatibility limits remain 64/300 characters; generation retains its 512-token ceiling. Scene usability means objects are identifiable, independently of relevance or diagnosable damage.
 - **Limits:** one request, no retries. Timeout is `min(3 s, remaining frame age, remaining cycle time)`.
 - **Live status:** a synthetic connection check returned HTTP 200 with the resolved model above. It is not scene acceptance.
 

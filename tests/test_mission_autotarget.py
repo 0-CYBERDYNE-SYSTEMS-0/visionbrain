@@ -64,7 +64,7 @@ def _jev_payload(choice="c1", probabilities=None, confidence=0.7):
     }
 
 
-def test_schema_bounds_match_parser_limits():
+def test_schema_generation_caps_are_stricter_than_parser_limits():
     schema = candidate_response_schema()
     assert schema["type"] == "object"
     assert len(schema["anyOf"]) == 2
@@ -75,11 +75,11 @@ def test_schema_bounds_match_parser_limits():
     assert unusable["properties"]["candidates"] == {"type": "array", "maxItems": 0}
     candidate = usable["properties"]["candidates"]["items"]["properties"]
     assert usable["properties"]["candidates"]["maxItems"] == 4
-    assert candidate["target_label"] == {"type": "string", "minLength": 1, "maxLength": 64}
-    assert candidate["objective"] == {"type": "string", "minLength": 1, "maxLength": 300}
-    assert candidate["reason"] == {"type": "string", "minLength": 1, "maxLength": 300}
-    assert candidate["visual_evidence"] == {"type": "string", "minLength": 1, "maxLength": 300}
-    assert candidate["uncertainty"] == {"type": "string", "minLength": 0, "maxLength": 300}
+    assert candidate["target_label"] == {"type": "string", "minLength": 1, "maxLength": 40}
+    assert candidate["objective"] == {"type": "string", "minLength": 1, "maxLength": 56}
+    assert candidate["reason"] == {"type": "string", "minLength": 1, "maxLength": 56}
+    assert candidate["visual_evidence"] == {"type": "string", "minLength": 1, "maxLength": 56}
+    assert candidate["uncertainty"] == {"type": "string", "minLength": 0, "maxLength": 56}
     for branch in (usable, unusable):
         assert branch["properties"]["scene_uncertainty"]["minLength"] == 0
         assert branch["additionalProperties"] is False
