@@ -390,18 +390,28 @@ class MissionRuntime:
         self._closed = False
 
     async def get_record_bundle(self, mission_id: str) -> tuple[Record, ...]:
-        """Read and project one persisted mission record bundle."""
+        """Verify referenced media, then project one persisted mission record bundle."""
         await self._ensure_recovered()
 
-        def read_and_project() -> tuple[Record, ...]:
-            rows = self.store.read_mission_record_rows(mission_id)
+        def verify_snapshot(tx):
+            snapshot = tx.get_mission(mission_id)
+            if snapshot is None:
+                raise KeyError(mission_id)
+            self._verify_snapshot_evidence(mission_id, snapshot, tx=tx, verify_content=True)
+            rows = self.store.read_mission_record_rows(mission_id, tx=tx)
             if rows is None:
                 raise KeyError(mission_id)
-            return project_mission_records(
-                rows["snapshot"], rows["evidence_rows"], rows["tool_rows"]
-            )
+            return rows
 
-        return await asyncio.to_thread(read_and_project)
+        verification = await asyncio.to_thread(self.store.perform_read, verify_snapshot)
+        self._publish_events(verification.events)
+        rows = verification.reply
+        return await asyncio.to_thread(
+            project_mission_records,
+            rows["snapshot"],
+            rows["evidence_rows"],
+            rows["tool_rows"],
+        )
 
     def _model_status(self, key: str) -> tuple[bool, str | None, str | None, str | None]:
         """Return local readiness and checkpoint provenance without loading models."""
@@ -702,7 +712,12 @@ class MissionRuntime:
                 evidence_id = normalized["args"].get("evidence_id")
                 owner = await asyncio.to_thread(self.store.evidence_owner, evidence_id)
                 if owner == normalized.get("mission_id"):
-                    await asyncio.to_thread(self._mark_evidence_unavailable, owner, evidence_id)
+                    await asyncio.to_thread(
+                        self._mark_evidence_unavailable,
+                        owner,
+                        evidence_id,
+                        getattr(exc, "availability_reason", "corrupt"),
+                    )
             return self._reply(command, False, {}, ("evidence_unavailable", str(exc)))
         except QuotaAccountingIncomplete:
             return self._reply(
@@ -1698,8 +1713,19 @@ class MissionRuntime:
                         return
                     try:
                         evidence = await asyncio.to_thread(self.store.read_evidence, evidence_id)
-                    except (EvidenceUnavailable, KeyError):
-                        await asyncio.to_thread(self._mark_evidence_unavailable, mission_id, evidence_id)
+                    except EvidenceUnavailable as exc:
+                        await asyncio.to_thread(
+                            self._mark_evidence_unavailable,
+                            mission_id,
+                            evidence_id,
+                            exc.availability_reason,
+                        )
+                        await self._set_waiting(mission_id, generation, "evidence_unavailable", "The original photo is missing or changed; attach it again.")
+                        return
+                    except KeyError:
+                        await asyncio.to_thread(
+                            self._mark_evidence_unavailable, mission_id, evidence_id, "missing"
+                        )
                         await self._set_waiting(mission_id, generation, "evidence_unavailable", "The original photo is missing or changed; attach it again.")
                         return
                     if self._closed:
@@ -3063,39 +3089,66 @@ class MissionRuntime:
             raise EvidenceUnavailable("evidence is missing or belongs to another mission")
         try:
             return self.store.read_evidence(evidence_id)
-        except (EvidenceUnavailable, KeyError):
+        except EvidenceUnavailable as exc:
             if tx is not None:
-                self._mark_evidence_unavailable_in_tx(tx, mission_id, evidence_id)
+                self._mark_evidence_unavailable_in_tx(
+                    tx, mission_id, evidence_id, exc.availability_reason
+                )
             else:
-                self._mark_evidence_unavailable(mission_id, evidence_id)
-            raise EvidenceUnavailable("evidence is missing or changed")
+                self._mark_evidence_unavailable(mission_id, evidence_id, exc.availability_reason)
+            raise EvidenceUnavailable(
+                "evidence is missing or changed", availability_reason=exc.availability_reason
+            ) from exc
+        except KeyError as exc:
+            if tx is not None:
+                self._mark_evidence_unavailable_in_tx(tx, mission_id, evidence_id, "missing")
+            else:
+                self._mark_evidence_unavailable(mission_id, evidence_id, "missing")
+            raise EvidenceUnavailable("evidence is missing or changed", availability_reason="missing") from exc
 
-    def _verify_snapshot_evidence(self, mission_id: str, snapshot: Mapping[str, Any], *, tx=None) -> dict[str, Any]:
+    def _verify_snapshot_evidence(
+        self,
+        mission_id: str,
+        snapshot: Mapping[str, Any],
+        *,
+        tx=None,
+        verify_content: bool = False,
+    ) -> dict[str, Any]:
         unavailable = []
         for ref in snapshot.get("evidence", []):
             try:
-                self.store.check_evidence_file(ref["evidence_id"])
-            except (EvidenceUnavailable, KeyError):
-                unavailable.append(ref["evidence_id"])
+                if verify_content:
+                    self.store.read_evidence(ref["evidence_id"])
+                else:
+                    self.store.check_evidence_file(ref["evidence_id"])
+            except EvidenceUnavailable as exc:
+                unavailable.append((ref["evidence_id"], exc.availability_reason))
+            except KeyError:
+                unavailable.append((ref["evidence_id"], "missing"))
         if tx is not None:
             current = dict(snapshot)
-            for evidence_id in unavailable:
-                current = self._mark_evidence_unavailable_in_tx(tx, mission_id, evidence_id) or current
+            for evidence_id, reason in unavailable:
+                current = self._mark_evidence_unavailable_in_tx(tx, mission_id, evidence_id, reason) or current
             return tx.get_mission(mission_id) or current
-        for evidence_id in unavailable:
-            self._mark_evidence_unavailable(mission_id, evidence_id)
+        for evidence_id, reason in unavailable:
+            self._mark_evidence_unavailable(mission_id, evidence_id, reason)
         return self.store.get_mission(mission_id) or dict(snapshot)
 
-    def _mark_evidence_unavailable_in_tx(self, tx, mission_id: str, evidence_id: str) -> dict[str, Any] | None:
+    def _mark_evidence_unavailable_in_tx(
+        self, tx, mission_id: str, evidence_id: str, reason: str = "missing"
+    ) -> dict[str, Any] | None:
         snapshot = tx.get_mission(mission_id)
         if not snapshot:
             return None
         updated = dict(snapshot)
         refs = [dict(item) for item in updated.get("evidence", [])]
-        changed = False
+        changed = tx.set_evidence_unavailable(mission_id, evidence_id, reason)
         for ref in refs:
-            if ref.get("evidence_id") == evidence_id and ref.get("available") is not False:
+            if ref.get("evidence_id") == evidence_id and (
+                ref.get("available") is not False or ref.get("availability_reason") != reason
+            ):
                 ref["available"] = False
+                ref["availability_reason"] = reason
                 changed = True
         for finding in updated.get("findings", []):
             if evidence_id in finding.get("evidence_refs", []) or finding.get("evidence_id") == evidence_id:
@@ -3114,9 +3167,13 @@ class MissionRuntime:
         now = self.clock.now_ms()
         return self._update_with_event(tx, snapshot, updated, "evidence_unavailable", {"evidence_id": evidence_id}, now)
 
-    def _mark_evidence_unavailable(self, mission_id: str, evidence_id: str) -> None:
+    def _mark_evidence_unavailable(
+        self, mission_id: str, evidence_id: str, reason: str = "missing"
+    ) -> None:
         try:
-            result = self.store.transact(lambda tx: self._mark_evidence_unavailable_in_tx(tx, mission_id, evidence_id))
+            result = self.store.transact(
+                lambda tx: self._mark_evidence_unavailable_in_tx(tx, mission_id, evidence_id, reason)
+            )
         except RevisionConflict:
             return
         self._publish_events(result.events)

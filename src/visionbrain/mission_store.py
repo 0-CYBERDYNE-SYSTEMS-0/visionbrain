@@ -65,6 +65,12 @@ class RevisionConflict(MissionStoreError):
 class EvidenceUnavailable(MissionStoreError):
     """Evidence metadata exists but the immutable file cannot be read."""
 
+    def __init__(self, message: str, *, availability_reason: str = "missing") -> None:
+        super().__init__(message)
+        if availability_reason not in {"missing", "corrupt", "rolled_off"}:
+            raise ValueError("evidence availability reason is invalid")
+        self.availability_reason = availability_reason
+
 
 class InvalidEvidence(MissionStoreError):
     """The supplied bytes are not a valid bounded JPEG with the given hash."""
@@ -174,6 +180,43 @@ class StoreTransaction:
             "SELECT snapshot_json FROM missions WHERE mission_id = ?", (mission_id,)
         ).fetchone()
         return json.loads(row[0]) if row else None
+
+    def read_mission_record_rows(self, mission_id: str) -> dict[str, Any] | None:
+        """Read all typed-record metadata from this transaction's SQLite view."""
+        mission = self._connection.execute(
+            "SELECT snapshot_json FROM missions WHERE mission_id = ?", (mission_id,)
+        ).fetchone()
+        if mission is None:
+            return None
+        evidence_rows = self._connection.execute(
+            "SELECT mission_id, metadata_json, available FROM evidence "
+            "WHERE mission_id = ? ORDER BY created_at_ms, evidence_id",
+            (mission_id,),
+        ).fetchall()
+        tool_rows = self._connection.execute(
+            "SELECT mission_id, cycle_id, execution_generation, is_current, record_json "
+            "FROM tool_records WHERE mission_id = ? ORDER BY created_at_ms, record_id",
+            (mission_id,),
+        ).fetchall()
+        result = {"snapshot": json.loads(mission[0]), "evidence_rows": [], "tool_rows": []}
+        for row in evidence_rows:
+            evidence = dict(json.loads(row[1]))
+            evidence["mission_id"] = str(row[0])
+            evidence["available"] = bool(row[2])
+            if not evidence["available"]:
+                evidence.setdefault("availability_reason", "rolled_off")
+            result["evidence_rows"].append(evidence)
+        for row in tool_rows:
+            result["tool_rows"].append(
+                {
+                    "mission_id": str(row[0]),
+                    "cycle_id": str(row[1]),
+                    "execution_generation": int(row[2]),
+                    "is_current": bool(row[3]),
+                    "record": json.loads(row[4]),
+                }
+            )
+        return result
 
     def list_active_missions(self) -> list[dict[str, Any]]:
         rows = self._connection.execute(
@@ -436,6 +479,54 @@ class StoreTransaction:
             )
         self._retired_paths.append(Path(row[0]))
         return metadata
+
+    def set_evidence_unavailable(self, mission_id: str, evidence_id: str, reason: str) -> bool:
+        """Persist an unavailable reason in evidence metadata and tool records."""
+        if reason not in {"missing", "corrupt", "rolled_off"}:
+            raise ValueError("evidence availability reason is invalid")
+        row = self._connection.execute(
+            "SELECT mission_id, metadata_json, available FROM evidence "
+            "WHERE mission_id = ? AND evidence_id = ?",
+            (mission_id, evidence_id),
+        ).fetchone()
+        if row is None:
+            return False
+        metadata = json.loads(row[1])
+        changed = bool(row[2]) or metadata.get("available") is not False
+        changed = changed or metadata.get("availability_reason") != reason
+        metadata["available"] = False
+        metadata["availability_reason"] = reason
+        if changed:
+            self._connection.execute(
+                "UPDATE evidence SET available = 0, metadata_json = ? "
+                "WHERE mission_id = ? AND evidence_id = ?",
+                (_json(metadata), mission_id, evidence_id),
+            )
+        records = self._connection.execute(
+            "SELECT record_id, record_json FROM tool_records WHERE mission_id = ?",
+            (row[0],),
+        ).fetchall()
+        for record_id, encoded in records:
+            record = json.loads(encoded)
+            if (
+                evidence_id not in record.get("evidence_ids", ())
+                and evidence_id != record.get("input_evidence_id")
+            ):
+                continue
+            availability = dict(record.get("evidence_availability", {}))
+            target = {"available": False, "availability_reason": reason}
+            unavailable = set(record.get("unavailable_evidence_ids", ()))
+            if availability.get(evidence_id) == target and evidence_id in unavailable:
+                continue
+            availability[evidence_id] = target
+            record["evidence_availability"] = availability
+            record["unavailable_evidence_ids"] = sorted(unavailable | {evidence_id})
+            self._connection.execute(
+                "UPDATE tool_records SET record_json = ? WHERE record_id = ?",
+                (_json(record), record_id),
+            )
+            changed = True
+        return changed
 
     def save_evidence(
         self,
@@ -886,13 +977,19 @@ class MissionStore:
             ).fetchone()
             return json.loads(row[0]) if row else None
 
-    def read_mission_record_rows(self, mission_id: str) -> dict[str, Any] | None:
+    def read_mission_record_rows(
+        self, mission_id: str, *, tx: StoreTransaction | None = None
+    ) -> dict[str, Any] | None:
         """Read one coherent metadata snapshot and the complete rows used by the record projector.
 
         Evidence rows contain decoded persisted metadata plus their authoritative
         SQL ``mission_id``. Tool rows contain the SQL envelope and nested record.
         Availability is persisted metadata; this method does not inspect media.
         """
+        if tx is not None:
+            if tx._store is not self:
+                raise ValueError("record-row transaction belongs to another mission store")
+            return tx.read_mission_record_rows(mission_id)
         with self._lock:
             if self._connection.in_transaction:
                 raise MissionStoreError(
@@ -900,45 +997,7 @@ class MissionStore:
                 )
             try:
                 self._connection.execute("BEGIN")
-                mission = self._connection.execute(
-                    "SELECT snapshot_json FROM missions WHERE mission_id = ?", (mission_id,)
-                ).fetchone()
-                if mission is None:
-                    self._connection.commit()
-                    return None
-
-                evidence_rows = self._connection.execute(
-                    "SELECT mission_id, metadata_json, available FROM evidence "
-                    "WHERE mission_id = ? ORDER BY created_at_ms, evidence_id",
-                    (mission_id,),
-                ).fetchall()
-                tool_rows = self._connection.execute(
-                    "SELECT mission_id, cycle_id, execution_generation, is_current, record_json "
-                    "FROM tool_records WHERE mission_id = ? ORDER BY created_at_ms, record_id",
-                    (mission_id,),
-                ).fetchall()
-                result = {
-                    "snapshot": json.loads(mission[0]),
-                    "evidence_rows": [],
-                    "tool_rows": [],
-                }
-                for row in evidence_rows:
-                    evidence = dict(json.loads(row[1]))
-                    evidence["mission_id"] = str(row[0])
-                    evidence["available"] = bool(row[2])
-                    if not evidence["available"]:
-                        evidence.setdefault("availability_reason", "rolled_off")
-                    result["evidence_rows"].append(evidence)
-                for row in tool_rows:
-                    result["tool_rows"].append(
-                        {
-                            "mission_id": str(row[0]),
-                            "cycle_id": str(row[1]),
-                            "execution_generation": int(row[2]),
-                            "is_current": bool(row[3]),
-                            "record": json.loads(row[4]),
-                        }
-                    )
+                result = StoreTransaction(self, self._connection).read_mission_record_rows(mission_id)
                 self._connection.commit()
                 return result
             except BaseException:
@@ -1069,29 +1128,59 @@ class MissionStore:
             if row is None:
                 raise KeyError(evidence_id)
             if not bool(row[6]):
-                raise EvidenceUnavailable("evidence was rolled off by the retention policy")
+                metadata = json.loads(row[5])
+                reason = metadata.get("availability_reason", "rolled_off")
+                if reason not in {"missing", "corrupt", "rolled_off"}:
+                    reason = "corrupt"
+                raise EvidenceUnavailable(
+                    f"evidence is unavailable ({reason})",
+                    availability_reason=reason,
+                )
+            expected_bytes = int(row[2])
+            if expected_bytes <= 0 or expected_bytes > MAX_DECODED_JPEG_BYTES:
+                raise EvidenceUnavailable(
+                    "stored evidence byte length exceeds the configured limit",
+                    availability_reason="corrupt",
+                )
             path = Path(row[0])
             try:
                 path.resolve().relative_to(self.evidence_root.resolve())
                 with path.open("rb") as media:
                     before = _file_fingerprint(os.fstat(media.fileno()))
-                    data = media.read()
+                    if before[2] > MAX_DECODED_JPEG_BYTES:
+                        raise EvidenceUnavailable(
+                            "evidence media exceeds the configured size limit",
+                            availability_reason="corrupt",
+                        )
+                    if before[2] != expected_bytes:
+                        raise EvidenceUnavailable(
+                            "evidence byte length changed", availability_reason="corrupt"
+                        )
+                    data = media.read(MAX_DECODED_JPEG_BYTES + 1)
                     after = _file_fingerprint(os.fstat(media.fileno()))
             except (OSError, ValueError) as exc:
-                raise EvidenceUnavailable("evidence media is unavailable") from exc
+                reason = "missing" if isinstance(exc, OSError) else "corrupt"
+                raise EvidenceUnavailable("evidence media is unavailable", availability_reason=reason) from exc
             if before != after:
-                raise EvidenceUnavailable("evidence changed while being read")
-            expected_bytes, expected_width, expected_height = int(row[2]), int(row[3]), int(row[4])
+                raise EvidenceUnavailable("evidence changed while being read", availability_reason="corrupt")
+            if len(data) > MAX_DECODED_JPEG_BYTES:
+                raise EvidenceUnavailable(
+                    "evidence media exceeds the configured size limit",
+                    availability_reason="corrupt",
+                )
+            expected_width, expected_height = int(row[3]), int(row[4])
             if len(data) != expected_bytes:
-                raise EvidenceUnavailable("evidence byte length changed")
+                raise EvidenceUnavailable("evidence byte length changed", availability_reason="corrupt")
             if hashlib.sha256(data).hexdigest() != row[1]:
-                raise EvidenceUnavailable("evidence SHA-256 changed")
+                raise EvidenceUnavailable("evidence SHA-256 changed", availability_reason="corrupt")
             try:
                 width, height = _jpeg_dimensions(data)
             except InvalidEvidence as exc:
-                raise EvidenceUnavailable("stored evidence is no longer a valid JPEG") from exc
+                raise EvidenceUnavailable(
+                    "stored evidence is no longer a valid JPEG", availability_reason="corrupt"
+                ) from exc
             if (width, height) != (expected_width, expected_height):
-                raise EvidenceUnavailable("evidence dimensions changed")
+                raise EvidenceUnavailable("evidence dimensions changed", availability_reason="corrupt")
             return {"metadata": json.loads(row[5]), "jpeg_bytes": data}, after
 
     def read_evidence(self, evidence_id: str) -> dict[str, Any]:
@@ -1103,7 +1192,8 @@ class MissionStore:
         """Check a saved file fingerprint without hashing its JPEG contents."""
         with self._lock:
             row = self._connection.execute(
-                "SELECT e.path, e.bytes, s.device, s.inode, s.size, s.mtime_ns, s.ctime_ns, e.available "
+                "SELECT e.path, e.bytes, s.device, s.inode, s.size, s.mtime_ns, s.ctime_ns, "
+                "e.available, e.metadata_json "
                 "FROM evidence e LEFT JOIN evidence_file_state s USING (evidence_id) "
                 "WHERE e.evidence_id = ?",
                 (evidence_id,),
@@ -1111,15 +1201,23 @@ class MissionStore:
             if row is None:
                 raise KeyError(evidence_id)
             if not bool(row[7]):
-                raise EvidenceUnavailable("evidence was rolled off by the retention policy")
+                metadata = json.loads(row[8])
+                reason = metadata.get("availability_reason", "rolled_off")
+                if reason not in {"missing", "corrupt", "rolled_off"}:
+                    reason = "corrupt"
+                raise EvidenceUnavailable(
+                    f"evidence is unavailable ({reason})",
+                    availability_reason=reason,
+                )
             path = Path(row[0])
             try:
                 path.resolve().relative_to(self.evidence_root.resolve())
                 current = _file_fingerprint(path.stat())
             except (OSError, ValueError) as exc:
-                raise EvidenceUnavailable("evidence media is unavailable") from exc
+                reason = "missing" if isinstance(exc, OSError) else "corrupt"
+                raise EvidenceUnavailable("evidence media is unavailable", availability_reason=reason) from exc
             if current[2] != int(row[1]):
-                raise EvidenceUnavailable("evidence byte length changed")
+                raise EvidenceUnavailable("evidence byte length changed", availability_reason="corrupt")
             if row[2] is None:
                 # Evidence created before file fingerprints were recorded gets one
                 # full verification before its baseline is saved.
@@ -1135,7 +1233,7 @@ class MissionStore:
                 return
             expected = tuple(int(row[index]) for index in range(2, 7))
             if current != expected:
-                raise EvidenceUnavailable("evidence file changed")
+                raise EvidenceUnavailable("evidence file changed", availability_reason="corrupt")
 
     def get_evidence_chunk(
         self, evidence_id: str, *, offset: int = 0, length: int = MAX_EVIDENCE_CHUNK_BYTES

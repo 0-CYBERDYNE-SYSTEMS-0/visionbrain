@@ -3,10 +3,12 @@
 import hashlib
 import json
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 from PIL import Image
 
+from visionbrain.mission_contracts import MAX_DECODED_JPEG_BYTES
 from visionbrain.mission_store import EvidenceUnavailable, IdempotencyConflict, MissionStore
 
 
@@ -87,6 +89,100 @@ def test_evidence_chunks_revalidate_the_whole_jpeg_before_serving(tmp_path):
             # Restore valid media to reach the strict range check.
             path.write_bytes(jpeg)
             store.get_evidence_chunk(evidence["evidence_id"], offset=len(jpeg) + 1, length=1)
+    finally:
+        store.close()
+
+
+def test_verified_evidence_caps_reads_and_rejects_oversized_media(tmp_path, monkeypatch):
+    store = MissionStore(tmp_path / "missions.sqlite3", tmp_path / "evidence")
+    jpeg = _jpeg()
+    try:
+        def add(tx):
+            tx.insert_mission(_mission())
+            return tx.save_evidence("mission-1", jpeg, kind="imported", created_at_ms=1)
+
+        evidence_id = store.transact(add).value["evidence_id"]
+        media_path = store.evidence_root / f"{evidence_id}.jpg"
+        media_path.write_bytes(b"x" * (MAX_DECODED_JPEG_BYTES + 32))
+        with pytest.raises(EvidenceUnavailable, match="exceeds the configured size limit") as exc_info:
+            store.read_evidence(evidence_id)
+        assert exc_info.value.availability_reason == "corrupt"
+        assert media_path.exists()
+
+        media_path.write_bytes(jpeg)
+        original_open = Path.open
+        requested_sizes = []
+
+        class GrowingMedia:
+            def __init__(self, file):
+                self.file = file
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.file.close()
+
+            def fileno(self):
+                return self.file.fileno()
+
+            def read(self, size=-1):
+                requested_sizes.append(size)
+                return b"x" * (MAX_DECODED_JPEG_BYTES + 1)
+
+        def growing_open(path, *args, **kwargs):
+            file = original_open(path, *args, **kwargs)
+            return GrowingMedia(file) if path == media_path else file
+
+        monkeypatch.setattr(Path, "open", growing_open)
+        with pytest.raises(EvidenceUnavailable, match="exceeds the configured size limit"):
+            store.read_evidence(evidence_id)
+        assert requested_sizes == [MAX_DECODED_JPEG_BYTES + 1]
+    finally:
+        store.close()
+
+
+def test_record_rows_reader_remains_metadata_only(tmp_path, monkeypatch):
+    store = MissionStore(tmp_path / "missions.sqlite3", tmp_path / "evidence")
+    try:
+        def add(tx):
+            tx.insert_mission(_mission())
+            return tx.save_evidence("mission-1", _jpeg(), kind="imported", created_at_ms=1)
+
+        evidence = store.transact(add).value
+
+        def fail_filesystem_check(*_args, **_kwargs):
+            raise AssertionError("metadata-only record read inspected evidence media")
+
+        monkeypatch.setattr(store, "check_evidence_file", fail_filesystem_check)
+        monkeypatch.setattr(store, "read_evidence", fail_filesystem_check)
+        rows = store.read_mission_record_rows("mission-1")
+        assert rows["evidence_rows"][0]["evidence_id"] == evidence["evidence_id"]
+        assert rows["evidence_rows"][0]["available"] is True
+    finally:
+        store.close()
+
+
+def test_unavailability_update_is_scoped_to_the_mission_owner(tmp_path):
+    store = MissionStore(tmp_path / "missions.sqlite3", tmp_path / "evidence")
+    try:
+        def add(tx):
+            tx.insert_mission(_mission("mission-owner"))
+            tx.insert_mission(_mission("mission-other"))
+            evidence = tx.save_evidence(
+                "mission-owner", _jpeg(), kind="imported", created_at_ms=1
+            )
+            changed = tx.set_evidence_unavailable(
+                "mission-other", evidence["evidence_id"], "missing"
+            )
+            return evidence["evidence_id"], changed
+
+        evidence_id, changed = store.transact(add).value
+        assert changed is False
+        row = store.read_mission_record_rows("mission-owner")["evidence_rows"][0]
+        assert row["evidence_id"] == evidence_id
+        assert row["available"] is True
+        assert "availability_reason" not in row
     finally:
         store.close()
 

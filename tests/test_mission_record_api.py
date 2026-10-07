@@ -193,9 +193,9 @@ def test_completed_inspect_uses_one_off_loop_store_read_and_preserves_projection
             original_read = store.read_mission_record_rows
             read_threads = []
 
-            def counted_read(mission_id):
+            def counted_read(mission_id, **kwargs):
                 read_threads.append(threading.get_ident())
-                return original_read(mission_id)
+                return original_read(mission_id, **kwargs)
 
             store.read_mission_record_rows = counted_read
             event_loop_thread = threading.get_ident()
@@ -209,8 +209,8 @@ def test_completed_inspect_uses_one_off_loop_store_read_and_preserves_projection
             assert evidence_record.availability == "available"
             assert _roundtrip(records) == records
 
-            def incomplete_read(mission_id):
-                bundle = original_read(mission_id)
+            def incomplete_read(mission_id, **kwargs):
+                bundle = original_read(mission_id, **kwargs)
                 bundle["evidence_rows"][0]["capture_time_ms"] = 1_800_000_000_000
                 return bundle
 
@@ -307,5 +307,201 @@ def test_completed_watch_bundle_roundtrips_source_and_frame_lineage(tmp_path, mo
         finally:
             await runtime.close()
             store.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("damage", "availability", "first_read"),
+    [
+        ("missing", "missing", "legacy"),
+        ("corrupt", "corrupt", "legacy"),
+        ("missing", "missing", "typed"),
+        ("corrupt", "corrupt", "typed"),
+    ],
+)
+def test_evidence_unavailability_persists_across_reads_and_reopen(
+    tmp_path, damage, availability, first_read
+):
+    async def scenario():
+        store = MissionStore(tmp_path / "missions.sqlite3", tmp_path / "evidence")
+        publication_threads = []
+
+        def publish(_event):
+            publication_threads.append(threading.get_ident())
+
+        event_loop_thread = threading.get_ident()
+        runtime = MissionRuntime(
+            store,
+            _Planner(),
+            _Tools(),
+            lambda _binding: None,
+            _Watch(),
+            publish,
+            qualified_models={"gemma": ["inspect"]},
+        )
+        try:
+            created = await runtime.handle(
+                _command("create", "availability-create", args={
+                    "profile": {"id": "visual_inspection", "version": 1},
+                    "expertise": "site inspector",
+                    "mode": "inspect",
+                    "reasoning_model": "gemma",
+                }),
+                Principal("installation"),
+                SCOPES,
+            )
+            initial = created["result"]["snapshot"]
+            jpeg = _jpeg()
+            attached = await runtime.handle(
+                _command("attach_evidence", "availability-evidence", initial["mission_id"], initial["revision"], {
+                    "jpeg_b64": base64.b64encode(jpeg).decode(),
+                    "sha256": hashlib.sha256(jpeg).hexdigest(),
+                }),
+                Principal("installation"),
+                SCOPES,
+            )
+            snapshot = attached["result"]["snapshot"]
+            mission_id = snapshot["mission_id"]
+            evidence_id = attached["result"]["evidence_id"]
+            await runtime.handle(
+                _command("resume", "availability-resume", mission_id, snapshot["revision"]),
+                Principal("installation"),
+                SCOPES,
+            )
+            completed = await _wait_for(lambda: (
+                current if (current := store.get_mission(mission_id))["state"] == "completed" else None
+            ))
+            finding_id = "legacy-supported-finding"
+
+            def seed_supported_finding(tx):
+                current = tx.get_mission(mission_id)
+                updated = dict(current)
+                updated["findings"] = [{
+                    "finding_id": finding_id,
+                    "claim": "A container is present",
+                    "claim_type": "visual_hypothesis",
+                    "status": "supported",
+                    "reason": "legacy_supported",
+                    "evidence_id": evidence_id,
+                    "evidence_refs": [evidence_id],
+                    "text_refs": [],
+                    "item_refs": [],
+                    "items": [],
+                    "localization": None,
+                    "source_binding": None,
+                    "frame_id": None,
+                    "brief_version": current["brief_version"],
+                    "brief_sha256": current["brief_sha256"],
+                    "model_provenance": {},
+                    "review": None,
+                }]
+                updated["cycle_history"] = [dict(current["cycle_history"][0], finding_ids=[finding_id])]
+                return tx.update_mission(
+                    updated,
+                    expected_revision=int(current["revision"]),
+                    updated_at_ms=int(current["updated_at_ms"]) + 1,
+                )
+
+            store.transact(seed_supported_finding)
+            completed = store.get_mission(mission_id)
+            reviewed = await runtime.handle(
+                _command("review_finding", "availability-review", mission_id, completed["revision"], {
+                    "finding_id": finding_id,
+                    "decision": "accepted",
+                    "note": "reviewed before media loss",
+                }),
+                Principal("reviewer"),
+                SCOPES,
+            )
+            assert reviewed["ok"], reviewed
+            before_damage = store.get_mission(mission_id)
+            original_hash = store.evidence_refs(mission_id)[0]["sha256"]
+            original_review = before_damage["findings"][0]["review"]
+            publication_offset = len(publication_threads)
+            path = store.evidence_root / f"{evidence_id}.jpg"
+            if damage == "missing":
+                path.unlink()
+            else:
+                path.write_bytes(b"x" * len(jpeg))
+
+            if first_read == "legacy":
+                legacy = await runtime.handle(
+                    _command("get", "availability-legacy-get", mission_id),
+                    Principal("reader"),
+                    SCOPES,
+                )
+                assert legacy["ok"], legacy
+            bundle = await runtime.get_record_bundle(mission_id)
+            evidence = next(record for record in bundle if isinstance(record, EvidenceRecord))
+            assert evidence.availability == availability
+            assert evidence.availability_reason == availability
+            if first_read == "typed":
+                assert publication_threads[publication_offset] == event_loop_thread
+            rows = store.read_mission_record_rows(mission_id)
+            marked_snapshot = rows["snapshot"]
+            persisted = next(row for row in rows["evidence_rows"] if row["evidence_id"] == evidence_id)
+            assert persisted["available"] is False
+            assert persisted["availability_reason"] == availability
+            assert persisted["sha256"] == original_hash
+            assert rows["snapshot"]["findings"][0]["review"] == original_review
+            assert rows["snapshot"]["findings"][0]["status"] == "unresolved"
+            assert rows["snapshot"]["findings"][0]["reason"] == "evidence_unavailable"
+            assert any(
+                row["record"].get("evidence_availability", {}).get(evidence_id) == {
+                    "available": False,
+                    "availability_reason": availability,
+                }
+                for row in rows["tool_rows"]
+            )
+
+            legacy = await runtime.handle(
+                _command("get", "availability-repeat-get", mission_id),
+                Principal("reader"),
+                SCOPES,
+            )
+            assert legacy["ok"], legacy
+            repeated = await runtime.get_record_bundle(mission_id)
+            repeated_evidence = next(
+                record for record in repeated if isinstance(record, EvidenceRecord)
+            )
+            assert repeated_evidence.availability == availability
+            assert repeated_evidence.availability_reason == availability
+            unchanged = store.get_mission(mission_id)
+            assert (unchanged["revision"], unchanged["last_sequence"]) == (
+                marked_snapshot["revision"],
+                marked_snapshot["last_sequence"],
+            )
+
+            await runtime.close()
+            store.close()
+            runtime = None
+            store = None
+            store = MissionStore(tmp_path / "missions.sqlite3", tmp_path / "evidence")
+            runtime = MissionRuntime(
+                store,
+                _Planner(),
+                _Tools(),
+                lambda _binding: None,
+                _Watch(),
+                lambda _event: None,
+                qualified_models={"gemma": ["inspect"]},
+            )
+            recovered_bundle = await runtime.get_record_bundle(mission_id)
+            recovered_evidence = next(
+                record for record in recovered_bundle if isinstance(record, EvidenceRecord)
+            )
+            assert recovered_evidence.availability == availability
+            assert recovered_evidence.availability_reason == availability
+            recovered_snapshot = store.get_mission(mission_id)
+            assert (recovered_snapshot["revision"], recovered_snapshot["last_sequence"]) == (
+                marked_snapshot["revision"],
+                marked_snapshot["last_sequence"],
+            )
+        finally:
+            if runtime is not None:
+                await runtime.close()
+            if store is not None:
+                store.close()
 
     asyncio.run(scenario())
