@@ -302,6 +302,15 @@ def project_mission_records(
     mode = _text(data, "mode", "snapshot")
     if mode not in {"inspect", "watch"}:
         _fail("unsupported_mission_mode", "snapshot.mode")
+    current_generation = data.get("execution_generation")
+    if "execution_generation" in data and (
+        isinstance(current_generation, bool)
+        or not isinstance(current_generation, int)
+        or current_generation < 0
+    ):
+        _fail("invalid_execution_generation", "snapshot.execution_generation")
+    if "execution_generation" not in data:
+        current_generation = None
     if data.get("cycle_id") is not None:
         _fail("active_cycle_not_projectable", "snapshot.cycle_id")
 
@@ -317,8 +326,11 @@ def project_mission_records(
             _fail("duplicate_cycle_id", f"{path}.cycle_id")
         if cycle.get("outcome") != "completed":
             _fail("cycle_not_completed", f"{path}.outcome")
-        if isinstance(_required(cycle, "execution_generation", path), bool):
+        generation = _required(cycle, "execution_generation", path)
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation < 0:
             _fail("invalid_execution_generation", f"{path}.execution_generation")
+        if current_generation is not None and generation > current_generation:
+            _fail("cycle_generation_ahead_of_snapshot", f"{path}.execution_generation")
         input_ids[cycle_id] = _input_evidence_id(cycle, path)
         cycles[cycle_id] = cycle
 
@@ -371,6 +383,10 @@ def project_mission_records(
             _fail("cycle_input_evidence_missing", evidence_id)
         results = tuple(tools_by_cycle[cycle_id])
         status, outcome, error_code = _outcome(results, f"{path}.tool_results")
+        generation = cycle["execution_generation"]
+        # Retained Watch results from an older execution cannot imply current support.
+        if current_generation is not None and generation < current_generation:
+            status = "stale"
         referenced_ids = [evidence_id]
         for result in results:
             if result.input_evidence_id != evidence_id:

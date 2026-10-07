@@ -215,6 +215,76 @@ def _inspect_planner(*, use_ocr=False):
     return _Planner(choose)
 
 
+def _generation_projection_rows(current_generation=4, cycle_generation=3):
+    mission_id = "generation-projection"
+    cycle_id = "cycle-generation-1"
+    evidence_id = "evidence-generation-1"
+    snapshot = {
+        "mission_id": mission_id,
+        "mode": "inspect",
+        "execution_generation": current_generation,
+        "cycle_history": [{
+            "cycle_id": cycle_id,
+            "execution_generation": cycle_generation,
+            "outcome": "completed",
+            "evidence_refs": [{"evidence_id": evidence_id}],
+            "finding_ids": [],
+        }],
+        "findings": [],
+    }
+    evidence_rows = [{
+        "mission_id": mission_id,
+        "evidence_id": evidence_id,
+        "sha256": "a" * 64,
+        "width": 32,
+        "height": 24,
+        "kind": "original",
+        "bytes": 1,
+        "available": True,
+    }]
+    tool_rows = [{
+        "mission_id": mission_id,
+        "cycle_id": cycle_id,
+        "execution_generation": cycle_generation,
+        "is_current": True,
+        "record": {
+            "tool_result_id": "tool-generation-1",
+            "tool": "detect_objects",
+            "status": "ok",
+            "input_evidence_id": evidence_id,
+            "items": [],
+            "evidence_ids": [],
+            "text": "",
+        },
+    }]
+    return snapshot, evidence_rows, tool_rows
+
+
+@pytest.mark.parametrize("current_generation", [True, "4", -1])
+def test_present_malformed_snapshot_generation_is_rejected(current_generation):
+    snapshot, evidence_rows, tool_rows = _generation_projection_rows(current_generation)
+
+    with pytest.raises(MissionRecordProjectionError, match="invalid_execution_generation"):
+        project_mission_records(snapshot, evidence_rows, tool_rows)
+
+
+def test_cycle_generation_ahead_of_snapshot_is_rejected_as_invalid_history():
+    snapshot, evidence_rows, tool_rows = _generation_projection_rows(current_generation=2, cycle_generation=3)
+
+    with pytest.raises(MissionRecordProjectionError, match="cycle_generation_ahead_of_snapshot"):
+        project_mission_records(snapshot, evidence_rows, tool_rows)
+
+
+def test_absent_snapshot_generation_preserves_legacy_projection_behavior():
+    snapshot, evidence_rows, tool_rows = _generation_projection_rows(current_generation=4)
+    snapshot.pop("execution_generation")
+
+    records = project_mission_records(snapshot, evidence_rows, tool_rows)
+
+    observation = next(record for record in records if isinstance(record, Observation))
+    assert (observation.status, observation.outcome) == ("observed", "empty")
+
+
 @pytest.mark.parametrize(
     ("tool_mode", "tool_status", "observation_status", "observation_outcome", "error_code", "append_empty"),
     [
