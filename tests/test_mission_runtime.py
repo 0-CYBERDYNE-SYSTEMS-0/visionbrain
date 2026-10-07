@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import gc
 import hashlib
 import json
 import threading
@@ -1941,6 +1942,214 @@ def test_shutdown_wait_is_bounded_without_closing_planner_before_native_return(t
         finally:
             release.set()
             await runtime.close()
+
+    asyncio.run(scenario())
+
+
+def test_native_lane_is_single_worker_and_rejects_saturation(tmp_path):
+    from visionbrain import mission_runtime as runtime_module
+
+    entered, release = threading.Event(), threading.Event()
+    active = 0
+    peak_active = 0
+    active_lock = threading.Lock()
+
+    def blocked_native_call():
+        nonlocal active, peak_active
+        with active_lock:
+            active += 1
+            peak_active = max(peak_active, active)
+        entered.set()
+        release.wait(2)
+        with active_lock:
+            active -= 1
+        return "finished"
+
+    async def scenario():
+        runtime, store, _events = _new_runtime(tmp_path, _Planner(lambda _context: None), _Tools())
+        first = asyncio.create_task(runtime._native_call(blocked_native_call))
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            assert len(runtime._native_calls) == 1
+            with pytest.raises(runtime_module._NativeLaneBusy, match="native inference lane is busy"):
+                await runtime._native_call(lambda: "must not run")
+            assert peak_active == 1
+            assert runtime._native_lane_active
+            release.set()
+            assert await first == "finished"
+            assert not runtime._native_lane_active
+            assert peak_active == 1
+        finally:
+            release.set()
+            if not first.done():
+                await asyncio.gather(first, return_exceptions=True)
+            await runtime.close()
+            store.close()
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_native_call_keeps_single_lane_until_worker_returns(tmp_path):
+    from visionbrain import mission_runtime as runtime_module
+
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked_native_call():
+        entered.set()
+        release.wait(2)
+        return "finished"
+
+    async def scenario():
+        runtime, store, _events = _new_runtime(tmp_path, _Planner(lambda _context: None), _Tools())
+        accepted = asyncio.create_task(runtime._native_call(blocked_native_call))
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            accepted.cancel()
+            await asyncio.sleep(0)
+            assert not accepted.done()
+            accepted.cancel()
+            await asyncio.sleep(0)
+            assert not accepted.done()
+            assert runtime._native_lane_active
+            with pytest.raises(runtime_module._NativeLaneBusy):
+                await runtime._native_call(lambda: "must not run")
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await accepted
+            assert not runtime._native_lane_active
+        finally:
+            release.set()
+            if not accepted.done():
+                await asyncio.gather(accepted, return_exceptions=True)
+            await runtime.close()
+            store.close()
+
+    asyncio.run(scenario())
+
+
+def test_native_failure_is_consumed_when_cancellation_races_completion(tmp_path):
+    from visionbrain import mission_runtime as runtime_module
+
+    entered, release = threading.Event(), threading.Event()
+
+    def failing_native_call():
+        entered.set()
+        release.wait(2)
+        raise ValueError("native failed")
+
+    async def scenario():
+        runtime, store, _events = _new_runtime(tmp_path, _Planner(lambda _context: None), _Tools())
+        loop = asyncio.get_running_loop()
+        previous_exception_handler = loop.get_exception_handler()
+        exception_contexts = []
+
+        def capture_exception(_loop, context):
+            exception_contexts.append(context)
+
+        loop.set_exception_handler(capture_exception)
+        real_wait = runtime_module.asyncio.wait
+        accepted = None
+
+        async def wait_then_cancel(futures, *, timeout=None):
+            result = await real_wait(futures, timeout=timeout)
+            current = asyncio.current_task()
+            assert current is not None
+            current.cancel()
+            await asyncio.sleep(0)
+            return result
+
+        try:
+            try:
+                runtime_module.asyncio.wait = wait_then_cancel
+                accepted = asyncio.create_task(runtime._native_call(failing_native_call))
+                assert await asyncio.to_thread(entered.wait, 1)
+                release.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await accepted
+            finally:
+                runtime_module.asyncio.wait = real_wait
+                release.set()
+                if accepted is not None and not accepted.done():
+                    await asyncio.gather(accepted, return_exceptions=True)
+                await runtime.close()
+                store.close()
+
+            gc.collect()
+            await asyncio.sleep(0)
+            assert not any(
+                "Future exception was never retrieved" in context.get("message", "")
+                for context in exception_contexts
+            )
+        finally:
+            runtime_module.asyncio.wait = real_wait
+            loop.set_exception_handler(previous_exception_handler)
+
+    asyncio.run(scenario())
+
+
+def test_native_lane_saturation_pauses_mission_with_explicit_reason(tmp_path, monkeypatch):
+    from visionbrain import mission_runtime as runtime_module
+
+    async def scenario():
+        planner = _Planner(lambda _context: None)
+        runtime, store, _events = _new_runtime(tmp_path, planner, _Tools())
+
+        async def saturated(*_args, **_kwargs):
+            raise runtime_module._NativeLaneBusy("native inference lane is busy")
+
+        monkeypatch.setattr(runtime, "_native_call", saturated)
+        try:
+            created = await _create(runtime)
+            attached = await _attach(runtime, created["result"]["snapshot"])
+            snapshot = attached["result"]["snapshot"]
+            await _resume(runtime, snapshot)
+            paused = await _wait_for(
+                lambda: (
+                    store.get_mission(snapshot["mission_id"])
+                    if store.get_mission(snapshot["mission_id"])["state"] == "paused"
+                    else None
+                )
+            )
+            assert paused["reason"] == "native_lane_busy"
+            assert paused["state"] == "paused"
+            assert planner.calls == 0
+        finally:
+            await runtime.close()
+            store.close()
+
+    asyncio.run(scenario())
+
+
+def test_runtime_close_keeps_native_executor_until_accepted_call_drains(tmp_path, monkeypatch):
+    from visionbrain import mission_runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "SHUTDOWN_DRAIN_SECONDS", 0.03)
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked_native_call():
+        entered.set()
+        release.wait(2)
+        return "finished"
+
+    async def scenario():
+        runtime, store, _events = _new_runtime(tmp_path, _Planner(lambda _context: None), _Tools())
+        accepted = asyncio.create_task(runtime._native_call(blocked_native_call))
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            report = await runtime.close()
+            assert report == {"drained": False, "pending_missions": 0, "pending_native_calls": 1}
+            assert not runtime._native_executor_closed
+            release.set()
+            assert await accepted == "finished"
+            await _wait_for(lambda: runtime._native_executor_closed)
+            assert runtime._native_executor_closed
+            assert not runtime._native_calls
+        finally:
+            release.set()
+            if not accepted.done():
+                await asyncio.gather(accepted, return_exceptions=True)
+            await runtime.close()
+            store.close()
 
     asyncio.run(scenario())
 

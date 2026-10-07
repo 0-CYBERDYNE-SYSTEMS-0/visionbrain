@@ -10,11 +10,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextvars
 import hashlib
 import json
 import math
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Collection, Mapping
 from dataclasses import asdict, is_dataclass
 from typing import Any
@@ -127,6 +129,14 @@ class _CommandError(Exception):
 
 class _NativeDeadlineExpired(Exception):
     """Native call drained after its mission budget and must not be committed."""
+
+
+class _NativeLaneBusy(Exception):
+    """The runtime's single native execution slot is already occupied."""
+
+
+class _NativeLaneClosed(Exception):
+    """The runtime is closing and cannot accept more native work."""
 
 
 def _jsonable(value: Any) -> Any:
@@ -380,7 +390,10 @@ class MissionRuntime:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._task_interrupts: dict[str, asyncio.Event] = {}
         self._pending_generations: dict[str, int] = {}
-        self._native_calls: set[asyncio.Task[Any]] = set()
+        self._native_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mission-native")
+        self._native_executor_closed = False
+        self._native_lane_active = False
+        self._native_calls: set[asyncio.Future[Any]] = set()
         self._closeup_timers: dict[str, asyncio.Task[None]] = {}
         self._lease_timers: dict[str, asyncio.Task[None]] = {}
         self._close_cleanup: asyncio.Task[None] | None = None
@@ -1735,9 +1748,21 @@ class MissionRuntime:
                 continue
 
     async def _native_call(self, function, *args, mission_id: str | None = None, deadline: float | None = None, on_deadline=None):
-        task = asyncio.create_task(asyncio.to_thread(function, *args))
+        if self._closed or self._native_executor_closed:
+            raise _NativeLaneClosed("native inference lane is closed")
+        if self._native_lane_active:
+            raise _NativeLaneBusy("native inference lane is busy")
+        self._native_lane_active = True
+        try:
+            context = contextvars.copy_context()
+            task = asyncio.get_running_loop().run_in_executor(
+                self._native_executor, context.run, function, *args
+            )
+        except BaseException:
+            self._native_lane_active = False
+            raise
         self._native_calls.add(task)
-        task.add_done_callback(self._native_calls.discard)
+        task.add_done_callback(self._native_call_finished)
         try:
             timeout = None if deadline is None else max(0.0, deadline - self.clock.monotonic())
             done, _pending = await asyncio.wait({task}, timeout=timeout)
@@ -1751,9 +1776,33 @@ class MissionRuntime:
                 raise _NativeDeadlineExpired("native call exceeded the active mission deadline")
             return task.result()
         except asyncio.CancelledError:
-            # to_thread cannot stop native work. Drain it before this caller exits.
-            await asyncio.shield(task)
+            # Native work cannot be preempted. Keep the only lane slot until it returns.
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            try:
+                task.result()
+            except BaseException:
+                pass
             raise
+
+    def _native_call_finished(self, task: asyncio.Future[Any]) -> None:
+        self._native_calls.discard(task)
+        self._native_lane_active = False
+
+    def _shutdown_native_executor(self) -> None:
+        if self._native_executor_closed:
+            return
+        if any(not task.done() for task in self._native_calls):
+            raise RuntimeError("cannot close native executor before accepted work drains")
+        self._native_calls.clear()
+        self._native_lane_active = False
+        self._native_executor.shutdown(wait=True)
+        self._native_executor_closed = True
 
     def _start_task(self, mission_id: str, generation: int) -> None:
         prior = self._tasks.get(mission_id)
@@ -2053,6 +2102,15 @@ class MissionRuntime:
                 action, arguments = _validate_action(decision, allowed_tools=set(allowed), grounded_items=grounded)
             except _NativeDeadlineExpired:
                 return
+            except _NativeLaneBusy:
+                await self._set_waiting(
+                    mission_id,
+                    generation,
+                    "native_lane_busy",
+                    "Native inference is busy; mission paused until the lane is available.",
+                    state="paused",
+                )
+                return
             except Exception as exc:
                 if self._closed:
                     return
@@ -2164,6 +2222,15 @@ class MissionRuntime:
                 if not isinstance(result, ToolResult):
                     raise ValueError("tool adapter returned an untyped result")
             except _NativeDeadlineExpired:
+                return
+            except _NativeLaneBusy:
+                await self._set_waiting(
+                    mission_id,
+                    generation,
+                    "native_lane_busy",
+                    "Native inference is busy; mission paused until the lane is available.",
+                    state="paused",
+                )
                 return
             except Exception:
                 if self._closed:
@@ -3098,6 +3165,7 @@ class MissionRuntime:
                 if lease:
                     await self._release_lease(lease, "runtime_shutdown")
         if self._planner_closed:
+            self._shutdown_native_executor()
             return {"drained": True, "pending_missions": 0, "pending_native_calls": 0}
         pending = {task for task in (*self._tasks.values(), *self._native_calls) if not task.done()}
         if pending:
@@ -3110,13 +3178,19 @@ class MissionRuntime:
                 "pending_missions": sum(not task.done() for task in self._tasks.values()),
                 "pending_native_calls": sum(not task.done() for task in self._native_calls),
             }
-        await self._close_planner()
+        try:
+            await self._close_planner()
+        finally:
+            self._shutdown_native_executor()
         return {"drained": True, "pending_missions": 0, "pending_native_calls": 0}
 
     async def _close_after_drain(self) -> None:
         while any(not task.done() for task in (*self._tasks.values(), *self._native_calls)):
             await asyncio.sleep(0.05)
-        await self._close_planner()
+        try:
+            await self._close_planner()
+        finally:
+            self._shutdown_native_executor()
 
     async def _close_planner(self) -> None:
         async with self._planner_close_lock:
