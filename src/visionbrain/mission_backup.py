@@ -33,23 +33,41 @@ class MissionBackupError(MissionStoreError):
     """The backup is invalid, unsafe, corrupt, or cannot be published."""
 
 
+class MissionBackupDurabilityUnconfirmed(MissionBackupError):
+    """Publication succeeded, but syncing its parent directory failed."""
+
+    def __init__(self, operation: str, published_path: Path, cause: OSError) -> None:
+        self.operation = operation
+        self.published_path = published_path
+        super().__init__(
+            f"{operation} published at {published_path}, but parent-directory "
+            f"fsync failed; durability is unconfirmed: {cause}"
+        )
+
+
 def backup_mission_store(store: Any, destination: str | Path) -> Path:
     """Create a new offline backup while holding the store's mutation lock."""
     target = _new_destination(destination)
     _reject_overlap(target, _store_roots(store))
-    stage = _new_stage(target, "backup")
+    stage: Path | None = None
     try:
         with store._lock:
+            if store._connection.in_transaction:
+                raise MissionBackupError("cannot back up during an active store transaction")
+            stage = _new_stage(target, "backup")
             _create_backup_locked(store, stage)
         _publish_no_replace(stage, target)
-        _fsync_directory(target.parent)
+        try:
+            _fsync_directory(target.parent)
+        except OSError as exc:
+            raise MissionBackupDurabilityUnconfirmed("backup", target, exc) from exc
         return target
     except MissionBackupError:
         raise
     except Exception as exc:
         raise MissionBackupError(f"backup failed: {exc}") from exc
     finally:
-        if stage.exists():
+        if stage is not None and stage.exists():
             shutil.rmtree(stage)
 
 
@@ -67,7 +85,10 @@ def restore_mission_store(
         _validate_bundle_layout(backup_root, manifest)
         _copy_and_validate_restore(backup_root, stage, target, manifest)
         _publish_no_replace(stage, target)
-        _fsync_directory(target.parent)
+        try:
+            _fsync_directory(target.parent)
+        except OSError as exc:
+            raise MissionBackupDurabilityUnconfirmed("restore", target, exc) from exc
         return target
     except MissionBackupError:
         raise

@@ -2,7 +2,10 @@
 
 import json
 import shutil
+import subprocess
+import sys
 import threading
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -12,6 +15,7 @@ from visionbrain.mission_backup import (
     MAX_MANIFEST_BYTES,
     MANIFEST_NAME,
     MissionBackupError,
+    MissionBackupDurabilityUnconfirmed,
     restore_mission_store,
 )
 from visionbrain.mission_store import MissionStore
@@ -131,6 +135,135 @@ def test_backup_restore_preserves_wal_records_pins_and_independent_media(tmp_pat
         ).fetchone()[0] == evidence["evidence_id"]
     finally:
         restored.close()
+
+
+def test_backup_inside_store_transaction_fails_fast_and_rolls_back(tmp_path):
+    source = tmp_path / "source"
+    target = tmp_path / "backup"
+    core_src = Path(__file__).resolve().parents[1] / "src"
+    script = r'''
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[3])
+from visionbrain.mission_backup import MissionBackupError
+from visionbrain.mission_store import MissionStore
+source, target = Path(sys.argv[1]), Path(sys.argv[2])
+store = MissionStore(source / "missions.sqlite3", source / "evidence")
+try:
+    def operation(tx):
+        tx.insert_mission({"mission_id": "rolled-back", "revision": 1,
+            "state": "created", "updated_at_ms": 1, "last_sequence": 0,
+            "evidence": []})
+        store.backup_to(target)
+    try:
+        store.transact(operation)
+    except MissionBackupError as exc:
+        result = {"error": str(exc), "mission": store.get_mission("rolled-back"),
+            "target_exists": target.exists(),
+            "stages": [str(path) for path in target.parent.glob(
+                f".{target.name}.backup-*")]}
+        print(json.dumps(result))
+    else:
+        raise SystemExit("backup unexpectedly succeeded inside transaction")
+finally:
+    store.close()
+'''
+    # Keep the regression itself bounded: the old SQLite backup call could hang.
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(source), str(target), str(core_src)],
+        capture_output=True,
+        text=True,
+        timeout=3,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    outcome = json.loads(result.stdout)
+    assert "active store transaction" in outcome["error"]
+    assert outcome["mission"] is None
+    assert outcome["target_exists"] is False
+    assert outcome["stages"] == []
+
+
+def test_backup_reports_published_path_when_parent_fsync_fails(tmp_path, monkeypatch):
+    import visionbrain.mission_backup as backup_module
+
+    source = tmp_path / "source"
+    target = tmp_path / "backup"
+    restored_root = tmp_path / "verified-restore"
+    store = MissionStore(source / "missions.sqlite3", source / "evidence")
+    _seed_store(store, pin=False)
+    original_fsync = backup_module._fsync_directory
+
+    def fail_parent_fsync(path):
+        if path == tmp_path:
+            raise OSError("injected parent fsync failure")
+        original_fsync(path)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(backup_module, "_fsync_directory", fail_parent_fsync)
+            with pytest.raises(MissionBackupDurabilityUnconfirmed) as caught:
+                store.backup_to(target)
+        assert caught.value.operation == "backup"
+        assert caught.value.published_path == target
+        assert "durability is unconfirmed" in str(caught.value)
+        assert f"published at {target}" in str(caught.value)
+        assert target.is_dir()
+        assert not list(tmp_path.glob(".backup.backup-*"))
+
+        with pytest.raises(MissionBackupError, match="already exists"):
+            store.backup_to(target)
+        restore_mission_store(target, restored_root)
+        restored = MissionStore(restored_root / "missions.sqlite3", restored_root / "evidence")
+        try:
+            assert restored.get_mission("mission-1") is not None
+            restored.check_evidence_file(restored.evidence_refs("mission-1")[0]["evidence_id"])
+        finally:
+            restored.close()
+    finally:
+        store.close()
+
+
+def test_restore_reports_published_path_when_parent_fsync_fails(tmp_path, monkeypatch):
+    import visionbrain.mission_backup as backup_module
+
+    source = tmp_path / "source"
+    backup = tmp_path / "backup"
+    target = tmp_path / "restored"
+    store = MissionStore(source / "missions.sqlite3", source / "evidence")
+    _seed_store(store, pin=False)
+    try:
+        store.backup_to(backup)
+    finally:
+        store.close()
+
+    original_fsync = backup_module._fsync_directory
+
+    def fail_parent_fsync(path):
+        if path == tmp_path:
+            raise OSError("injected parent fsync failure")
+        original_fsync(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(backup_module, "_fsync_directory", fail_parent_fsync)
+        with pytest.raises(MissionBackupDurabilityUnconfirmed) as caught:
+            restore_mission_store(backup, target)
+    assert caught.value.operation == "restore"
+    assert caught.value.published_path == target
+    assert "durability is unconfirmed" in str(caught.value)
+    assert f"published at {target}" in str(caught.value)
+    assert target.is_dir()
+    assert not list(tmp_path.glob(".restored.restore-*"))
+
+    restored = MissionStore(target / "missions.sqlite3", target / "evidence")
+    try:
+        assert restored.get_mission("mission-1") is not None
+        restored.check_evidence_file(restored.evidence_refs("mission-1")[0]["evidence_id"])
+    finally:
+        restored.close()
+    with pytest.raises(MissionBackupError, match="already exists"):
+        restore_mission_store(backup, target)
 
 
 def test_unavailable_evidence_tombstone_survives_backup_restore(tmp_path):
