@@ -280,10 +280,113 @@ def test_brief_update_after_source_loss_reports_paused_and_never_restarts_on_fra
 
             source.available = True
             source.epoch = "42"
+            await runtime.source_changed("scout-1", "42", available=True)
             await asyncio.sleep(0.03)
             after_later_frame = store.get_mission(snapshot["mission_id"])
             assert after_later_frame["state"] == "paused"
             assert planner.calls == calls_before_update
+        finally:
+            await runtime.close()
+            store.close()
+
+    asyncio.run(scenario())
+
+
+def test_watch_source_epoch_change_requires_explicit_current_epoch_resume(tmp_path, monkeypatch):
+    from visionbrain import mission_runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "WATCH_MIN_INTERVAL_SECONDS", 60.0)
+
+    async def scenario():
+        source, planner, watch = _Source(), _Planner(), _Watch()
+        runtime, store, _planner = _runtime(tmp_path, source, planner, watch)
+
+        async def resume(snapshot, request_id, source_epoch):
+            return await runtime.handle(
+                _command(
+                    "resume",
+                    request_id=request_id,
+                    mission_id=snapshot["mission_id"],
+                    revision=snapshot["revision"],
+                    args={"source_binding": {"source_id": "scout-1", "source_epoch": source_epoch}},
+                ),
+                Principal("installation"),
+                SCOPES,
+                integrated=True,
+            )
+
+        try:
+            prepared = await _prepare(runtime)
+            snapshot = prepared["result"]["snapshot"]
+            mission_id = snapshot["mission_id"]
+            source.available = True
+            activated = await runtime.handle(
+                _command(
+                    "activate",
+                    request_id="activate-watch-epoch-41",
+                    mission_id=mission_id,
+                    revision=snapshot["revision"],
+                    args={"source_binding": {"source_id": "scout-1", "source_epoch": "41"}},
+                ),
+                Principal("installation"),
+                SCOPES,
+                integrated=True,
+            )
+            assert activated["ok"]
+            await _wait_for(lambda: planner.calls == 1 and watch.active is not None)
+            await _wait_for(
+                lambda: sum(
+                    event["kind"] == "cycle_finished"
+                    for event in store.events_since(mission_id, 0)["events"]
+                ) == 1
+            )
+
+            await runtime.source_changed("scout-1", None, available=False)
+            paused = store.get_mission(mission_id)
+            assert paused["state"] == "paused"
+            assert paused["source_binding"] == {"source_id": "scout-1", "source_epoch": "41"}
+
+            source.available = True
+            source.epoch = "42"
+            await runtime.source_changed("scout-1", "42", available=True)
+            await asyncio.sleep(0.03)
+            assert store.get_mission(mission_id)["state"] == "paused"
+            assert planner.calls == 1
+
+            stale_resume = await resume(
+                paused,
+                "resume-stale-epoch-41",
+                "41",
+            )
+            assert not stale_resume["ok"]
+            assert stale_resume["error"]["code"] == "source_unavailable"
+            assert store.get_mission(mission_id)["state"] == "paused"
+            assert planner.calls == 1
+
+            current_resume = await resume(
+                store.get_mission(mission_id),
+                "resume-current-epoch-42",
+                "42",
+            )
+            assert current_resume["ok"]
+            assert current_resume["result"]["snapshot"]["source_binding"] == {
+                "source_id": "scout-1",
+                "source_epoch": "42",
+            }
+            await _wait_for(lambda: planner.calls == 2)
+            await _wait_for(
+                lambda: sum(
+                    event["kind"] == "cycle_finished"
+                    for event in store.events_since(mission_id, 0)["events"]
+                ) == 2
+            )
+            await asyncio.sleep(0.03)
+            assert planner.calls == 2
+            assert sum(
+                event["kind"] == "cycle_finished"
+                for event in store.events_since(mission_id, 0)["events"]
+            ) == 2
+            assert watch.active.source_binding == SourceBinding("scout-1", "42")
         finally:
             await runtime.close()
             store.close()
