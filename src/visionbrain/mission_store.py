@@ -856,6 +856,66 @@ class MissionStore:
             ).fetchone()
             return json.loads(row[0]) if row else None
 
+    def read_mission_record_rows(self, mission_id: str) -> dict[str, Any] | None:
+        """Read one coherent metadata snapshot and the complete rows used by the record projector.
+
+        Evidence rows contain decoded persisted metadata plus their authoritative
+        SQL ``mission_id``. Tool rows contain the SQL envelope and nested record.
+        Availability is persisted metadata; this method does not inspect media.
+        """
+        with self._lock:
+            if self._connection.in_transaction:
+                raise MissionStoreError(
+                    "cannot read mission record rows inside an active store transaction"
+                )
+            try:
+                self._connection.execute("BEGIN")
+                mission = self._connection.execute(
+                    "SELECT snapshot_json FROM missions WHERE mission_id = ?", (mission_id,)
+                ).fetchone()
+                if mission is None:
+                    self._connection.commit()
+                    return None
+
+                evidence_rows = self._connection.execute(
+                    "SELECT mission_id, metadata_json, available FROM evidence "
+                    "WHERE mission_id = ? ORDER BY created_at_ms, evidence_id",
+                    (mission_id,),
+                ).fetchall()
+                tool_rows = self._connection.execute(
+                    "SELECT mission_id, cycle_id, execution_generation, is_current, record_json "
+                    "FROM tool_records WHERE mission_id = ? ORDER BY created_at_ms, record_id",
+                    (mission_id,),
+                ).fetchall()
+                result = {
+                    "snapshot": json.loads(mission[0]),
+                    "evidence_rows": [],
+                    "tool_rows": [],
+                }
+                for row in evidence_rows:
+                    evidence = dict(json.loads(row[1]))
+                    evidence["mission_id"] = str(row[0])
+                    evidence["available"] = bool(row[2])
+                    if not evidence["available"]:
+                        evidence.setdefault("availability_reason", "rolled_off")
+                    result["evidence_rows"].append(evidence)
+                for row in tool_rows:
+                    result["tool_rows"].append(
+                        {
+                            "mission_id": str(row[0]),
+                            "cycle_id": str(row[1]),
+                            "execution_generation": int(row[2]),
+                            "is_current": bool(row[3]),
+                            "record": json.loads(row[4]),
+                        }
+                    )
+                self._connection.commit()
+                return result
+            except BaseException:
+                if self._connection.in_transaction:
+                    self._connection.rollback()
+                raise
+
     def list_missions(self, *, limit: int = 50, before_updated_at_ms: int | None = None) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit), MAX_MISSIONS_PAGE))
         with self._lock:
