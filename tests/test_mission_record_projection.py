@@ -358,13 +358,48 @@ def test_inspect_ocr_projection_preserves_explicit_result_and_unknown_optional_t
             with pytest.raises(MissionRecordProjectionError, match="tool_mission_mismatch"):
                 project_mission_records(raw_snapshot, evidence_rows, cross_mission_tool)
             text_finding_snapshot = copy.deepcopy(raw_snapshot)
+            text_finding_id = "projected-text-finding"
+            cited_result_id = next(
+                row["record"]["tool_result_id"]
+                for row in tool_rows
+                if row["record"]["tool"] == "read_text"
+            )
+            input_evidence_id = text_finding_snapshot["cycle_history"][0]["evidence_refs"][0]["evidence_id"]
             text_finding_snapshot["findings"].append({
-                "finding_id": "unsupported-text-finding",
+                "finding_id": text_finding_id,
+                "claim": "PUMP-27",
                 "claim_type": "text_read",
-                "text_refs": [tool_rows[-1]["record"]["tool_result_id"]],
+                "status": "supported",
+                "reason": "exact_ocr_transcription_only",
+                "evidence_id": input_evidence_id,
+                "evidence_refs": [input_evidence_id],
+                "text_refs": [cited_result_id],
+                "item_refs": [],
+                "items": [],
+                "localization": None,
+                "source_binding": None,
+                "brief_version": 1,
+                "brief_sha256": None,
+                "model_provenance": {},
+                "review": None,
             })
-            with pytest.raises(MissionRecordProjectionError, match="text_finding_reference_not_representable"):
-                project_mission_records(text_finding_snapshot, evidence_rows, tool_rows)
+            text_finding_snapshot["cycle_history"][0]["finding_ids"].append(text_finding_id)
+            text_records = project_mission_records(text_finding_snapshot, evidence_rows, tool_rows)
+            projected_finding = next(
+                record for record in text_records
+                if isinstance(record, Finding) and record.finding_id == text_finding_id
+            )
+            assert projected_finding.record_schema_version == 2
+            assert projected_finding.text_refs == (cited_result_id,)
+            assert projected_finding.claim_type == "text_read"
+            assert projected_finding.visual_state == "supported"
+            assert projected_finding.reason == "exact_ocr_transcription_only"
+            projected_observation = next(record for record in text_records if isinstance(record, Observation))
+            assert next(result for result in projected_observation.tool_results if result.tool_result_id == cited_result_id).text == "PUMP-27"
+            missing_text_refs = copy.deepcopy(text_finding_snapshot)
+            missing_text_refs["findings"][-1]["text_refs"] = []
+            with pytest.raises(MissionRecordProjectionError, match="text_finding_citations_missing"):
+                project_mission_records(missing_text_refs, evidence_rows, tool_rows)
             observation = next(record for record in records if isinstance(record, Observation))
             assert observation.status == "observed"
             assert observation.outcome == "nonempty"

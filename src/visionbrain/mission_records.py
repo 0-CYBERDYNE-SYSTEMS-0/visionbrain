@@ -9,6 +9,7 @@ from typing import Any, Literal, Mapping, Sequence, TypeAlias
 
 from .mission_contracts import (
     MAX_DECODED_JPEG_BYTES,
+    MAX_FINDING_ITEMS,
     MAX_POLYGON_POINTS,
     EvidenceRef,
     GeometryItem,
@@ -19,6 +20,7 @@ from .mission_contracts import (
 )
 
 RECORD_SCHEMA_VERSION = 1
+FINDING_TEXT_CITATION_SCHEMA_VERSION = 2
 
 ObservationState: TypeAlias = Literal[
     "observed", "held", "stale", "failed", "unavailable", "capture-time-unknown"
@@ -144,6 +146,7 @@ class Finding:
     model_provenance: tuple[tuple[str, ModelValue], ...] = ()
     review: Review | None = None
     record_schema_version: int = RECORD_SCHEMA_VERSION
+    text_refs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -263,6 +266,19 @@ def _strings(values: Any, path: str) -> None:
         seen.add(value)
 
 
+def _text_references(values: Any, path: str) -> None:
+    if not isinstance(values, tuple):
+        _fail("invalid_sequence", path)
+    if len(values) > MAX_FINDING_ITEMS:
+        _fail("too_many_text_references", path)
+    seen: set[str] = set()
+    for index, value in enumerate(values):
+        _text(value, f"{path}[{index}]", limit=128)
+        if value in seen:
+            _fail("duplicate_id", f"{path}[{index}]")
+        seen.add(value)
+
+
 def _model_values(values: Any, path: str) -> None:
     if not isinstance(values, tuple):
         _fail("invalid_sequence", path)
@@ -373,7 +389,12 @@ def validate_record(record: Record) -> Record:
     if type(record) not in _RECORD_NAMES:
         _fail("unsupported_record_type")
     _int(record.record_schema_version, "record_schema_version", minimum=1)
-    if record.record_schema_version != RECORD_SCHEMA_VERSION:
+    supported_versions = (
+        {RECORD_SCHEMA_VERSION, FINDING_TEXT_CITATION_SCHEMA_VERSION}
+        if type(record) is Finding
+        else {RECORD_SCHEMA_VERSION}
+    )
+    if record.record_schema_version not in supported_versions:
         _fail("unsupported_record_version", "record_schema_version")
 
     if isinstance(record, Observation):
@@ -505,6 +526,17 @@ def validate_record(record: Record) -> Record:
         _text(record.evidence_id, "evidence_id", limit=128)
         _strings(record.evidence_refs, "evidence_refs")
         _strings(record.observation_ids, "observation_ids")
+        if not isinstance(record.text_refs, tuple):
+            _fail("invalid_sequence", "text_refs")
+        if record.record_schema_version == RECORD_SCHEMA_VERSION:
+            if record.text_refs:
+                _fail("text_refs_require_record_version_2", "text_refs")
+        else:
+            _text_references(record.text_refs, "text_refs")
+            if record.claim_type == "text_read" and not record.text_refs:
+                _fail("missing_text_reference", "text_refs")
+            if record.claim_type != "text_read" and record.text_refs:
+                _fail("unexpected_text_reference", "text_refs")
         for index, pair in enumerate(record.item_refs):
             if not isinstance(pair, tuple) or len(pair) != 2:
                 _fail("invalid_item_reference", f"item_refs[{index}]")
@@ -614,7 +646,10 @@ def _plain(value: Any) -> Any:
 def record_to_dict(record: Record) -> dict[str, Any]:
     """Return the strict JSON-compatible representation of one record."""
     validate_record(record)
-    return _plain(record)
+    value = _plain(record)
+    if isinstance(record, Finding) and record.record_schema_version == RECORD_SCHEMA_VERSION:
+        value.pop("text_refs")
+    return value
 
 
 def serialize_record(record: Record) -> str:
@@ -766,6 +801,8 @@ def record_from_dict(value: Any) -> Record:
     if cls is None:
         _fail("unknown_record_type", "record_type")
     expected = {field.name for field in fields(cls)} | {"record_type"}
+    if cls is Finding and value.get("record_schema_version") != FINDING_TEXT_CITATION_SCHEMA_VERSION:
+        expected.discard("text_refs")
     data = _object(value, expected, "record")
     values = dict(data)
     values.pop("record_type")
@@ -787,6 +824,8 @@ def record_from_dict(value: Any) -> Record:
     elif cls is Finding:
         values["evidence_refs"] = _tuple_field(values, "evidence_refs", "evidence_refs")
         values["observation_ids"] = _tuple_field(values, "observation_ids", "observation_ids")
+        if "text_refs" in values:
+            values["text_refs"] = _tuple_field(values, "text_refs", "text_refs")
         values["item_refs"] = tuple(tuple(pair) if isinstance(pair, list) else pair for pair in _tuple_field(values, "item_refs", "item_refs"))
         raw_items = _tuple_field(values, "items", "items")
         values["items"] = tuple(_geometry_item_from_dict(item, f"items[{index}]") for index, item in enumerate(raw_items))
@@ -993,6 +1032,24 @@ def validate_record_bundle(
                 or finding.source_binding.source_epoch != observation.source_epoch
             ):
                 _fail("finding_tool_lineage_mismatch", f"finding:{finding.finding_id}")
+        for tool_result_id in finding.text_refs:
+            tool_entry = tool_outputs.get(tool_result_id)
+            if tool_entry is None:
+                _fail("missing_reference", f"finding.text_refs:{tool_result_id}")
+            observation, result = tool_entry
+            if observation.mission_id != finding.mission_id:
+                _fail("finding_tool_mission_mismatch", f"finding:{finding.finding_id}")
+            if observation.observation_id not in finding.observation_ids:
+                _fail("finding_tool_observation_mismatch", f"finding:{finding.finding_id}")
+            if finding.source_binding is not None and observation.source_id is not None and (
+                finding.source_binding.source_id != observation.source_id
+                or finding.source_binding.source_epoch != observation.source_epoch
+            ):
+                _fail("finding_tool_lineage_mismatch", f"finding:{finding.finding_id}")
+            if result.tool != "read_text":
+                _fail("finding_text_tool_mismatch", f"finding:{finding.finding_id}")
+            if result.status != "ok":
+                _fail("finding_text_tool_status_mismatch", f"finding:{finding.finding_id}")
         if finding.review is not None and finding.review.finding_id != finding.finding_id:
             _fail("review_finding_mismatch", "finding.review")
         if finding.localization is not None and finding.localization.evidence_id not in evidence_refs:

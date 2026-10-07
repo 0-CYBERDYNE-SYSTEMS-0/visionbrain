@@ -15,6 +15,7 @@ from .mission_contracts import (
 )
 from .mission_records import (
     EvidenceRecord,
+    FINDING_TEXT_CITATION_SCHEMA_VERSION,
     Finding,
     Localization,
     LocalizationStatement,
@@ -465,11 +466,21 @@ def project_mission_records(
         refs = raw.get("evidence_refs", ())
         if not isinstance(refs, (list, tuple)):
             _fail("expected_sequence", f"{path}.evidence_refs")
+        claim_type = _text(raw, "claim_type", path)
+        text_refs = raw.get("text_refs", ())
+        if not isinstance(text_refs, (list, tuple)):
+            _fail("expected_sequence", f"{path}.text_refs")
+        if claim_type == "text_read":
+            if not text_refs:
+                _fail("text_finding_citations_missing", f"{path}.text_refs")
+            record_schema_version = FINDING_TEXT_CITATION_SCHEMA_VERSION
+        elif text_refs:
+            _fail("text_refs_claim_type_mismatch", f"{path}.text_refs")
+        else:
+            record_schema_version = 1
         item_refs = raw.get("item_refs", ())
         if not isinstance(item_refs, (list, tuple)):
             _fail("expected_sequence", f"{path}.item_refs")
-        if raw.get("text_refs"):
-            _fail("text_finding_reference_not_representable", f"{path}.text_refs")
         visual_state = _text(raw, "status", path)
         if visual_state not in {"candidate", "supported", "unresolved"}:
             _fail("unsupported_visual_state", f"{path}.status")
@@ -477,11 +488,12 @@ def project_mission_records(
             finding_id=finding_id,
             mission_id=mission_id,
             claim=_text(raw, "claim", path),
-            claim_type=_text(raw, "claim_type", path),
+            claim_type=claim_type,
             visual_state=visual_state,
             reason=_text(raw, "reason", path),
             evidence_id=_text(raw, "evidence_id", path),
             evidence_refs=tuple(refs),
+            text_refs=tuple(text_refs),
             observation_ids=tuple(dict.fromkeys(observation_ids_by_finding[finding_id])),
             item_refs=tuple(
                 (_text(_object(item, f"{path}.item_refs[{item_index}]"), "tool_result_id", f"{path}.item_refs[{item_index}]"),
@@ -496,6 +508,7 @@ def project_mission_records(
             brief_sha256=raw.get("brief_sha256"),
             model_provenance=_model_provenance(raw.get("model_provenance", {}), f"{path}.model_provenance"),
             review=_review(raw.get("review"), finding_id, f"{path}.review"),
+            record_schema_version=record_schema_version,
         ))
 
     records: tuple[Record, ...] = tuple((*evidence_records, *observations, *findings))
