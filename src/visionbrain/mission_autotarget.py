@@ -2,7 +2,8 @@
 
 Import-safe: no model, network, or environment access happens at import time.
 Candidate generation reuses the planner's cached local VLM under the shared GPU
-lock. The Jev choice is a direct HTTPS call that runs outside that lock.
+lock. The Jev choice is a direct HTTPS call to the OpenRouter Decisions endpoint that
+runs outside that lock.
 """
 
 from __future__ import annotations
@@ -20,12 +21,14 @@ from typing import Any, Protocol
 
 from .mission_contracts import (
     AUTOTARGET_DECISION_MODEL,
+    AUTOTARGET_DECISION_MODEL_RESOLVED,
     AUTOTARGET_JEV_TIMEOUT_SECONDS,
     MAX_AUTOTARGET_CANDIDATES,
 )
 
-JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
-JEV_API_KEY_ENV = "TYPESAFE_API_KEY"
+JEV_ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
+JEV_API_KEY_ENV = "OPENROUTER_API_KEY"
+ACCEPTED_DECISION_MODELS = frozenset({AUTOTARGET_DECISION_MODEL, AUTOTARGET_DECISION_MODEL_RESOLVED})
 JEV_QUESTION_ID = "selection"
 NONE_OPTION = "none"
 AUTOTARGET_PROMPT_VERSION = "autotarget.v1"
@@ -98,11 +101,12 @@ class VisionResponse:
     error_code: str | None
     checkpoint: str | None
     model_key: str
+    error_message: str | None = None
 
 
 @dataclass(frozen=True)
 class JevChoice:
-    """Validated Jev selection for one cycle; confidence is decision confidence."""
+    """Validated Jev selection; confidence is decision confidence, model is the resolved version."""
 
     choice: str
     probabilities: Mapping[str, float]
@@ -131,7 +135,10 @@ def _schema_text(limit: int, *, required: bool) -> dict[str, Any]:
 
 
 def candidate_response_schema() -> dict[str, Any]:
-    """Return the JSON schema constraining one vision generation; bounds mirror the parser."""
+    """Return the vision schema; the scene branch fixes whether candidates are allowed.
+
+    Bounds mirror the parser. anyOf, not oneOf: llguidance rewrites oneOf only when provably equivalent.
+    """
     candidate = {
         "type": "object",
         "properties": {
@@ -144,10 +151,10 @@ def candidate_response_schema() -> dict[str, Any]:
         "required": sorted(_CANDIDATE_KEYS),
         "additionalProperties": False,
     }
-    return {
+    usable = {
         "type": "object",
         "properties": {
-            "scene_usable": {"type": "boolean"},
+            "scene_usable": {"const": True},
             "scene_uncertainty": _schema_text(MAX_CANDIDATE_TEXT_CHARS, required=False),
             "candidates": {
                 "type": "array",
@@ -158,6 +165,17 @@ def candidate_response_schema() -> dict[str, Any]:
         "required": sorted(_RESPONSE_KEYS),
         "additionalProperties": False,
     }
+    unusable = {
+        "type": "object",
+        "properties": {
+            "scene_usable": {"const": False},
+            "scene_uncertainty": _schema_text(MAX_CANDIDATE_TEXT_CHARS, required=False),
+            "candidates": {"type": "array", "maxItems": 0},
+        },
+        "required": sorted(_RESPONSE_KEYS),
+        "additionalProperties": False,
+    }
+    return {"type": "object", "anyOf": [usable, unusable]}
 
 
 def build_vision_prompt(expertise: str) -> str:
@@ -250,7 +268,7 @@ def parse_vision_response(raw: str, *, model_key: str, checkpoint: str | None) -
     try:
         proposal = parse_vision_proposal(raw)
     except AutotargetError as exc:
-        return VisionResponse(None, raw, exc.code, checkpoint, model_key)
+        return VisionResponse(None, raw, exc.code, checkpoint, model_key, str(exc))
     return VisionResponse(proposal, raw, None, checkpoint, model_key)
 
 
@@ -284,7 +302,11 @@ def build_choice_request(
 
 
 def build_choice_body(state: Mapping[str, Any], criteria: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the pinned-model systemone request with one choice question."""
+    """Return the OpenRouter Decisions body: requested model slug, state, and one choice question.
+
+    The question carries type "choice", instructions, and criteria. Criteria keys are the only
+    legal answers. No user, session, or trace identifier is sent.
+    """
     return {
         "state": dict(state),
         "model": AUTOTARGET_DECISION_MODEL,
@@ -307,10 +329,11 @@ def _unit_number(value: Any, code: str) -> float:
 
 
 def parse_choice_payload(payload: Any, options: frozenset[str]) -> JevChoice:
-    """Validate the answer for the pinned model, its options, and its distribution."""
+    """Validate the answer, its options, and its distribution; the model must be accepted."""
     code = "jev_invalid_response"
-    if not isinstance(payload, Mapping) or payload.get("model") != AUTOTARGET_DECISION_MODEL:
-        raise AutotargetError(code, "decision model does not match the pinned version")
+    model = payload.get("model") if isinstance(payload, Mapping) else None
+    if not isinstance(model, str) or model not in ACCEPTED_DECISION_MODELS:
+        raise AutotargetError(code, "decision model is not an accepted Jev version")
     answers = payload.get("answers")
     answer = answers.get(JEV_QUESTION_ID) if isinstance(answers, Mapping) else None
     if not isinstance(answer, Mapping) or answer.get("type") != "choice":
@@ -327,7 +350,7 @@ def parse_choice_payload(payload: Any, options: frozenset[str]) -> JevChoice:
     if values[choice] < max(values.values()) - 1e-9:
         raise AutotargetError(code, "choice is not the highest-probability option")
     confidence = _unit_number(answer.get("confidence"), code)
-    return JevChoice(choice, values, confidence, AUTOTARGET_DECISION_MODEL)
+    return JevChoice(choice, values, confidence, model)
 
 
 class JevDecisionClient:

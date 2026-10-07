@@ -51,7 +51,7 @@ def _response(candidates=None, *, usable=True, uncertainty=""):
 
 def _jev_payload(choice="c1", probabilities=None, confidence=0.7):
     return {
-        "model": "jev-1.13.0",
+        "model": "typesafe/jev-1.13-20260917",
         "answers": {
             "selection": {
                 "type": "choice",
@@ -66,15 +66,23 @@ def _jev_payload(choice="c1", probabilities=None, confidence=0.7):
 
 def test_schema_bounds_match_parser_limits():
     schema = candidate_response_schema()
-    candidate = schema["properties"]["candidates"]["items"]["properties"]
-    assert schema["properties"]["candidates"]["maxItems"] == 4
+    assert schema["type"] == "object"
+    assert len(schema["anyOf"]) == 2
+    branches = {branch["properties"]["scene_usable"]["const"]: branch for branch in schema["anyOf"]}
+    usable, unusable = branches[True], branches[False]
+    assert usable["properties"]["scene_usable"] == {"const": True}
+    assert unusable["properties"]["scene_usable"] == {"const": False}
+    assert unusable["properties"]["candidates"] == {"type": "array", "maxItems": 0}
+    candidate = usable["properties"]["candidates"]["items"]["properties"]
+    assert usable["properties"]["candidates"]["maxItems"] == 4
     assert candidate["target_label"] == {"type": "string", "minLength": 1, "maxLength": 64}
     assert candidate["objective"] == {"type": "string", "minLength": 1, "maxLength": 300}
     assert candidate["reason"] == {"type": "string", "minLength": 1, "maxLength": 300}
     assert candidate["visual_evidence"] == {"type": "string", "minLength": 1, "maxLength": 300}
     assert candidate["uncertainty"] == {"type": "string", "minLength": 0, "maxLength": 300}
-    assert schema["properties"]["scene_uncertainty"]["minLength"] == 0
-    assert schema["additionalProperties"] is False
+    for branch in (usable, unusable):
+        assert branch["properties"]["scene_uncertainty"]["minLength"] == 0
+        assert branch["additionalProperties"] is False
 
 
 def test_valid_proposal_assigns_cycle_local_candidate_ids():
@@ -157,7 +165,7 @@ def test_valid_choice_payload_returns_validated_choice():
     choice = parse_choice_payload(_jev_payload(), frozenset({"c1", "none"}))
     assert isinstance(choice, JevChoice)
     assert choice.choice == "c1"
-    assert choice.model == "jev-1.13.0"
+    assert choice.model == "typesafe/jev-1.13-20260917"
     assert dict(choice.probabilities) == {"c1": 0.8, "none": 0.2}
 
 
@@ -165,8 +173,8 @@ def test_valid_choice_payload_returns_validated_choice():
     "payload",
     [
         {**_jev_payload(), "model": "jev-latest"},
-        {"model": "jev-1.13.0", "answers": {}},
-        {"model": "jev-1.13.0", "answers": {"selection": {**_jev_payload()["answers"]["selection"], "type": "noul"}}},
+        {"model": "typesafe/jev-1.13-20260917", "answers": {}},
+        {"model": "typesafe/jev-1.13-20260917", "answers": {"selection": {**_jev_payload()["answers"]["selection"], "type": "noul"}}},
         _jev_payload(choice="c9"),
         _jev_payload(probabilities={"c1": 0.8}),
         _jev_payload(probabilities={"c1": 0.5, "none": 0.1}),
@@ -199,7 +207,7 @@ def test_choice_request_criteria_are_the_only_legal_answers_and_stay_structured(
     assert state["operator_context"] == "Storage inspection"
     assert len(state["candidates"]) == 2
     body = build_choice_body(state, criteria)
-    assert body["model"] == "jev-1.13.0"
+    assert body["model"] == "typesafe/jev-1.13"
     assert body["questions"]["selection"]["type"] == "choice"
     assert body["questions"]["selection"]["criteria"] == criteria
 
@@ -207,8 +215,8 @@ def test_choice_request_criteria_are_the_only_legal_answers_and_stay_structured(
 def test_client_reports_unconfigured_without_key_and_never_touches_network(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: pytest.fail("network must not be used"))
     assert JevDecisionClient(environ={}).configured() is False
-    assert JevDecisionClient(environ={"TYPESAFE_API_KEY": "   "}).configured() is False
-    assert JevDecisionClient(environ={"TYPESAFE_API_KEY": "key"}).configured() is True
+    assert JevDecisionClient(environ={"OPENROUTER_API_KEY": "   "}).configured() is False
+    assert JevDecisionClient(environ={"OPENROUTER_API_KEY": "key"}).configured() is True
     with pytest.raises(AutotargetError) as failure:
         asyncio.run(
             JevDecisionClient(environ={}).decide(
@@ -226,7 +234,7 @@ def test_client_caps_timeout_at_three_seconds_even_when_more_time_is_offered(mon
         return _jev_payload()
 
     monkeypatch.setattr(JevDecisionClient, "_post", fake_post)
-    client = JevDecisionClient(environ={"TYPESAFE_API_KEY": "key"})
+    client = JevDecisionClient(environ={"OPENROUTER_API_KEY": "key"})
     asyncio.run(client.decide(state={}, criteria={"c1": {}, "none": "x"}, timeout_seconds=10.0))
     asyncio.run(client.decide(state={}, criteria={"c1": {}, "none": "x"}, timeout_seconds=1.2))
     assert seen == [3.0, 1.2]
@@ -234,7 +242,7 @@ def test_client_caps_timeout_at_three_seconds_even_when_more_time_is_offered(mon
 
 def test_client_rejects_a_spent_budget_before_sending(monkeypatch):
     monkeypatch.setattr(JevDecisionClient, "_post", lambda *a, **k: pytest.fail("no request expected"))
-    client = JevDecisionClient(environ={"TYPESAFE_API_KEY": "key"})
+    client = JevDecisionClient(environ={"OPENROUTER_API_KEY": "key"})
     with pytest.raises(AutotargetError) as failure:
         asyncio.run(client.decide(state={}, criteria={"c1": {}, "none": "x"}, timeout_seconds=0.0))
     assert failure.value.code == "jev_timeout"
@@ -263,7 +271,7 @@ def test_http_failures_map_to_explicit_codes_without_echoing_the_key(monkeypatch
         raise urllib.error.HTTPError(request.full_url, status, "failed", {}, None)
 
     monkeypatch.setattr(urllib.request, "urlopen", fail)
-    client = JevDecisionClient(environ={"TYPESAFE_API_KEY": "k-secret"})
+    client = JevDecisionClient(environ={"OPENROUTER_API_KEY": "k-secret"})
     with pytest.raises(AutotargetError) as failure:
         client._post(b"{}", "k-secret", 1.0)
     assert failure.value.code == code
@@ -285,12 +293,12 @@ def test_transport_failures_are_typed(monkeypatch, raised, code):
 
     monkeypatch.setattr(urllib.request, "urlopen", fail)
     with pytest.raises(AutotargetError) as failure:
-        JevDecisionClient(environ={"TYPESAFE_API_KEY": "key"})._post(b"{}", "key", 1.0)
+        JevDecisionClient(environ={"OPENROUTER_API_KEY": "key"})._post(b"{}", "key", 1.0)
     assert failure.value.code == code
 
 
 def test_malformed_and_oversized_service_bodies_are_invalid_responses(monkeypatch):
-    client = JevDecisionClient(environ={"TYPESAFE_API_KEY": "key"})
+    client = JevDecisionClient(environ={"OPENROUTER_API_KEY": "key"})
     monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout: _FakeResponse(b"not json"))
     with pytest.raises(AutotargetError) as malformed:
         client._post(b"{}", "key", 1.0)
@@ -316,7 +324,7 @@ def test_decision_record_is_bounded_and_marks_none_without_an_objective():
         outcome="none",
         error_code=None,
         candidates=candidates,
-        choice=JevChoice("none", {"c1": 0.1, "c2": 0.1, "c3": 0.1, "c4": 0.1, "none": 0.6}, 0.61234, "jev-1.13.0"),
+        choice=JevChoice("none", {"c1": 0.1, "c2": 0.1, "c3": 0.1, "c4": 0.1, "none": 0.6}, 0.61234, "typesafe/jev-1.13-20260917"),
         grounding=None,
         evidence_id="evidence-1",
         frame_id=7,
@@ -345,7 +353,7 @@ def test_decision_record_names_the_selected_vision_candidate():
         outcome="watching",
         error_code=None,
         candidates=candidates,
-        choice=JevChoice("c1", {"c1": 0.9, "none": 0.1}, 0.8, "jev-1.13.0"),
+        choice=JevChoice("c1", {"c1": 0.9, "none": 0.1}, 0.8, "typesafe/jev-1.13-20260917"),
         grounding={"tool": "detect_objects", "status": "ok", "matched_count": 1},
         evidence_id="evidence-2",
         frame_id=8,

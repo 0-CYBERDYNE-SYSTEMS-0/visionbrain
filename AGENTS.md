@@ -88,7 +88,7 @@ must pass with no MLX hardware and no cached weights.
 - **Docstrings** on all public functions (Google-style brief descriptions)
 - **Type hints** on function signatures
 - **Imports**: stdlib first, then third-party, then local (`from .module import func`)
-- **No external network calls at runtime** — all model weights come from the local Hugging Face cache
+- **No external network calls at runtime** — all model weights come from the local Hugging Face cache; the approved optional text-only Jev decision route is the scoped exception in [docs/EA_JEV_DECISION_RECORD.md](docs/EA_JEV_DECISION_RECORD.md) (2026-10-07).
 - **Domain-neutral copy** — the product is aerial/camera vision AI. No agriculture-specific wording in user-facing strings, defaults, placeholders, or model prompts (no cattle/pasture/farm examples; reports address an "operator" or "site manager"). Livestock terms may exist inside `prompt_router.py` vocabulary as routing capability only.
 - **Read-only on upstream repos** — VisionBrain imports from Falcon-Perception but never modifies it
 - **Graceful degradation** — if MLX or weights are missing, raise clear errors with actionable messages

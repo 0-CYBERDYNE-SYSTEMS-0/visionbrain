@@ -485,6 +485,20 @@ FastAPI app serving the single-page Ground Control dashboard (`static/index.html
 
 Controls live in the right-rail MISSION SETUP panel — there is deliberately no bottom config bar.
 
+### `mission_autotarget.py` — Jev Decision Adapter
+
+Adaptive Watch target choice. Vision proposes candidates on the admitted frame. Jev chooses one candidate or `none` through the OpenRouter Decisions endpoint. The adapter validates the complete reply before use.
+
+- **Endpoint:** `POST https://openrouter.ai/api/alpha/decisions` (`JEV_ENDPOINT`).
+- **Key:** `Authorization: Bearer <key>` from the `OPENROUTER_API_KEY` environment variable (`JEV_API_KEY_ENV`), read at call time. The key is never logged, echoed, or stored in mission state.
+- **Request model:** `typesafe/jev-1.13` (`AUTOTARGET_DECISION_MODEL`).
+- **Accepted response models:** exactly `typesafe/jev-1.13` or the documented resolved version `typesafe/jev-1.13-20260917` (`ACCEPTED_DECISION_MODELS`). Any other value fails as `jev_invalid_response`.
+- **Provenance:** `JevChoice.model` and the decision record's `decision_model` store the model string the response reported. That string may be the requested slug `typesafe/jev-1.13` or the dated resolved version `typesafe/jev-1.13-20260917`.
+- **Request:** top-level `state` and `model`, plus one `choice` question under `questions.selection`. No user, session, or trace identifier is sent. The adapter sends no OpenRouter `provider` preferences; current account settings are preserved.
+- **Reply:** `answers.selection` must have `type: "choice"`. `choice` must be a criteria key. `probabilities` must cover exactly the criteria keys, sum to 1 within 0.01, and rank `choice` highest. `confidence` must lie in [0, 1].
+- **Limits:** one request, no retries. Timeout is `min(3 s, remaining frame age, remaining cycle time)`.
+- **Live status:** a synthetic connection check returned HTTP 200 with the resolved model above. It is not scene acceptance.
+
 ---
 
 ## One-Time Setup

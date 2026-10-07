@@ -89,6 +89,7 @@ from .mission_contracts import (
     WATCH_MIN_INTERVAL_SECONDS,
 )
 from .mission_autotarget import (
+    AUTOTARGET_PROMPT_VERSION,
     AutotargetError,
     JevChoice,
     JevDecider,
@@ -1742,6 +1743,41 @@ class MissionRuntime:
             if self._is_current(snapshot, generation, running=True):
                 await self._set_waiting(mission_id, generation, "runtime_error", "Mission stopped safely after an internal runtime error.", state="failed")
 
+    async def _record_vision_diagnostic(
+        self,
+        mission_id: str,
+        generation: int,
+        cycle_id: str,
+        response: Any,
+        error_code: str,
+    ) -> None:
+        """Persist rejected raw vision output for the current generation only."""
+        recorder = getattr(self.store, "add_planner_diagnostic", None)
+        if response is None or not callable(recorder):
+            return
+        snapshot = await asyncio.to_thread(self.store.get_mission, mission_id)
+        if not self._is_current(snapshot, generation, running=True):
+            return
+        error_message = getattr(response, "error_message", None) or ""
+        try:
+            await asyncio.to_thread(
+                recorder,
+                mission_id,
+                cycle_id=cycle_id,
+                execution_generation=generation,
+                attempt=0,
+                model_key=str(getattr(response, "model_key", "")),
+                checkpoint=str(getattr(response, "checkpoint", "") or ""),
+                prompt_version=AUTOTARGET_PROMPT_VERSION,
+                raw_text=str(getattr(response, "raw_text", "") or ""),
+                error=f"{error_code}: {error_message}",
+                repair_feedback=None,
+                created_at_ms=self.clock.now_ms(),
+            )
+        except Exception:
+            # Diagnostics must never change the mission's execution outcome.
+            return
+
     async def _run_inferred_cycle(
         self,
         mission_id: str,
@@ -1915,6 +1951,7 @@ class MissionRuntime:
         proposal = getattr(response, "proposal", None)
         if proposal is None:
             error = getattr(response, "error_code", None) or "native_inference_failed"
+            await self._record_vision_diagnostic(mission_id, generation, cycle_id, response, error)
             await pause("autotarget_vision_failed", f"Vision candidate output was rejected ({error}); mission paused.", error_code=error)
             return
         if input_expired():

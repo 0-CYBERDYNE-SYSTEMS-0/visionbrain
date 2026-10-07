@@ -251,7 +251,7 @@ def test_capabilities_advertise_inferred_targeting_only_when_it_is_configured(tm
         assert descriptor == {
             "supported": True,
             "available": available,
-            "decision_model": "jev-1.13.0",
+            "decision_model": "typesafe/jev-1.13",
             "reason": reason,
             "goal_modes": ["inferred", "operator"],
         }
@@ -448,7 +448,7 @@ def test_activation_without_a_configured_key_is_refused_before_any_mission_start
 
 def test_inferred_watch_applies_the_ai_selected_target_and_operator_pause_clears_it(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_module, "WATCH_MIN_INTERVAL_SECONDS", 0.01)
-    jev = _Jev(choice=JevChoice("c1", {"c1": 0.9, "none": 0.1}, 0.8, "jev-1.13.0"))
+    jev = _Jev(choice=JevChoice("c1", {"c1": 0.9, "none": 0.1}, 0.8, "typesafe/jev-1.13-20260917"))
     sam = _Sam(items=[_item("cooler")])
     watch = _Watch()
 
@@ -492,7 +492,7 @@ def test_inferred_watch_applies_the_ai_selected_target_and_operator_pause_clears
 
 def test_none_choice_releases_the_discretionary_target_and_keeps_watch_running(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_module, "WATCH_MIN_INTERVAL_SECONDS", 0.01)
-    jev = _Jev(choice=JevChoice("none", {"c1": 0.1, "none": 0.9}, 0.9, "jev-1.13.0"))
+    jev = _Jev(choice=JevChoice("none", {"c1": 0.1, "none": 0.9}, 0.9, "typesafe/jev-1.13-20260917"))
     sam = _Sam(items=[_item("cooler")])
     watch = _Watch()
 
@@ -519,7 +519,7 @@ def test_none_choice_releases_the_discretionary_target_and_keeps_watch_running(t
 def test_unusable_scene_waits_without_asking_jev_or_applying_a_target(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_module, "WATCH_MIN_INTERVAL_SECONDS", 0.01)
     unusable = VisionResponse(VisionProposal(False, "Frame is dark", ()), "raw", None, "checkpoint", "gemma")
-    jev = _Jev(choice=JevChoice("c1", {"c1": 1.0, "none": 0.0}, 0.9, "jev-1.13.0"))
+    jev = _Jev(choice=JevChoice("c1", {"c1": 1.0, "none": 0.0}, 0.9, "typesafe/jev-1.13-20260917"))
     watch = _Watch()
 
     async def scenario():
@@ -562,7 +562,7 @@ def test_jev_failure_pauses_with_its_actual_code_and_never_reports_none(tmp_path
 
 def test_sam_that_does_not_localize_the_selected_label_is_unconfirmed_not_applied(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_module, "WATCH_MIN_INTERVAL_SECONDS", 0.01)
-    jev = _Jev(choice=JevChoice("c1", {"c1": 0.9, "none": 0.1}, 0.8, "jev-1.13.0"))
+    jev = _Jev(choice=JevChoice("c1", {"c1": 0.9, "none": 0.1}, 0.8, "typesafe/jev-1.13-20260917"))
     watch = _Watch()
 
     async def scenario():
@@ -584,7 +584,7 @@ def test_sam_that_does_not_localize_the_selected_label_is_unconfirmed_not_applie
 def test_input_that_expires_while_jev_decides_pauses_instead_of_committing_none(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_module, "WATCH_MIN_INTERVAL_SECONDS", 0.01)
     clock = _Clock()
-    jev = _Jev(choice=JevChoice("none", {"c1": 0.1, "none": 0.9}, 0.9, "jev-1.13.0"), before=lambda: clock.advance(16))
+    jev = _Jev(choice=JevChoice("none", {"c1": 0.1, "none": 0.9}, 0.9, "typesafe/jev-1.13-20260917"), before=lambda: clock.advance(16))
     watch = _Watch()
 
     async def scenario():
@@ -607,7 +607,7 @@ def test_input_that_expires_while_jev_decides_pauses_instead_of_committing_none(
 def test_input_that_expires_while_sam_grounds_pauses_instead_of_reporting_unconfirmed(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_module, "WATCH_MIN_INTERVAL_SECONDS", 0.01)
     clock = _Clock()
-    jev = _Jev(choice=JevChoice("c1", {"c1": 0.9, "none": 0.1}, 0.8, "jev-1.13.0"))
+    jev = _Jev(choice=JevChoice("c1", {"c1": 0.9, "none": 0.1}, 0.8, "typesafe/jev-1.13-20260917"))
     sam = _Sam(items=[_item("bottle")], before=lambda: clock.advance(16))
     watch = _Watch()
 
