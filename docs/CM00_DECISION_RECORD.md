@@ -1,5 +1,7 @@
 # CM-00 Decision Record — platform-first productization
 
+> **2026-10-07 scoped amendment:** [Expertise-only Watch / Jev](EA_JEV_DECISION_RECORD.md) authorizes the optional hosted decision service and canonical mission changes approved by the user. Existing provenance, runtime ownership and no-deployment constraints remain binding.
+
 Date: 2026-09-15  
 Authorized by: founder directive in the working session, acting as product owner and integration lead  
 Status: ratified for the next development cycle; implementation evidence remains required

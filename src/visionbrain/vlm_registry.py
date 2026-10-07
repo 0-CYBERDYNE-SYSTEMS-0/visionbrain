@@ -64,7 +64,26 @@ SYSTEM_PROMPT = (
     "the detector listed them itself."
 )
 
+MISSION_PLANNER_SYSTEM_PROMPT = (
+    "You are a bounded visual-inspection planner. Inspect the supplied image and "
+    "the operator's expertise and objective. Choose exactly one next action from "
+    "the supplied tool schemas, or finish. Return one JSON object only, with no "
+    "markdown or surrounding prose. Never invent coordinates, evidence IDs, item "
+    "IDs, detector results, OCR text, permissions, model settings, or tool names. "
+    "Use perception tools to ground localization. Visual interpretations remain "
+    "hypotheses unless a deterministic tool result supports them. Ask for a human "
+    "close-up when the visible evidence is insufficient. Never issue flight, "
+    "robot-motion, shell, URL, or external-write commands."
+)
+
+MISSION_CROP_SYSTEM_PROMPT = (
+    "Inspect only the supplied image crop and answer the visual question briefly. "
+    "Describe visible evidence and uncertainty. Do not invent text, coordinates, "
+    "measurements, object identity, or facts outside the crop. Return plain text."
+)
+
 _lock = threading.Lock()
+_generation_lock = threading.RLock()
 _model = None
 _processor = None
 _config = None
@@ -140,26 +159,28 @@ def _ensure_loaded():
 
 
 def _generate(user_text: str, image, max_tokens: int) -> str:
-    model, processor, config = _ensure_loaded()
-    from mlx_vlm.generate import generate
-    from mlx_vlm.prompt_utils import apply_chat_template
+    """Generate through the shared VLM registry under its native-call lock."""
+    with _generation_lock:
+        model, processor, config = _ensure_loaded()
+        from mlx_vlm.generate import generate
+        from mlx_vlm.prompt_utils import apply_chat_template
 
-    images = [image] if image is not None else []
-    prompt = apply_chat_template(
-        processor,
-        config,
-        f"{SYSTEM_PROMPT}\n\n{user_text}",
-        num_images=len(images),
-    )
-    kwargs = {
-        "max_tokens": max_tokens,
-        "verbose": False,
-        "temperature": TEMPERATURE,
-        "min_p": MIN_P,
-        "repetition_penalty": REPETITION_PENALTY,
-    }
-    result = generate(model, processor, prompt, image=images or None, **kwargs)
-    return str(getattr(result, "text", result)).strip()
+        images = [image] if image is not None else []
+        prompt = apply_chat_template(
+            processor,
+            config,
+            f"{SYSTEM_PROMPT}\n\n{user_text}",
+            num_images=len(images),
+        )
+        kwargs = {
+            "max_tokens": max_tokens,
+            "verbose": False,
+            "temperature": TEMPERATURE,
+            "min_p": MIN_P,
+            "repetition_penalty": REPETITION_PENALTY,
+        }
+        result = generate(model, processor, prompt, image=images or None, **kwargs)
+        return str(getattr(result, "text", result)).strip()
 
 
 def position_label(x: float, y: float) -> str:

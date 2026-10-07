@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VisionBrain × supervision — integration plan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,700;1,400&family=Spectral:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
+<style>
+/* design study — prototype, not a product surface. tokens per design-system/README.md */
+:root{
+  --canvas:#0e100d; --rule:#292d25; --rule-strong:#3a3e34;
+  --ink-1:#ebe5d2; --ink-2:#b8b29f; --ink-3:#807a68; --ink-4:#555044;
+  --amber:#d5bd87; --violet:#a89ad4; --ok:#8fa97a; --surface-2:#181b16;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--canvas); color:var(--ink-1);
+  font-family:"JetBrains Mono",Menlo,Consolas,monospace;
+  font-feature-settings:"ss01" on,"zero" on; font-size:13px; line-height:1.65;
+  background-image:radial-gradient(rgba(235,229,210,.04) 1px,transparent 1px);
+  background-size:26px 26px;
+}
+a{color:inherit}
+.wrap{max-width:1360px;margin:0 auto;padding:0 4vw}
+.eyebrow{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-3)}
+
+/* header */
+header{padding:52px 0 34px;border-bottom:1px solid var(--rule)}
+h1{font-family:Spectral,Georgia,serif;font-weight:400;font-size:clamp(34px,4.4vw,58px);
+   line-height:1.06;letter-spacing:-.02em;margin:18px 0 14px;max-width:26ch}
+h1 em{font-style:italic}
+.intro{color:var(--ink-2);max-width:78ch;margin:0}
+.intro b{color:var(--ink-1);font-weight:500}
+.fromsv{color:var(--violet)}
+
+/* principles */
+.principles{display:grid;grid-template-columns:1fr 1fr 1fr;border-bottom:1px solid var(--rule)}
+.principles section{padding:24px 26px 26px;border-right:1px solid var(--rule)}
+.principles section:last-child{border-right:0}
+.principles b{display:block;font-size:12px;font-weight:500;letter-spacing:.14em;
+              text-transform:uppercase;color:var(--amber);margin:10px 0 8px}
+.principles p{margin:0;color:var(--ink-2);font-size:12.5px}
+.principles .g{color:var(--ink-4);font-size:13px}
+
+/* pipeline band */
+.pipe{border-bottom:1px solid var(--rule);padding:30px 0 34px}
+.pipe .eyebrow{display:block;margin-bottom:16px}
+.flow{display:flex;align-items:stretch;flex-wrap:wrap;gap:0}
+.stage{border:1px solid var(--rule-strong);padding:12px 16px;background:var(--surface-2);min-width:0}
+.stage small{display:block;font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-4);margin-bottom:3px}
+.stage b{font-weight:500;font-size:12.5px}
+.stage.ours b{color:var(--amber)}
+.stage.sv b{color:var(--violet)}
+.stage span{display:block;color:var(--ink-3);font-size:10.5px;margin-top:2px}
+.join{display:flex;align-items:center;padding:0 10px;color:var(--ink-4);font-size:13px}
+
+/* integration rows */
+.irow{display:grid;grid-template-columns:56px 1.05fr 1fr .95fr;border-bottom:1px solid var(--rule)}
+.irow .num{padding:24px 0 0 6px;color:var(--ink-4);font-size:11px;letter-spacing:.14em}
+.irow .what{padding:22px 26px 24px 0}
+.irow .what h3{margin:0 0 8px;font-size:15px;font-weight:500;letter-spacing:0}
+.irow .what p{margin:0;color:var(--ink-2);font-size:12.5px}
+.irow .get{padding:22px 26px 24px;border-left:1px solid var(--rule)}
+.irow .easy{padding:22px 6px 24px 26px;border-left:1px solid var(--rule)}
+.irow .colhead{display:block;font-size:9px;letter-spacing:.18em;text-transform:uppercase;
+               color:var(--ink-4);margin-bottom:9px}
+.irow p{margin:0;color:var(--ink-2);font-size:12.5px}
+.irow p b{color:var(--ink-1);font-weight:500}
+.tag{display:inline-block;font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+     border:1px solid var(--rule-strong);padding:2px 7px;margin:0 6px 6px 0;color:var(--ink-3)}
+.tag.sv{color:var(--violet)}
+.tag.amber{color:var(--amber)}
+.tag.ok{color:var(--ok)}
+.ships{font-size:11px;color:var(--ink-2)}
+.ships code{color:var(--amber);font-size:11px}
+.flag{color:var(--ink-4)} /* "new" marker */
+
+/* worked example */
+.example{border-bottom:1px solid var(--rule);padding:32px 0 36px}
+.steps{margin:18px 0 0;padding:0;list-style:none;counter-reset:s}
+.steps li{counter-increment:s;display:grid;grid-template-columns:34px 200px 1fr;gap:0 14px;
+          padding:10px 0;border-top:1px solid var(--rule);color:var(--ink-2);font-size:12.5px}
+.steps li::before{content:counter(s,decimal-leading-zero) " ▷";color:var(--amber);font-size:11px}
+.steps li b{color:var(--ink-1);font-weight:500}
+.steps li .stage-name{color:var(--ink-3);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;padding-top:2px}
+
+/* phases */
+.phases{border-bottom:1px solid var(--rule)}
+.phase{display:grid;grid-template-columns:200px 1fr 260px;border-bottom:1px solid var(--rule)}
+.phase:last-child{border-bottom:0}
+.phase .ph{padding:22px 20px 22px 0}
+.phase .ph small{display:block;font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-4);margin-bottom:4px}
+.phase .ph b{font-size:14px;font-weight:500;color:var(--amber)}
+.phase .items{padding:20px 26px 20px 0;border-left:1px solid var(--rule);color:var(--ink-2);font-size:12.5px}
+.phase .items ul{margin:0;padding-left:16px}
+.phase .items li{margin:2px 0}
+.phase .out{padding:20px 0 20px 26px;border-left:1px solid var(--rule);font-size:11px;color:var(--ink-3)}
+.phase .out code{color:var(--amber)}
+
+/* guarantees */
+.guarantees{padding:34px 0 8px}
+.chips{display:flex;flex-wrap:wrap;margin-top:18px}
+.chips span{border:1px solid var(--rule);padding:9px 15px;margin:0 -1px -1px 0;
+            color:var(--ink-2);font-size:11px}
+.chips span i{font-style:normal;color:var(--amber);margin-right:8px}
+.note{padding:26px 0 10px;display:grid;gap:8px}
+.note p{font-family:Spectral,Georgia,serif;font-style:italic;
+        font-size:clamp(19px,2.1vw,28px);line-height:1.32;max-width:50ch;margin:0}
+.note small{color:var(--ink-3);font-size:11px;max-width:92ch;line-height:1.8}
+
+footer{border-top:1px solid var(--rule);padding:20px 0 46px;margin-top:36px;
+       display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
+       color:var(--ink-3);font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+
+@media(max-width:980px){
+  .principles{grid-template-columns:1fr}
+  .principles section{border-right:0;border-bottom:1px solid var(--rule)}
+  .principles section:last-child{border-bottom:0}
+  .irow{grid-template-columns:1fr}
+  .irow .num{padding:18px 0 0}
+  .irow .what{padding:10px 0 4px}
+  .irow .get{border-left:0;border-top:1px solid var(--rule);padding:14px 0 16px}
+  .irow .easy{border-left:0;border-top:1px solid var(--rule);padding:14px 0 20px}
+  .steps li{grid-template-columns:30px 1fr;grid-template-rows:auto auto}
+  .steps li .stage-name{grid-column:2}
+  .steps li .step-copy{grid-column:2}
+  .phase{grid-template-columns:1fr}
+  .phase .items,.phase .out{border-left:0;border-top:1px solid var(--rule);padding:16px 0}
+}
+</style>
+</head>
+<body>
+<header class="wrap">
+  <div class="eyebrow">VisionBrain · design study 005 · integration plan · 2026-09-08</div>
+  <h1>Absorb the toolbox. <em>Keep the instrument.</em></h1>
+  <p class="intro">How every benefit found in the <b>roboflow/supervision</b> recon lands in
+  VisionBrain — maximum capability, zero new concepts for the operator. The recon
+  (<b>SUPERVISION_RECON.md</b>) mapped what upstream does well. This page is the plan for pulling
+  it in: nine integrations, three phases, one rule — <b>every capability arrives behind a surface
+  that already exists</b>.</p>
+</header>
+
+<main class="wrap">
+
+<!-- principles -->
+<section class="principles">
+  <section><span class="g">▷</span><b>one query box</b>
+    <p>Capability lands behind routing, not behind new ui. The operator keeps typing plain
+    language; the pipeline quietly gets deeper underneath.</p></section>
+  <section><span class="g">▷</span><b>flags, not concepts</b>
+    <p>Power shows up as a flag or toggle an operator can ignore forever. Defaults are opinionated
+    and correct; experts get the dial.</p></section>
+  <section><span class="g">▷</span><b>same shapes out</b>
+    <p>Whatever we adopt upstream, results leave through the same four doors: the dashboard canvas,
+    json, mp4/webm, and a gemma report.</p></section>
+</section>
+
+<!-- pipeline -->
+<section class="pipe">
+  <span class="eyebrow">where supervision sits — one seam, already built</span>
+  <div class="flow">
+    <div class="stage ours"><small>ours</small><b>falcon · sam 3.1 · gemma 4</b><span>mlx models, local cache</span></div>
+    <div class="join">→</div>
+    <div class="stage sv"><small>from supervision</small><b>sv.detections bridge</b><span>the interchange point</span></div>
+    <div class="join">→</div>
+    <div class="stage sv"><small>from supervision</small><b>trackers · slicer · vlm parse · compact masks</b><span>adopted capabilities</span></div>
+    <div class="join">→</div>
+    <div class="stage ours"><small>ours</small><b>ground control · cli · field hub · reports</b><span>the four doors out</span></div>
+  </div>
+</section>
+
+<!-- integration rows -->
+<section>
+<div class="irow">
+  <div class="num">01</div>
+  <div class="what"><span class="colhead">identity</span><h3>The trackers package</h3>
+    <p>Swap the bridge wrapper's internals to <span class="fromsv">ByteTrackTracker</span> from
+    <span class="fromsv">pip install trackers</span> — near drop-in (<span class="fromsv">update()</span>
+    rename). Unlocks six algorithms behind one api.</p></div>
+  <div class="get"><span class="colhead">the operator gets</span>
+    <p><b>Steadier ids</b> through occlusion, and a choice of trackers per mission — sort for speed,
+    bot-sort for quality — without touching code.</p></div>
+  <div class="easy"><span class="colhead">stays invisible</span>
+    <p class="ships">ships as <code>--tracker bytetrack|sort|oc-sort|bot-sort</code><br>
+    default unchanged; wrapper absorbs the rename <span class="flag">· new flag</span></p></div>
+</div>
+
+<div class="irow">
+  <div class="num">02</div>
+  <div class="what"><span class="colhead">memory</span><h3>Compact masks end to end</h3>
+    <p>Drop the hand-built side-cache. Build detections with the upstream
+    <span class="fromsv">mask=CompactMask</span> field, and ingest falcon's coco rle directly via
+    <span class="fromsv">CompactMask.from_coco_rle</span> — no dense (n,h,w) allocation, ever.</p></div>
+  <div class="get"><span class="colhead">the operator gets</span>
+    <p><b>Longer tracks and longer lives streams</b> on 16 gb — 10–240× less mask memory, so hour-long
+    missions stop flirting with swap.</p></div>
+  <div class="easy"><span class="colhead">stays invisible</span>
+    <p class="ships">internal to <code>supervision_bridge</code>; polygons on the wire unchanged.
+    delete ~70 lines of cache code <span class="flag">· no surface change</span></p></div>
+</div>
+
+<div class="irow">
+  <div class="num">03</div>
+  <div class="what"><span class="colhead">foundation</span><h3>The 0.31 move</h3>
+    <p>When supervision 0.31.0 ships (in dev now), move the pin from
+    <code>&gt;=0.28,&lt;0.30</code> to <span class="fromsv">&gt;=0.31,&lt;0.33</span> +
+    <span class="fromsv">trackers≥2</span>. Upstream promises a 3-minor deprecation window — that's
+    the planning clock.</p></div>
+  <div class="get"><span class="colhead">the operator gets</span>
+    <p><b>Nothing visible — by design.</b> The point of a foundation phase: behavior stays put while
+    the floor under it gets current.</p></div>
+  <div class="easy"><span class="colhead">stays invisible</span>
+    <p class="ships">one pin change + regression pass over <code>TestSupervisionBridge</code>;
+    opencv-optional is irrelevant (we render numpy/pil) <span class="flag">· maintenance</span></p></div>
+</div>
+
+<div class="irow">
+  <div class="num">04</div>
+  <div class="what"><span class="colhead">capability</span><h3>Inference slicer for aerial frames</h3>
+    <p>Wire the <span class="fromsv">InferenceSlicer</span> into the falcon detect path: split a
+    4k drone still into overlapping tiles, detect per tile, merge with nms. Small-object sahi,
+    upstream-maintained.</p></div>
+  <div class="get"><span class="colhead">the operator gets</span>
+    <p><b>Finds the three-person crew on a full-width wing</b> — objects that vanish at full-frame
+    scale. The aerial case, finally first-class.</p></div>
+  <div class="easy"><span class="colhead">stays invisible</span>
+    <p class="ships">ships as <code>detect --slice 1280</code> and auto-on for images ≥4k in
+    <code>auto</code> mode <span class="flag">· new flag + routing</span></p></div>
+</div>
+
+<div class="irow">
+  <div class="num">05</div>
+  <div class="what"><span class="colhead">capability · flagship</span><h3>Gemma-grounded boxes</h3>
+    <p>Prompt gemma to answer in a vlm text format, parse with
+    <span class="fromsv">sv.Detections.from_vlm</span> — boxes with labels straight out of the
+    reasoning model, when falcon has no route for the phrase.</p></div>
+  <div class="get"><span class="colhead">the operator gets</span>
+    <p><b>"How many red trucks?" gets a real answer with real boxes</b> — open-vocabulary queries
+    beyond falcon's vocabulary, no new model to install.</p></div>
+  <div class="easy"><span class="colhead">stays invisible</span>
+    <p class="ships">lands inside the existing <code>auto</code> route (prompt_router) and the live
+    <b>ask</b> button; falls back gracefully <span class="flag">· spike first</span></p></div>
+</div>
+
+<div class="irow">
+  <div class="num">06</div>
+  <div class="what"><span class="colhead">trust</span><h3>Real metrics: <code>visionbrain eval</code></h3>
+    <p>Adopt <span class="fromsv">MeanAveragePrecision / F1Score / ConfusionMatrix</span> (size
+    buckets, masks target) behind a new eval verb — score our engines against a labeled folder, plus
+    the upstream error mosaics.</p></div>
+  <div class="get"><span class="colhead">the operator gets</span>
+    <p><b>A report card for their own footage</b> — "falcon: 0.71 map50 on my site, weak on small
+    objects" instead of vibes.</p></div>
+  <div class="easy"><span class="colhead">stays invisible</span>
+    <p class="ships">ships as <code>visionbrain eval --dataset yolo/ --engine falcon</code>; output
+    lands in the reports pipeline <span class="flag">· new verb</span></p></div>
+</div>
+
+<div class="irow">
+  <div class="num">07</div>
+  <div class="what"><span class="colhead">workflow</span><h3>Dataset round-trip</h3>
+    <p>Load labeled sets with <span class="fromsv">DetectionDataset.from_yolo/from_coco</span> for
+    eval; export interesting tracks with <span class="fromsv">as_yolo</span> — the labeling loop,
+    closed.</p></div>
+  <div class="get"><span class="colhead">the operator gets</span>
+    <p><b>fastscan finds the six interesting minutes; export hands them to a labeling tool</b> —
+    footage in, training data out, still one machine.</p></div>
+  <div class="easy"><span class="colhead">stays invisible</span>
+    <p class="ships">ships as <code>track --export-yolo out/</code> and <code>eval --dataset</code>
+    above <span class="flag">· new flags</span></p></div>
+</div>
+
+<div class="irow">
+  <div class="num">08</div>
+  <div class="what"><span class="colhead">polish</span><h3>Annotators + smoother on the dashboard</h3>
+    <p>Adopt <span class="fromsv">DetectionsSmoother</span> to steady jittery sam boxes, and expand
+    overlays from the current four annotators (trace · halo · heatmap · rich labels are upstream
+    anyway).</p></div>
+  <div class="get"><span class="colhead">the operator gets</span>
+    <p><b>A feed that looks calmer than the model is</b> — smoothed boxes, motion trails, and a
+    heatmap toggle for "where has everything been."</p></div>
+  <div class="easy"><span class="colhead">stays invisible</span>
+    <p class="ships">dashboard display toggles extend the existing boxes/masks pair; off by default
+    <span class="flag">· ui toggles</span></p></div>
+</div>
+
+<div class="irow">
+  <div class="num">09</div>
+  <div class="what"><span class="colhead">interop</span><h3>Sinks &amp; zone upgrades</h3>
+    <p>Track output gains <span class="fromsv">CSVSink</span>-style columns; zones adopt upstream
+    fixes we currently lack — per-class line counts and
+    <span class="fromsv">require_all_anchors=False</span> triggers.</p></div>
+  <div class="get"><span class="colhead">the operator gets</span>
+    <p><b>Counts that open in a spreadsheet, per class</b> — and zone lines that trigger when any
+    part of the object crosses, not just one anchor.</p></div>
+  <div class="easy"><span class="colhead">stays invisible</span>
+    <p class="ships">extends the existing json track output + <code>zones.py</code> counters;
+    wire format backward-compatible <span class="flag">· small</span></p></div>
+</div>
+</section>
+
+<!-- worked example -->
+<section class="example">
+  <span class="eyebrow">the ease contract — one query, whole stack</span>
+  <ol class="steps">
+    <li><span class="stage-name">operator</span><span class="step-copy"><b>"count vehicles crossing the north line in sunrise.mp4 and flag anything unusual"</b> — typed once, in plain language.</span></li>
+    <li><span class="stage-name">prompt router</span><span class="step-copy">routes to sam 3.1 tracking, flags "north line" as a zone spec, arms vehicle classes. no prompts field, no config.</span></li>
+    <li><span class="stage-name">bridge + trackers</span><span class="step-copy">detections become sv.detections; the chosen tracker holds identity across occlusions — compact masks keep memory flat for the full flight.</span></li>
+    <li><span class="stage-name">zones</span><span class="step-copy">linezone emits per-class crossing events; the smoother steadies boxes; polygon triggers watch the apron on the side.</span></li>
+    <li><span class="step-copy" style="grid-column:2/4"><span class="stage-name">gemma</span> <b>"14 vehicles crossed northbound between 06:12 and 06:31; one stopped inside the zone for 4 minutes — flagged."</b> the report lands on the same paper surface it always has.</span></li>
+    <li><span class="step-copy" style="grid-column:2/4"><span class="stage-name">out</span> mp4 with overlays, csv of crossings, json events, gemma report — the four doors, same as day one.</span></li>
+  </ol>
+</section>
+
+<!-- phases -->
+<section class="phases">
+  <div class="phase"><div class="ph"><small>phase 1</small><b>foundation</b></div>
+    <div class="items"><ul>
+      <li>01 trackers package swap (wrapper seam already exists)</li>
+      <li>02 compact-mask cleanup — delete the side-cache</li>
+      <li>03 the 0.31 pin move + regression pass</li></ul></div>
+    <div class="out">risk: low · surface change: none<br>everything after this stands on it</div></div>
+  <div class="phase"><div class="ph"><small>phase 2</small><b>capability</b></div>
+    <div class="items"><ul>
+      <li>04 slicer for aerial small objects</li>
+      <li>05 gemma × from_vlm grounding (spike → ship)</li>
+      <li>06 eval verb with upstream metrics</li></ul></div>
+    <div class="out">risk: medium · ships behind flags<br>visible power, opt-in</div></div>
+  <div class="phase"><div class="ph"><small>phase 3</small><b>polish</b></div>
+    <div class="items"><ul>
+      <li>07 dataset round-trip exports</li>
+      <li>08 smoother + annotator toggles on the dashboard</li>
+      <li>09 sinks + zone upgrades</li></ul></div>
+    <div class="out">risk: low · surface change: toggles<br>calmfeed, calmer results</div></div>
+</section>
+
+<!-- guarantees -->
+<section class="guarantees">
+  <span class="eyebrow">what never changes — the ease guarantees</span>
+  <div class="chips">
+    <span><i>◇</i>one install, local weights</span>
+    <span><i>◇</i>one query box</span>
+    <span><i>◇</i>status verbs: ready · cached · missing</span>
+    <span><i>◇</i>results stay on disk</span>
+    <span><i>◇</i>graceful without mlx</span>
+    <span><i>◇</i>no subscriptions, no telemetry</span>
+    <span><i>◇</i>spec.md stays in sync</span>
+  </div>
+  <div class="note">
+    <p>Every upstream capability we adopt makes the pipeline deeper — never the operator's day
+    harder.</p>
+    <small>Sequencing note: phase 1 is deliberately unglamorous. The 0.31 upgrade and the trackers
+    swap are the load-bearing moves; the flagship gemma-grounding spike (05) only starts once the
+    floor is current, so we never build a new capability on a pinned, aging bridge. Sources:
+    SUPERVISION_RECON.md §5–§8, upstream deprecated.md (3-minor deprecation window).</small>
+  </div>
+</section>
+
+</main>
+
+<footer class="wrap">
+  <span>⬡ VisionBrain · prototype — design study, not a product surface</span>
+  <span>companion to: visionbrain-vs-supervision.html · recon: SUPERVISION_RECON.md · 2026-09-08</span>
+</footer>
+</body>
+</html>

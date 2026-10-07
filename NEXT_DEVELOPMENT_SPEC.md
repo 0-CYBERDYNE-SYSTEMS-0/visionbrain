@@ -1,5 +1,7 @@
 # Next development spec: Connected Mission v1
 
+> **2026-10-07 scoped amendment:** [EA_JEV_DECISION_RECORD.md](docs/EA_JEV_DECISION_RECORD.md) authorizes expertise-only Watch and its optional hosted Jev decision request. This exception preserves the single canonical runtime and all unrelated scope constraints.
+
 Date: 2026-09-11. Status: implementation contract for this cycle, ratified by CM-00
 ([docs/CM00_DECISION_RECORD.md](docs/CM00_DECISION_RECORD.md), 2026-09-15).
 Implementation checkboxes are deliberately unchecked until their recorded evidence
