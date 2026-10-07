@@ -88,6 +88,7 @@ from .mission_store import (
     IdempotencyConflict,
     InvalidEvidence,
     MissionStore,
+    QuotaAccountingIncomplete,
     QuotaExceeded,
     RevisionConflict,
     _jpeg_dimensions,
@@ -702,6 +703,16 @@ class MissionRuntime:
                 if owner == normalized.get("mission_id"):
                     await asyncio.to_thread(self._mark_evidence_unavailable, owner, evidence_id)
             return self._reply(command, False, {}, ("evidence_unavailable", str(exc)))
+        except QuotaAccountingIncomplete:
+            return self._reply(
+                command,
+                False,
+                {},
+                (
+                    "evidence_quota_accounting_unavailable",
+                    "Evidence storage could not be accounted safely; resolve the storage issue and retry.",
+                ),
+            )
         except QuotaExceeded as exc:
             return self._reply(command, False, {}, ("quota_exceeded", str(exc)))
         except KeyError:
@@ -1063,34 +1074,50 @@ class MissionRuntime:
             width, height = _jpeg_dimensions(jpeg)
             if transform and ((transform.width is not None and transform.width != width) or (transform.height is not None and transform.height != height)):
                 raise _CommandError("invalid_request", "input_transform width and height must match the normalized JPEG")
-            if not self._make_evidence_room(
-                tx, snapshot, len(jpeg), protected_evidence_ids=(snapshot.get("input_evidence_id"),)
-            ):
-                saved, lease = self._pause_for_evidence_quota(tx, snapshot, now)
+            try:
+                room_available = self._make_evidence_room(
+                    tx, snapshot, len(jpeg), protected_evidence_ids=(snapshot.get("input_evidence_id"),)
+                )
+                if not room_available:
+                    raise QuotaExceeded("no unprotected rolling evidence or byte headroom is available")
+                evidence = tx.save_evidence(
+                    mission_id,
+                    jpeg,
+                    kind=("closeup" if is_closeup else principal.evidence_kind if principal.evidence_kind in {"imported", "closeup", "frame"} else "imported"),
+                    created_at_ms=now,
+                    source_id=principal.source_id,
+                    source_epoch=principal.source_epoch,
+                    frame_id=principal.frame_id,
+                    capture_time_ms=principal.capture_time_ms,
+                    input_transform=asdict(transform) if transform else None,
+                    closeup_request_id=closeup_id,
+                    brief_version=int(snapshot.get("brief_version", 1)),
+                    brief_sha256=snapshot.get("brief_sha256"),
+                    model_provenance=snapshot.get("model_provenance", {}),
+                    expected_sha256=sha,
+                )
+            except QuotaAccountingIncomplete:
+                reason = "evidence_quota_accounting_unavailable"
+                saved, lease = self._pause_for_evidence_quota(tx, snapshot, now, reason=reason)
                 if lease:
-                    release_after.append((lease, "evidence_quota_full"))
+                    release_after.append((lease, reason))
                 self._replace_event_snapshot(tx, saved)
                 raise _CommandError(
-                    "evidence_quota_full",
-                    "no unprotected rolling evidence or byte headroom is available",
+                    reason,
+                    "Evidence storage could not be accounted safely; resolve the storage issue and explicitly resume.",
                     result={"snapshot": saved, "execution_outcome": "paused"},
                 )
-            evidence = tx.save_evidence(
-                mission_id,
-                jpeg,
-                kind=("closeup" if is_closeup else principal.evidence_kind if principal.evidence_kind in {"imported", "closeup", "frame"} else "imported"),
-                created_at_ms=now,
-                source_id=principal.source_id,
-                source_epoch=principal.source_epoch,
-                frame_id=principal.frame_id,
-                capture_time_ms=principal.capture_time_ms,
-                input_transform=asdict(transform) if transform else None,
-                closeup_request_id=closeup_id,
-                brief_version=int(snapshot.get("brief_version", 1)),
-                brief_sha256=snapshot.get("brief_sha256"),
-                model_provenance=snapshot.get("model_provenance", {}),
-                expected_sha256=sha,
-            )
+            except QuotaExceeded:
+                reason = "evidence_quota_full"
+                saved, lease = self._pause_for_evidence_quota(tx, snapshot, now, reason=reason)
+                if lease:
+                    release_after.append((lease, reason))
+                self._replace_event_snapshot(tx, saved)
+                raise _CommandError(
+                    reason,
+                    "Evidence storage is at its configured limit; free space or remove eligible evidence, then explicitly resume.",
+                    result={"snapshot": saved, "execution_outcome": "paused"},
+                )
             updated = dict(snapshot)
             updated.setdefault("evidence", []).append(evidence)
             updated["input_evidence_id"] = evidence["evidence_id"]
@@ -1678,7 +1705,7 @@ class MissionRuntime:
                     return
                 if not evidence_id:
                     if meta.get("watch_lease"):
-                        await self._release_lease(meta["watch_lease"], "evidence_quota_full")
+                        await self._release_lease(meta["watch_lease"], meta.get("release_reason", "evidence_quota_full"))
                     return
                 last_frame_key = key
                 await self._run_cycle(
@@ -1999,7 +2026,7 @@ class MissionRuntime:
                 input_sha256=request.input_sha256,
             )
             if quota_lease:
-                await self._release_lease(quota_lease, "evidence_quota_full")
+                await self._release_lease(quota_lease, record.error_code or "evidence_quota_full")
             if self._closed:
                 return
             records.append(record)
@@ -2692,6 +2719,7 @@ class MissionRuntime:
             evidence_ids = []
             evidence_sha256 = {}
             quota_lease = None
+            quota_reason = None
             version = int(brief_version if brief_version is not None else (snapshot or {}).get("brief_version", 1))
             digest = brief_sha256 if brief_sha256 is not None else (snapshot or {}).get("brief_sha256")
             provenance = dict(
@@ -2707,28 +2735,39 @@ class MissionRuntime:
             for artifact in result.artifacts[:4] if current else ():
                 if artifact.kind != "crop" or len(artifact.jpeg_bytes) > MAX_DECODED_JPEG_BYTES or artifact.parent_evidence_id != input_evidence_id:
                     continue
-                if not self._make_evidence_room(
-                    tx,
-                    snapshot,
-                    len(artifact.jpeg_bytes),
-                    protected_evidence_ids=(input_evidence_id,),
-                ):
-                    paused, quota_lease = self._pause_for_evidence_quota(tx, snapshot, now)
+                try:
+                    room_available = self._make_evidence_room(
+                        tx,
+                        snapshot,
+                        len(artifact.jpeg_bytes),
+                        protected_evidence_ids=(input_evidence_id,),
+                    )
+                    if not room_available:
+                        raise QuotaExceeded("no unprotected rolling evidence or byte headroom is available")
+                    stored = tx.save_evidence(
+                        mission_id,
+                        artifact.jpeg_bytes,
+                        kind=artifact.kind,
+                        parent_evidence_id=artifact.parent_evidence_id,
+                        crop_box=artifact.crop_box,
+                        input_transform=asdict(artifact.input_transform) if artifact.input_transform else None,
+                        created_at_ms=now,
+                        brief_version=version,
+                        brief_sha256=digest,
+                        model_provenance=provenance,
+                    )
+                except QuotaAccountingIncomplete:
+                    quota_reason = "evidence_quota_accounting_unavailable"
+                    paused, quota_lease = self._pause_for_evidence_quota(tx, snapshot, now, reason=quota_reason)
                     snapshot = paused
                     current = False
                     break
-                stored = tx.save_evidence(
-                    mission_id,
-                    artifact.jpeg_bytes,
-                    kind=artifact.kind,
-                    parent_evidence_id=artifact.parent_evidence_id,
-                    crop_box=artifact.crop_box,
-                    input_transform=asdict(artifact.input_transform) if artifact.input_transform else None,
-                    created_at_ms=now,
-                    brief_version=version,
-                    brief_sha256=digest,
-                    model_provenance=provenance,
-                )
+                except QuotaExceeded:
+                    quota_reason = "evidence_quota_full"
+                    paused, quota_lease = self._pause_for_evidence_quota(tx, snapshot, now, reason=quota_reason)
+                    snapshot = paused
+                    current = False
+                    break
                 evidence_ids.append(stored["evidence_id"])
                 evidence_sha256[stored["evidence_id"]] = stored["sha256"]
                 if current:
@@ -2741,7 +2780,7 @@ class MissionRuntime:
                 items,
                 tuple(evidence_ids),
                 text,
-                "evidence_quota_full" if quota_lease else error_code,
+                quota_reason or error_code,
                 brief_version=version,
                 brief_sha256=digest,
                 model_provenance=provenance,
@@ -2785,22 +2824,31 @@ class MissionRuntime:
             for existing in snapshot.get("evidence", []):
                 if existing.get("available", True) and existing.get("kind") == "frame" and existing.get("source_id") == frame.source_id and existing.get("source_epoch") == frame.source_epoch and existing.get("frame_id") == frame.frame_id:
                     return existing["evidence_id"], existing
-            if not self._make_evidence_room(tx, snapshot, len(frame.jpeg_bytes)):
-                paused, lease = self._pause_for_evidence_quota(tx, snapshot, now)
-                return None, {"watch_lease": lease, "snapshot": paused}
-            ref = tx.save_evidence(
-                mission_id,
-                frame.jpeg_bytes,
-                kind="frame",
-                source_id=frame.source_id,
-                source_epoch=frame.source_epoch,
-                frame_id=frame.frame_id,
-                capture_time_ms=frame.capture_time_ms,
-                created_at_ms=now,
-                brief_version=int(snapshot.get("brief_version", 1)),
-                brief_sha256=snapshot.get("brief_sha256"),
-                model_provenance=snapshot.get("model_provenance", {}),
-            )
+            try:
+                room_available = self._make_evidence_room(tx, snapshot, len(frame.jpeg_bytes))
+                if not room_available:
+                    raise QuotaExceeded("no unprotected rolling evidence or byte headroom is available")
+                ref = tx.save_evidence(
+                    mission_id,
+                    frame.jpeg_bytes,
+                    kind="frame",
+                    source_id=frame.source_id,
+                    source_epoch=frame.source_epoch,
+                    frame_id=frame.frame_id,
+                    capture_time_ms=frame.capture_time_ms,
+                    created_at_ms=now,
+                    brief_version=int(snapshot.get("brief_version", 1)),
+                    brief_sha256=snapshot.get("brief_sha256"),
+                    model_provenance=snapshot.get("model_provenance", {}),
+                )
+            except QuotaAccountingIncomplete:
+                reason = "evidence_quota_accounting_unavailable"
+                paused, lease = self._pause_for_evidence_quota(tx, snapshot, now, reason=reason)
+                return None, {"watch_lease": lease, "snapshot": paused, "release_reason": reason}
+            except QuotaExceeded:
+                reason = "evidence_quota_full"
+                paused, lease = self._pause_for_evidence_quota(tx, snapshot, now, reason=reason)
+                return None, {"watch_lease": lease, "snapshot": paused, "release_reason": reason}
             updated = dict(snapshot)
             updated.setdefault("evidence", []).append(ref)
             updated["input_evidence_id"] = ref["evidence_id"]
@@ -3118,11 +3166,21 @@ class MissionRuntime:
             total_bytes = tx.total_evidence_usage()[1]
         return True
 
-    def _pause_for_evidence_quota(self, tx, snapshot: Mapping[str, Any], now: int):
+    def _pause_for_evidence_quota(
+        self,
+        tx,
+        snapshot: Mapping[str, Any],
+        now: int,
+        *,
+        reason: str = "evidence_quota_full",
+    ):
         updated = dict(snapshot)
         lease = updated.get("watch_lease")
-        updated["state"], updated["reason"] = "paused", "evidence_quota_full"
-        updated["activity"] = "Evidence quota is full; export or remove protected evidence before continuing."
+        updated["state"], updated["reason"] = "paused", reason
+        if reason == "evidence_quota_accounting_unavailable":
+            updated["activity"] = "Evidence storage could not be accounted safely; resolve the storage issue, then resume explicitly."
+        else:
+            updated["activity"] = "Evidence storage is at its configured limit; free space or remove eligible evidence, then resume explicitly."
         updated["execution_generation"] = int(snapshot.get("execution_generation", 0)) + 1
         updated["cycle_id"] = None
         updated["watch_lease"] = None
@@ -3131,7 +3189,7 @@ class MissionRuntime:
             snapshot,
             updated,
             "mission_waiting",
-            {"reason": "evidence_quota_full"},
+            {"reason": reason},
             now,
         )
         return saved, lease
