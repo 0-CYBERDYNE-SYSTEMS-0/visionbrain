@@ -1,0 +1,27 @@
+<!-- ============================================================================
+     VisionBridge v3 · component A — the numbered "how it works" step row
+     Owner: Dana Whitlock (HTML/CSS component specialist).
+     Replaces: <div class="beats"> … </div> in site/index-v2.html, lines 309-314,
+     i.e. the row that sits directly below plate 1 inside <section id="how">.
+
+     Class names: .beats and .n are the existing names and are kept unchanged.
+     No class was added. Children are <li> rather than <div> so that the page's
+     one numbered sequence is a real ordered list for assistive tech
+     (role="list" is repeated because WebKit drops list semantics when
+     list-style is none).  All CSS in beats.css is written against
+     ".beats > *", so the orchestrator may keep <div> children if the merge is
+     easier that way — the only requirement is the child order:
+     ordinal span, then h3, then p.
+
+     Copy is byte-identical to v2 except the ordinal words ONE/TWO/THREE/FOUR,
+     which become the two-digit numerals 01/02/03/04: the numerals are tabular
+     in IBM Plex Mono, so all four eyebrows are the same advance width and
+     optically identical, which ONE/TWO/THREE/FOUR (3, 3, 5 and 4 characters)
+     can never be.  No claim was added, removed or softened.
+     ============================================================================ -->
+    <ol class="beats" role="list">
+      <li><span class="n">01</span><h3>Watch the zone</h3><p>Your existing cameras, a handful of cheap ones, or a drone overhead. Rooflines, walls, gates, the outside face of the perimeter — the places a person can be and nobody can see.</p></li>
+      <li><span class="n">02</span><h3>Ask one narrow question</h3><p>A small vision model watches for one thing: a person where a person shouldn't be. Narrow questions are fast — about 1.3 seconds on a low-resolution frame.</p></li>
+      <li><span class="n">03</span><h3>Draw the shape</h3><p>A second model outlines exactly what it found and labels it with a confidence. The field team sees a person, not a blinking dot on a map.</p></li>
+      <li><span class="n">04</span><h3>Push it out</h3><p>The annotated frame arrives on the phones of the people already standing on the ground. They walk over and look. That is the whole loop.</p></li>
+    </ol>

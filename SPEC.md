@@ -81,6 +81,7 @@ VisionBrain/
 │       ├── fp_inference.py   ← Falcon Perception: segment(), detect(), ocr()
 │       ├── sam3_inference.py ← SAM 3.1: detect_multi(), track_video(), track_video_with_json()
 │       ├── frame_selector.py  ← Fast Falcon scorer: score_frames()
+│       ├── pilot_eval.py     ← Pilot measurement: run_pilot_eval(), PilotReport
 │       ├── gemma_inference.py ← Gemma 4: ask(), generate_report(), gemma_available(), available_backend()
 │       ├── prompt_router.py   ← Query routing: SAM targets + semantic question
 │       ├── viz.py            ← Set-of-Marks rendering, crop extraction, relations
@@ -88,8 +89,7 @@ VisionBrain/
 │       ├── agent_loop.py     ← VLM agent: tool loop, context pruning
 │       ├── cli.py            ← CLI commands
 │       └── web_app.py        ← FastAPI ground control (port 7860)
-├── tests/
-│   └── test_visionbrain.py
+├── tests/                    ← pytest suites (test_visionbrain.py plus per-module files)
 └── assets/
     └── samples/              ← test images and output
 ```
@@ -104,7 +104,8 @@ VisionBrain/
 - `falcon_perception_record() -> ModelRecord`
 - `sam31_record() -> ModelRecord`
 - `falcon_ocr_record() -> ModelRecord` — registry-only entry for `tiiuae/Falcon-OCR` (0.3B OCR companion: text, tables, formulas); `can_load` is always False — upstream serving is vLLM/CUDA, no MLX inference path in VisionBrain yet
-- `all_records() -> list[ModelRecord]` — 4 entries: Falcon Perception, SAM 3.1, Ollama Gemma, Falcon-OCR
+- `falcon_perception_300m_record() -> ModelRecord` — status of `tiiuae/Falcon-Perception-300M` (0.3B detection-only variant: boxes, no masks)
+- `all_records() -> list[ModelRecord]` — 5 entries: Falcon Perception, Falcon Perception 300M, SAM 3.1, Ollama Gemma, Falcon-OCR
 - `print_status()`
 - `falcon_repo() -> Path`
 - `sam31_cache_path() -> Path | None`
@@ -113,6 +114,7 @@ VisionBrain/
 - SAM 3.1 uses `mlx-community/sam3.1-bf16` — public MLX-community conversion, no gated access needed
 - Gemma 4 e2b uses `gemma4:e2b` via Ollama — 7.2 GB, managed by Ollama (no HuggingFace cache needed)
 - Falcon-OCR uses `tiiuae/Falcon-OCR` — OCR companion (text, tables, formulas); registry-only, served upstream via vLLM/CUDA
+- Falcon Perception checkpoint is selectable via `VB_FALCON_MODEL` (raw HF id); default is `tiiuae/Falcon-Perception`, `tiiuae/Falcon-Perception-300M` is the 0.3B detection-only alternative (same `xy`/`hw` output contract, no masks)
 
 ---
 
@@ -156,11 +158,13 @@ VisionBrain/
 
 (The `visionbrain fastscan` CLI wrapper is `cmd_fastscan()` in `cli.py`, not in this module.)
 
-**FrameScores fields:** `video_path`, `total_frames`, `fps`, `duration_s`, `frames_scored`, `is_relevant`, `quick_answer`, `regions`, `frame_scores`
+**FrameScores fields:** `video_path`, `total_frames`, `fps`, `duration_s`, `frames_scored`, `is_relevant`, `quick_answer`, `regions`, `frame_scores`, `frames_failed` (inference failures, kept as `failed=True` FrameScores), `sampled_span_s` (first→last sampled timestamp)
+
+**FrameScore fields:** `frame_index`, `timestamp`, `relevance_score`, `detection_count`, `top_label`, `has_query_match`, `failed`
 
 **TemporalRegion fields:** `start_time`, `end_time`, `avg_relevance`, `label`
 
-**Algorithm:** Extract frames at uniform intervals → Falcon detect at low-res → relevance scoring → temporal region clustering → natural-language quick answer.
+**Algorithm:** Extract frames at uniform intervals → Falcon detect at low-res → relevance scoring → temporal region clustering → natural-language quick answer. Sampling honesty: when candidates exceed `max_frames`, `_select_sample_indices()` picks an evenly spaced subset spanning the FULL video (never just the earliest frames); per-frame Falcon exceptions are recorded as `failed=True` frames and counted in `frames_failed`; a negative quick answer states the sampled coverage span, frames scored, and failed count rather than claiming absence over the whole video.
 
 **Weight download:** `huggingface-cli download mlx-community/sam3.1-bf16` (public, no auth required)
 
@@ -218,8 +222,11 @@ VisionBrain/
 ### `agent_loop.py` — VLM Agent
 
 **Public API:**
-- `VLMClient(api_key, model, base_url)`
+- `VLMClient(api_key, model, base_url)` — `chat(messages, tools=None) -> ChatResponse` (native `tool_calls` are mapped into `ChatResponse.tool_calls` as `{"name", "parameters"}`; malformed JSON arguments fall back to `parameters={}` plus `arguments_error`/`arguments_raw` markers)
+- `ChatResponse` — `content: str`, `tool_calls: list[dict]`
 - `run_agent(image, question, client, *, ...) -> AgentResult`
+
+**Tool-call contract:** `run_agent` accepts a `ChatResponse` or a legacy plain-`str` return (subclassed clients keep working) via `_normalize_chat_response`. Native `tool_calls[0]` takes precedence; the textual `<tool>...</tool>` protocol is the fallback. Neither present → the loop raises a clear `ValueError`. Malformed native arguments are surfaced to the VLM as a retryable error message, never dispatched with empty parameters.
 
 ---
 
@@ -236,6 +243,7 @@ VisionBrain/
 | `visionbrain analyze` | Full pipeline: SAM 3.1 track → Falcon key-frames (optional) → Gemma 4 reasoning → report |
 | `visionbrain agent` | VLM-powered visual reasoning |
 | `visionbrain fastscan` | Fast Falcon-only scan: relevance answer in seconds |
+| `visionbrain pilot-eval` | Replay footage + ground-truth labels → honest metrics report (missed events, false alerts, latency, coverage) |
 
 #### `analyze` command
 
@@ -356,16 +364,18 @@ ViT backbone cached across frames (recompute every `backbone_every`); between de
 
 Lets VisionBrain itself play the field-hub server role: one worker streams SAM 3.1 over `WS /api/live/ws` in the exact hub binary format (`>III` header + JPEG + `>I` + telemetry JSON), so the unmodified browser client renders it. `configure(uploads_dir, clips_dir=None)` pins the upload resolution dir and the clip output dir (created when missing; `None` disables capture). On every detect frame the worker extracts each SAM mask's outline via `detection_core.mask_to_polygon` and emits it on the item as `polygon` (normalized `[[x, y], ...]`, optional); the dashboard paints filled mask shapes and falls back to the box for items without one. Held re-publishes carry the polygon through unchanged.
 
-**Controls** (inbound JSON; key `"type"`, `"action"` accepted as alias): `start` (file/webcam/url + optional `threshold`/`detect_every`/`resolution`), `set_prompts`, `add_prompt_box` (draw a rectangle on the canvas → a persistent ROI "target N" tracked every detect frame alongside text prompts; ≤8, pending before a worker like zones; NOTE: the installed mlx_vlm build plumbs the `boxes` kwarg but never applies box conditioning — targets work as ROI-labeled tracking until the lib calls its geometry encoder), `remove_targets`, `set_zones`, `set_triggers`, `set_watch`, `stop`, `shutdown`; `hello` → ignored. Anything invalid → `("unknown", {})` + status note, never an exception. `url` sources (`rtsp://`, `rtsps://`, `http://`, `https://` only) are gated by `validate_stream_url()` and always rendered via `redact_url()` (userinfo → `user:***@`) in status notes; a stream that fails to open (or 40 consecutive read failures) fails cleanly with `engine_stopped` — no auto-retry in the first cut. **Auth:** when `VB_TOKEN` is set, the WS requires `?token=` (checked before accept, close 4401) — HTTP middleware never sees WebSocket scopes, so the gate lives in the handler.
+**Controls** (inbound JSON; key `"type"`, `"action"` accepted as alias): `start` (file/webcam/url + optional `threshold`/`detect_every`/`resolution`/`backbone_every` (DEPRECATED — still validated for old clients, then stripped before the worker sees it; a status note answers "backbone_every is deprecated and ignored — features are recomputed on every detection pass")/`jpeg_quality` (30-95, default 70)/`send_width` (256-3840, default 1280)/`task` (`"segment"`|`"detect"`, default `"segment"`)), `set_prompts` (an EMPTY list is valid and means "detection off" — the hub-protocol pause semantics; the worker skips the model and emits empty detection sets until prompts return, and the pause CLEARS the stored ask/report evidence so earlier counts cannot survive as current observations), `set_threshold` (live re-apply, no restart), `set_stream` (live `jpeg_quality`/`send_width` retune — the Android STREAM knobs), `set_task` (live MASK switch: `"segment"` emits polygons, `"detect"` skips polygon tracing for fast boxes), `set_engine` (hub-protocol chips; the local engine runs SAM only and answers with an honest status note), `set_vlm` (`gemma`|`lfm`|`lfm3b` via `vlm_registry.set_model`), `ask {question ≤ 500}` (replies `ask_ack` + `answer`, or `error` on rejection/failure; at dispatch the handler snapshots (full-res frame, detection records, active prompts) as ONE consistent server-owned evidence unit, then a background thread answers from that snapshot alone — it never re-reads live worker state; one in-flight slot shared with `report`), `report {summary?, report_type?}` (replies `report_result`, or `error` on rejection/failure; the counts line is derived SERVER-SIDE from the snapshot's detection records — the inbound `summary` is accepted for wire compatibility but is never used as detection evidence or forwarded to the model), `add_prompt_box` (draw a rectangle on the canvas → a persistent ROI "target N"; ≤8, pending before a worker like zones; NOTE: the installed mlx_vlm build plumbs the `boxes` kwarg but never applies box conditioning, so targets are pure ROI RELABELS of the single main detection pass — no per-target inference), `remove_targets`, `set_zones`, `set_triggers`, `set_watch`, `stop`, `shutdown`; `hello` → ignored. Anything invalid → `("unknown", {})` + status note, never an exception. `url` sources (`rtsp://`, `rtsps://`, `http://`, `https://` only) are gated by `validate_stream_url()` and always rendered via `redact_url()` (userinfo → `user:***@`) in status notes; a stream that fails to open (or 40 consecutive read failures) fails cleanly with `engine_stopped` — no auto-retry in the first cut. **Auth:** when `VB_TOKEN` is set, the WS requires `?token=` (checked before accept, close 4401) — HTTP middleware never sees WebSocket scopes, so the gate lives in the handler.
 - `{"type":"set_zones","zones":[...]}` — REPLACES the set: `{"kind":"line","name"?,"a":[x,y],"b":[x,y]}` or `{"kind":"rect","name"?,"x1","y1","x2","y2"}`, normalized 0-1 (rect needs `x1<x2`, `y1<y2`), ≤ 40-char names (default `"zone N"`), max 8 — `validate_zones()`. Accepted before a worker exists (held pending, applied on start) and while running (rebuilt under the state lock on the next detect frame, which resets line counters). Ack `zones set (N)`.
 - `{"type":"set_triggers","line_cross"?,"direction"?,"dwell_s"?,"clip"?,"pre_s"?,"post_s"?}` — partial merge over defaults (False / `"none"` / 0=off / True / 6 / 4); `direction` ∈ none|any|8-way compass. Ack `triggers set`.
 - `{"type":"set_watch","enabled"?,"condition"?,"interval_s"? (1-30, default 4),"model"? ("lfm"|"lfm3b")}` — Ack `watch on`/`watch off`.
 
-**New outbound JSON:** `{"type":"event","event":{kind: line_cross|direction|dwell|watch|zone_enter|zone_exit, zone, direction, track_id|null, ts, frame_id, detail}}` and `{"type":"capture","clip":{name, url:"/api/clips/<name>", kind}}`. Rect zones fire enter/exit per track transition (`RectZone`); line zones run `zones.LineZoneCounter` per detect frame on pixel boxes (totals increment → `line_cross`); `DirectionTriggerState` fires once per (track, heading) and re-arms on heading change (`"any"` = any real heading); `DwellTracker` fires once per stationary stretch after `dwell_s`.
+**New outbound JSON:** `{"type":"error","error":"…"}` (ask/report path ONLY — no engine running, no current observation, prompts paused, the shared slot busy, or backend VLM inference failed; every other failure path keeps its `status` notes, and no client should parse status text to detect an ask/report failure; the grounding rejections (no engine / no observation / paused) are decided BEFORE the shared inference slot is claimed — no VLM call — and an observed EMPTY set IS a valid observation), `{"type":"event","event":{kind: line_cross|direction|dwell|watch|zone_enter|zone_exit, zone, direction, track_id|null, ts, frame_id, detail}}` and `{"type":"capture","clip":{name, url:"/api/clips/<name>", kind}}`. Rect zones fire enter/exit per track transition (`RectZone`); line zones run `zones.LineZoneCounter` per detect frame on pixel boxes (totals increment → `line_cross`); `DirectionTriggerState` fires once per (track, heading) and re-arms on heading change (`"any"` = any real heading); `DwellTracker` fires once per stationary stretch after `dwell_s`.
 
-**Clips:** the worker rings the same encoded JPEGs it streams (`maxlen = min(pre_s·fps or 30, 150)`); a fired trigger snapshots pre-roll, accumulates until `trigger_ts + post_s`, writes `clips_dir/clip_<ts>_<kind>.mp4` (cv2/`mp4v`), announces it, and prunes the dir to the 50 newest files. One pending capture at a time — later triggers still emit events. `web_app` serves `GET /api/clips/{name}` after `sanitize_clip_name()` (alnum/`_.-` + `.mp4` only; else 404).
+**Clips:** the worker rings the same encoded JPEGs it streams (`maxlen = min(pre_s·fps or 30, 150)`); a fired trigger claims THE one capture slot — it spans post-roll collection, the encode queue, AND encoding (`request_capture` refuses while the capture exists in any state; later triggers still emit their events but never allocate a second capture) — snapshots pre-roll, accumulates until `trigger_ts + post_s`, and hands the capture to a dedicated writer daemon thread (decode + `mp4v` re-encode must never stall the read/detect/encode loop) which starts LAZILY on the first handoff (`_ensure_capture_writer` — a worker that never captures starts no thread), writes `clips_dir/clip_<ts>_<kind>.mp4`, announces it, and prunes the dir to the 50 newest files. The writer releases the slot in its `finally` — success AND failure. Every worker exit path funnels through `run()`'s `finally` and sends the writer's `None` queue sentinel (`_shutdown_capture_writer`) AFTER any accepted capture, so FIFO ordering lets queued/encoding captures finish; an INCOMPLETE (still-collecting) post-roll capture is discarded; the worker joins the writer with an 8s timeout and the event loop never joins it. `web_app` serves `GET /api/clips/{name}` after `sanitize_clip_name()` (alnum/`_.-` + `.mp4` only; else 404).
 
-**Design:** single instance per process (module handle + `_engine_lock`); worker + watcher are daemon threads pushing onto an `asyncio.Queue` drained by a sender task. `vlm_registry` (and all heavy deps) import inside thread bodies, so CI imports the module and tests the pure helpers (`pack_frame`, `make_item`, `validate_control`, `validate_zones`, `sanitize_clip_name`, `validate_stream_url`, `redact_url`, `RectZone`, `DwellTracker`, `DirectionTriggerState`) with no MLX/weights. The watch thread sleeps `interval_s`, skips ticks when the worker is idle/busy, asks the local VLM `"…Answer with exactly YES or NO. Condition: …"` on the latest full-res frame, fires a `watch` event (+capture) on YES; errors → status notes throttled to 1/30s, and a model that never loads disables the watch with one note.
+**Fresh observations + streams:** EVERY scheduled detect pass recomputes image features from that pass's frame — the cross-pass backbone/encoder cache and `backbone_every` cadence are gone (`detect_every` is the sole inference throttle; within one pass the model helper may still cache as needed). Skipped passes and empty prompts do no inference; box targets add zero model calls; pause/resume and file looping can never reuse features from an earlier scene. Outbound replaceable streams are COALESCED latest-value-wins per viewer (one-slot buffer + sentinel each): binary frames AND `detections` sets — an EMPTY detection set is a real value that supersedes older objects (`None`, not `[]`, marks an empty slot), so a slow dashboard can never build a stale backlog of either. Events, captures, status, and ask/report results keep the in-order never-dropped queue — this bounds those two streams specifically, not every possible outbound source.
+
+**Design:** single instance per process (module handle + `_engine_lock`) but MULTI-VIEWER: every connected socket gets a sink (in-order JSON queue + one-slot latest-frame AND latest-detections buffers) and the worker broadcasts to all of them, so several dashboards watch the same stream; a `start` while alive attaches the requester as a viewer (status note) instead of starting a second engine, and the engine stops when the last viewer disconnects. Worker + watcher are daemon threads. `vlm_registry` (and all heavy deps) import inside thread bodies, so CI imports the module and tests the pure helpers (`pack_frame`, `make_item`, `validate_control`, `validate_zones`, `sanitize_clip_name`, `validate_stream_url`, `redact_url`, `RectZone`, `DwellTracker`, `DirectionTriggerState`) with no MLX/weights. The watch thread sleeps `interval_s`, skips ticks when the worker is idle/busy, asks the local VLM `"…Answer with exactly YES or NO. Condition: …"` on the latest full-res frame, fires a `watch` event (+capture) on YES; errors → status notes throttled to 1/30s, and a model that never loads disables the watch with one note.
 
 ### `service.py` — Shared-Token Auth + Job-Slot Queue
 
@@ -374,7 +384,7 @@ Pure asyncio/stdlib primitives for LAN/business deployments (no fastapi or MLX i
 - `max_jobs() -> int` — `VB_MAX_JOBS` clamped to 1..4 (default 1); invalid → default
 - `JobQueue` — asyncio FIFO slot limiter: `acquire(key) -> position` (0 = started immediately, 1 = first in line…), `release(key)`, `queued_count`, `wait_position(key)` (live line spot: 0 when running, 1-based while waiting); deque-of-futures so there is no busy waiting, and a waiter cancelled while queued is skipped cleanly and never consumes a slot
 
-`web_app.py` wiring: when `VB_TOKEN` is set, every `/api/*` path except `/api/healthz` requires the token via the `X-Auth-Token` header or `?token=` query (401 JSON otherwise). WebSocket scopes never pass through HTTP middleware, so the live WebSocket enforces the same token in-handler via `?token=` (checked before accept, close 4401). The heavy subprocess endpoints (`analyze`, `fastscan`, `track`, `agent`) run through a shared `JobQueue`; light image jobs (`detect`, `segment`, `sam3`, `ocr`) bypass it. Job dicts carry `queue_position`/`queued`, launch responses gain `{queued, queue_position}` (submit-time), and job state + SSE heartbeats report the live line position while a job still waits.
+`web_app.py` wiring: when `VB_TOKEN` is set, every `/api/*` path except `/api/healthz` — and `/uploads/{fid}` media — requires the token via the `X-Auth-Token` header or `?token=` query (401 JSON otherwise). WebSocket scopes never pass through HTTP middleware, so the live WebSocket enforces the same token in-handler via `?token=` (checked before accept, close 4401). The heavy subprocess endpoints (`analyze`, `fastscan`, `track`, `agent`) run through a shared `JobQueue`; light image jobs (`detect`, `segment`, `sam3`, `ocr`) bypass it. Job dicts carry `queue_position`/`queued`, launch responses gain `{queued, queue_position}` (submit-time), and job state + SSE heartbeats report the live line position while a job still waits. The job store is evicted to the newest 200 finished jobs; a job whose subprocess fails to launch lands in `error` state (never stuck `running`).
 
 ### `model_host.py` — Refcounted MLX Checkpoint Residency
 
@@ -427,6 +437,30 @@ visionbrain fastscan --video drone.mp4 --query "person"
 --min-relevance     Minimum relevance to count as a region (default 0.2)
 --output            Write structured JSON result to this path
 ```
+
+#### `pilot-eval` command
+
+Replays a recorded video with a ground-truth event label file through the FastScan
+scorer and produces an honest metrics report — the measurement gate for a pilot
+workflow (BUSINESS_CAPABILITY_RECON.md). Ground truth JSON:
+`{"query": "person", "events": [{"label": "person", "start_s": 12.0, "end_s": 20.0, "min_count": 1}]}`.
+
+```bash
+visionbrain pilot-eval --video drone.mp4 --ground-truth labels.json --report pilot_report.json --evidence-dir evidence/
+
+# Options
+--video             Recorded video to replay (required)
+--ground-truth      Ground-truth event label JSON path (required)
+--report            Write the report JSON to this path
+--evidence-dir      Save the first supporting frame per detected event as JPEG
+--tolerance-s       Matching tolerance around each event window (default 3.0)
+--sample-every      Sample one frame every N seconds (default 5)
+--max-frames        Maximum frames to score (default 60)
+--min-relevance     Minimum relevance to count as a detection (default 0.2)
+--resolution        Falcon resolution (default 360)
+```
+
+**Report (`PilotReport`):** `events_total/detected/missed`, `missed_events`, `false_alert_count`/`false_alerts` (frame-level), `per_event` (detection, `latency_s`, supporting frames, evidence path), `coverage` (duration vs sampled span, frames scored/failed), `runtime_s`, and always-present `caveats` (sampling interval vs short events; Falcon labels derive from the query so label agreement is not independent confirmation; failures and partial coverage when they occur). `summary()` renders raw numbers only. Tests inject a fake `score_fn`/`frame_reader`; no inference is needed to evaluate the harness itself.
 
 ### `web_app.py` — Ground Control UI
 

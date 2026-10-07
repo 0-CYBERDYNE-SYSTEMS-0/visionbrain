@@ -6,6 +6,15 @@ VisionBrain is an aerial & camera vision AI toolkit running on Apple Silicon via
 
 ## Project Structure
 
+For shared missions, adaptive agents, evidence/business integration, or coordinated
+work with the field bridge, read [NEXT_DEVELOPMENT_SPEC.md](NEXT_DEVELOPMENT_SPEC.md)
+and its bridge handoff before assigning implementation. It is the shared contract
+for this cycle: CM-00 is ratified per
+[docs/CM00_DECISION_RECORD.md](docs/CM00_DECISION_RECORD.md), with implementation
+evidence still required before any capability claim. It does not authorize
+deployment or replace the existing UI rework plan. See [BUSINESS_CAPABILITY_RECON.md](BUSINESS_CAPABILITY_RECON.md)
+for product intent and source-assessment history.
+
 ```
 VisionBrain/
 ├── src/visionbrain/          # All source code
@@ -17,6 +26,7 @@ VisionBrain/
 │   ├── gemma_inference.py    # Gemma 4: ask(), generate_report()
 │   ├── prompt_router.py      # Routes a text query to Falcon prompts / SAM labels
 │   ├── frame_selector.py     # Motion-based frame scoring (score_frames) behind the fastscan CLI
+│   ├── pilot_eval.py         # Pilot measurement harness: run_pilot_eval(), PilotReport (behind the pilot-eval CLI)
 │   ├── zones.py              # Line/polygon zone counters, ZoneManager
 │   ├── supervision_bridge.py # Converts Falcon/SAM results to supervision.Detections + ByteTrack
 │   ├── detection_core.py     # Shared detection primitives: IoU matching, identity, cross-engine validation (pure Python)
@@ -32,7 +42,10 @@ VisionBrain/
 │   ├── references/           # system_prompt.txt for the agent
 │   └── static/               # Web UI static assets
 ├── tests/
-│   └── test_visionbrain.py   # All tests (pytest), organized by class
+│   ├── test_visionbrain.py   # Core tests (pytest), organized by class
+│   └── …                     # Per-module suites: test_live_engine.py, test_service.py,
+│                             # test_direction_tracking.py, test_frame_selector.py,
+│                             # test_agent_loop.py, test_pilot_eval.py
 ├── assets/samples/           # Test images and outputs
 ├── design-system/            # UI tokens/components; start at design-system/README.md
 ├── pyproject.toml            # Package metadata (setuptools, PEP 621)
@@ -83,10 +96,13 @@ must pass with no MLX hardware and no cached weights.
 ## Testing Guidelines
 
 - Framework: **pytest** (version >= 8.0)
-- All tests live in `tests/test_visionbrain.py` organized into classes:
+- Core tests live in `tests/test_visionbrain.py` organized into classes:
   `TestLoader`, `TestFalconPerception`, `TestAgentTools`, `TestViz`,
   `TestReviewOutputs`, `TestCLI`, `TestWebApp`, `TestDetectionCore`,
-  `TestModelHost`, `TestVLMRegistry`, `TestLiveTracking`, `TestMlxCompat`
+  `TestModelHost`, `TestVLMRegistry`, `TestLiveTracking`, `TestMlxCompat`;
+  larger/per-module suites live beside it (`test_live_engine.py`,
+  `test_service.py`, `test_direction_tracking.py`, `test_frame_selector.py`,
+  `test_agent_loop.py`, `test_pilot_eval.py`)
 - Tests must pass without MLX hardware or cached model weights — heavy inference paths are skipped/mocked
 - CLI smoke tests verify each `cmd_*` function handles missing arguments gracefully
 - Loader tests validate model registry records and cache paths
@@ -95,7 +111,8 @@ must pass with no MLX hardware and no cached weights.
 ## Gotchas
 
 - `supervision` **is** now a declared dependency (`supervision>=0.28,<0.30` — keep the `<0.30` pin). The heavy deps still *not* declared are `mlx` and `mlx_vlm`: `pyproject.toml` expects them pre-installed in the environment, detected at runtime with graceful fallback
-- `visionbrain fastscan` is implemented by `cmd_fastscan()` in `cli.py`; `frame_selector.py` only provides the `score_frames()` scorer
+- `visionbrain fastscan` is implemented by `cmd_fastscan()` in `cli.py`; `frame_selector.py` only provides the `score_frames()` scorer. Sampling spans the full video (`_select_sample_indices`), per-frame inference failures are recorded (`FrameScore.failed`, `FrameScores.frames_failed`) — never treat a FastScan "not relevant" as absence over unsampled footage
+- `visionbrain pilot-eval` (implemented by `cmd_pilot_eval()` + `pilot_eval.py`) is the honest-measurement gate from `BUSINESS_CAPABILITY_RECON.md`: replays footage + ground-truth event labels and reports missed events, false alerts, latency, and coverage. It measures; it does not certify accuracy — caveats are part of the report
 - `src/visionbrain/__init__.py` exports `__version__` plus a single re-export, `DirectionClassifier` — do not rely on package-level re-exports of inference functions
 - **Keep `detection_core.py` and `direction_tracking.py` dependency-free by design** (pure Python / numpy only, no MLX): the field bridge imports the `visionbrain` package directly on hosts with no models, so these must stay lightweight and importable anywhere
 - `mlx_vlm` version window matters: `>= 0.6.1` (Gemma 4 KV-sharing weights) and `< 0.6.4` (0.6.4 drops SAM 3.1 support)

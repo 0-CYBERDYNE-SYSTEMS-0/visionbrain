@@ -73,8 +73,31 @@ class TestLoader:
         ids = [r.hf_id for r in recs]
         assert loader.FALCON_OCR_HF_REPO in ids
         assert loader.falcon_perception_record().hf_id in ids
+        assert loader.falcon_perception_300m_record().hf_id in ids
         assert loader.sam31_record().hf_id in ids
-        assert len(ids) == 4
+        assert len(ids) == 5
+
+    def test_falcon_perception_300m_record(self):
+        from visionbrain.loader import (
+            FALCON_PERCEPTION_300M_REPO,
+            HF_CACHE,
+            falcon_perception_300m_record,
+        )
+        rec = falcon_perception_300m_record()
+        assert rec.hf_id == FALCON_PERCEPTION_300M_REPO == "tiiuae/Falcon-Perception-300M"
+        assert rec.cache_dir == HF_CACHE / "models--tiiuae--Falcon-Perception-300M"
+        # Detection-only variant: never emits masks regardless of cache state.
+        print(f"\n  Falcon 300M: cached={rec.is_cached} ({rec.disk_gb} GB), can_load={rec.can_load}, note={rec.note}")
+
+    def test_fp_model_id_env_override(self, monkeypatch):
+        import visionbrain.fp_inference as fp
+
+        monkeypatch.delenv("VB_FALCON_MODEL", raising=False)
+        assert fp._selected_model_id("tiiuae/Falcon-Perception") == "tiiuae/Falcon-Perception"
+        monkeypatch.setenv("VB_FALCON_MODEL", "tiiuae/Falcon-Perception-300M")
+        assert fp._selected_model_id("tiiuae/Falcon-Perception") == "tiiuae/Falcon-Perception-300M"
+        monkeypatch.setenv("VB_FALCON_MODEL", "   ")
+        assert fp._selected_model_id("tiiuae/Falcon-Perception") == "tiiuae/Falcon-Perception"
 
     def test_falcon_repo_accessible(self):
         from visionbrain.loader import FALCON_REPO, falcon_repo
@@ -463,6 +486,30 @@ class TestCLI:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert "--lfm-ground" in result.stdout
 
+    def test_pilot_eval_smoke(self):
+        import argparse
+        import subprocess
+        import sys
+        # `pilot-eval --help` prints usage without error (same pattern as above)
+        result = subprocess.run(
+            [sys.executable, "-m", "visionbrain", "pilot-eval", "--help"],
+            capture_output=True, text=True,
+            cwd=str(Path(__file__).parent.parent / "src"),
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        assert "--video" in result.stdout
+        assert "--ground-truth" in result.stdout
+
+        # Missing video exits cleanly with code 1 and an error message
+        from visionbrain import cli
+        args = argparse.Namespace(
+            video="/nonexistent/pilot-eval-missing.mp4",
+            ground_truth=None,
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            cli.cmd_pilot_eval(args)
+        assert excinfo.value.code == 1
+
 
 class TestWebApp:
     def test_job_result_json_endpoints(self, tmp_path):
@@ -513,6 +560,70 @@ class TestWebApp:
             raise AssertionError("expected HTTPException for missing upload")
         except HTTPException as exc:
             assert exc.status_code == 404
+
+    def test_ui_feedback_surfaces_present(self):
+        """The always-on feedback surfaces ship in the served index.html.
+
+        Every processing state must be visible somewhere: the film run panel,
+        the still run panel (image jobs were previously silent in the stage),
+        the live stage states with the feed-stall flag, and the ask/report
+        in-flight slot (WEB_UI_REWORK_PLAN.md §6 honesty model).
+        """
+        from fastapi.testclient import TestClient
+
+        from visionbrain import web_app
+
+        client = TestClient(web_app.app)
+        html = client.get("/").text
+        for element_id in (
+            "mission-run",                          # film run panel
+            "inspect-run", "ir-task", "ir-phase",   # still run panel + cells
+            "ir-elapsed", "ir-latest",
+            "live-empty", "live-stall",             # live stage states + stall flag
+            "live-stats",
+            "btn-live-ask", "btn-live-report",      # shared ask/report slot
+        ):
+            assert f'id="{element_id}"' in html, f"missing feedback surface: #{element_id}"
+        # §13.1 also prescribes an external-origins grep here; it lands with
+        # the P0 shell rewrite — the current shell still preconnects to
+        # Google Fonts and the fix (self-hosted static/fonts/) is scoped
+        # there, not in the feedback layer.
+
+    def test_live_simplification_client_pins(self):
+        """SIMPLIFICATION_SPEC §1/§2/§6 client behavior, pinned in served HTML.
+
+        - The ?live shortcut connects as a viewer only: no liveStartToggle
+          call and no hardcoded stream/prompt fallbacks (empty storage starts
+          no source and auto-fills nothing).
+        - liveMasksChange re-sends prompts only in hub mode; local sends one
+          set_task message.
+        - The 100s ask timeout no longer re-enables the ask/report buttons.
+        """
+        from fastapi.testclient import TestClient
+
+        from visionbrain import web_app
+
+        client = TestClient(web_app.app)
+        html = client.get("/").text
+
+        # §1 — ?live bootstrap is a viewer, not an auto-start demo hook.
+        bootstrap = html.split("has('live')", 1)[1].split("} catch", 1)[0]
+        assert "liveStartToggle" not in bootstrap
+        assert "liveEngineConnect" in bootstrap          # viewer attach only
+        assert "localStorage.getItem('vb.liveUrl') ||" not in html
+        assert "car truck bus person bicycle" not in html
+
+        # §2 — local mask toggle sends set_task only; the hub keeps its
+        # documented prompt re-send.
+        masks = html.split("function liveMasksChange", 1)[1].split("livePromptsNorm", 1)[0]
+        assert "set_task" in masks
+        assert "LIVE.mode !== 'hub'" in masks
+
+        # §6 — the late timeout must not re-enable the buttons while the
+        # request slot is still occupied.
+        tick = html.split("function liveAskTick", 1)[1].split("function liveAskEnd", 1)[0]
+        assert "setAskButtons" not in tick
+        assert "late" in tick
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1092,6 +1203,143 @@ class TestModelHost:
         host.release("never-loaded")  # must not raise
         assert host.resident() == []
 
+    def test_slow_load_does_not_block_other_keys(self):
+        import threading
+
+        from visionbrain.model_host import ModelHost
+
+        host = ModelHost()
+        proceed = threading.Event()
+        load_started = threading.Event()
+
+        def slow_loader():
+            load_started.set()
+            assert proceed.wait(5.0)
+            return "B"
+
+        t = threading.Thread(
+            target=host.acquire, args=("b", slow_loader), daemon=True
+        )
+        t.start()
+        assert load_started.wait(2.0)
+        # While "b" is mid-load (outside the global lock) other keys stay
+        # fully live — the old implementation stalled every acquire/release
+        # behind a multi-second load.
+        assert host.acquire("a", lambda: "A") == "A"
+        host.release("a")
+        proceed.set()
+        t.join(5.0)
+        assert host.acquire("b", lambda: "B") == "B"
+        host.release("b")   # main thread's hold
+        host.release("b")   # the loader thread's hold from acquire()
+        assert host.resident() == []
+
+    def test_same_key_concurrent_acquire_loads_once(self):
+        import threading
+        import time
+
+        from visionbrain.model_host import ModelHost
+
+        host = ModelHost()
+        calls = []
+        gate = threading.Event()
+
+        def loader():
+            calls.append(1)
+            assert gate.wait(5.0)
+            return "W"
+
+        results = []
+
+        def acquire():
+            results.append(host.acquire("k", loader))
+
+        threads = [threading.Thread(target=acquire, daemon=True) for _ in range(3)]
+        for t in threads:
+            t.start()
+        time.sleep(0.2)  # let all three park (one loading, two waiting)
+        gate.set()
+        for t in threads:
+            t.join(5.0)
+        assert len(calls) == 1
+        assert results == ["W", "W", "W"]
+        for _ in range(3):
+            host.release("k")
+        assert host.resident() == []
+
+
+class TestSupervisionBridge:
+    """Compact-mask cache: round-trip, eviction, no id-reuse contamination."""
+
+    @staticmethod
+    def _detections_with_mask(second_row_active=False):
+        import numpy as np
+        import supervision as sv
+
+        mask = np.zeros((2, 50, 100), dtype=bool)
+        mask[0, 10:40, 20:80] = True
+        if second_row_active:
+            mask[1, 5:15, 5:15] = True
+        return sv.Detections(
+            xyxy=np.array([[20.0, 10.0, 80.0, 40.0],
+                           [5.0, 5.0, 15.0, 15.0]], dtype=np.float32),
+            mask=mask,
+        )
+
+    def test_to_compact_roundtrip(self):
+        from visionbrain import supervision_bridge as sb
+
+        dets = self._detections_with_mask()
+        compact = sb.to_compact(dets)
+        assert compact.mask is None
+        restored = sb.from_compact(compact)
+        assert restored.mask is not None
+        assert restored.mask.shape == (2, 50, 100)
+        assert bool(restored.mask[0, 10:40, 20:80].all())
+
+    def test_cache_entry_evicted_when_detections_collected(self):
+        import gc
+
+        from visionbrain import supervision_bridge as sb
+
+        compact = sb.to_compact(self._detections_with_mask())
+        key = id(compact)
+        assert key in sb._compact_mask_cache
+        del compact
+        gc.collect()
+        # The weakref finalizer must evict — an unbounded id()-keyed cache
+        # leaks every converted mask and risks recycled-id contamination.
+        assert key not in sb._compact_mask_cache
+        assert key not in sb._compact_shape_cache
+
+    def test_from_compact_no_cross_contamination(self):
+        import numpy as np
+
+        from visionbrain import supervision_bridge as sb
+
+        first_mask = self._detections_with_mask().mask
+        second_mask = self._detections_with_mask(second_row_active=True).mask
+        sb.to_compact(self._detections_with_mask())
+        second_compact = sb.to_compact(
+            self._detections_with_mask(second_row_active=True)
+        )
+        restored = sb.from_compact(second_compact)
+        # Must be SECOND's masks — a recycled-id cache would risk handing
+        # back the first object's masks under the new boxes.
+        assert np.array_equal(restored.mask, second_mask)
+        assert not np.array_equal(restored.mask, first_mask)
+
+    def test_from_compact_without_cache_entry_is_identity(self):
+        import numpy as np
+        import supervision as sv
+
+        from visionbrain import supervision_bridge as sb
+
+        dets = sv.Detections(
+            xyxy=np.array([[0.0, 0.0, 1.0, 1.0]], dtype=np.float32)
+        )
+        assert sb.from_compact(dets) is dets
+
 
 class TestVLMRegistry:
     def test_lfm3b_registered_with_expected_checkpoint(self):
@@ -1334,9 +1582,9 @@ class TestMlxCompat:
             pytest.skip("mlx_vlm not installed")
 
         from visionbrain.mlx_compat import ensure_lfm_projector_layernorm
-        from mlx_vlm.utils import load_config
 
         ensure_lfm_projector_layernorm()
+        from mlx_vlm.utils import load_config
 
         def make_case(name, layernorm_in_weights, declared):
             d = tmp_path / name
@@ -1348,6 +1596,7 @@ class TestMlxCompat:
             weight_map = {"language_model.model.embed_tokens.weight": "m.safetensors"}
             if layernorm_in_weights:
                 weight_map["multi_modal_projector.layer_norm.weight"] = "m.safetensors"
+                weight_map["multi_modal_projector.layer_norm.bias"] = "m.safetensors"
             (d / "model.safetensors.index.json").write_text(
                 json.dumps({"weight_map": weight_map})
             )
@@ -1434,6 +1683,62 @@ class TestLiveTracking:
             tracker.step("img", ["plane"], "detect", 200, 200,
                          frame_id=f, timestamp_ms=f * 100)
         assert len(bb_calls) == 3
+
+    def test_empty_scene_keeps_detect_every_throttle(self):
+        """A detect that finds nothing must not force a full detect every
+        frame — the held path runs with an empty set too."""
+        from visionbrain import live_tracking as lt
+
+        class EmptyResult:
+            scores = []
+            boxes = []
+            labels = []
+            track_ids = []
+            masks = None
+
+        class FakeTracker:
+            def update(self, result):
+                return result
+
+        detect_calls = []
+
+        def fake_detect(predictor, backbone_features, prompts, image_size,
+                        threshold, encoder_cache=None):
+            detect_calls.append(1)
+            return EmptyResult()
+
+        lt._loaded[(lt.DEFAULT_MODEL, lt.DEFAULT_RESOLUTION)] = {
+            "model": object(), "processor": object(), "predictor": object(),
+        }
+        tracker = lt.LiveSamTracker(
+            detect_every=3,
+            backbone_fn=lambda m, p: object(),
+            detect_fn=fake_detect,
+            preprocess_fn=lambda proc, img: "pixels",
+            tracker=FakeTracker(),
+        )
+        for f in range(1, 7):  # detects on frames 1 and 4 only
+            items = tracker.step("img", ["plane"], "detect", 200, 200,
+                                 frame_id=f, timestamp_ms=f * 100)
+            assert items == []
+        assert len(detect_calls) == 2
+
+    def test_ensure_loaded_reapplies_threshold_on_cache_hit(self):
+        from visionbrain import live_tracking as lt
+
+        class FakePredictor:
+            score_threshold = 0.15
+
+        pred = FakePredictor()
+        lt._loaded[("m", 1008)] = {
+            "model": object(), "processor": object(), "predictor": pred,
+        }
+        try:
+            _m, _p, got = lt._ensure_loaded("m", 1008, 0.4)
+            assert got is pred
+            assert pred.score_threshold == 0.4
+        finally:
+            lt._loaded.clear()
 
     def test_step_segment_emits_polygon_by_default(self):
         import numpy as np

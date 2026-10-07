@@ -1,0 +1,42 @@
+<!-- PLATE 3 · where it runs — four deployment modes, four panels, one core -->
+<svg viewBox="0 0 1120 272" role="img" aria-label="Four deployment modes of the same core, one per panel: a machine on the site with nothing leaving the building; a virtual machine riding hardware and backups you already run; a cloud instance in a region you choose, managed, with no box to fit on site; and a mobile unit in a vehicle at the site, gone when the job is done.">
+  <g id="p3-mode-site">
+    <rect x="32" y="28" width="240" height="216" fill="#e4e9ec" stroke="#c8d0d6" stroke-width="1.5"/>
+    <path d="M104,132 L104,76 L152,52 L200,76 L200,132 L124,132 L124,112 L108,112 L108,132 Z" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="132" y="88" width="40" height="28" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="146" y="100" width="12" height="8" fill="#101820"/>
+    <text class="svg-label" font-weight="500" text-anchor="middle" x="152" y="176">On the site</text>
+    <text class="svg-mono" text-anchor="middle" x="152" y="200">a machine in the building</text>
+    <text class="svg-mono" text-anchor="middle" x="152" y="220">nothing leaves the site</text>
+  </g>
+  <g id="p3-mode-vm">
+    <rect x="304" y="28" width="240" height="216" fill="#e4e9ec" stroke="#c8d0d6" stroke-width="1.5"/>
+    <rect x="376" y="52" width="96" height="80" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <line x1="376" y1="120" x2="472" y2="120" stroke="#101820" stroke-width="1"/>
+    <rect x="404" y="88" width="40" height="28" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="418" y="100" width="12" height="8" fill="#101820"/>
+    <text class="svg-label" font-weight="500" text-anchor="middle" x="424" y="176">In a virtual machine</text>
+    <text class="svg-mono" text-anchor="middle" x="424" y="200">rides the hardware and</text>
+    <text class="svg-mono" text-anchor="middle" x="424" y="220">backups you already run</text>
+  </g>
+  <g id="p3-mode-instance">
+    <rect x="576" y="28" width="240" height="216" fill="#e4e9ec" stroke="#c8d0d6" stroke-width="1.5"/>
+    <path d="M665,132 A17,17 0 0 1 656.827,100.093 A40,40 0 1 1 735.173,100.093 A17,17 0 0 1 727,132 Z" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="676" y="88" width="40" height="28" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="690" y="100" width="12" height="8" fill="#101820"/>
+    <text class="svg-label" font-weight="500" text-anchor="middle" x="696" y="176">In an instance</text>
+    <text class="svg-mono" text-anchor="middle" x="696" y="200">in a region you choose</text>
+    <text class="svg-mono" text-anchor="middle" x="696" y="220">managed · no box to fit</text>
+  </g>
+  <g id="p3-mode-mobile">
+    <rect x="848" y="28" width="240" height="216" fill="#e4e9ec" stroke="#c8d0d6" stroke-width="1.5"/>
+    <path d="M920,124 L920,52 L980,52 L980,68 L1016,68 L1016,124 Z" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <circle cx="936" cy="124" r="8" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <circle cx="1000" cy="124" r="8" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="948" y="88" width="40" height="28" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="962" y="100" width="12" height="8" fill="#101820"/>
+    <text class="svg-label" font-weight="500" text-anchor="middle" x="968" y="176">On a mobile unit</text>
+    <text class="svg-mono" text-anchor="middle" x="968" y="200">in a vehicle at the site</text>
+    <text class="svg-mono" text-anchor="middle" x="968" y="220">gone when the job is done</text>
+  </g>
+</svg>

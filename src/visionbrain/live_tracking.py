@@ -8,9 +8,12 @@ drive the exact same tracker the cockpit HUD uses.
 
 Design choices (deliberately lighter than ``track_video_realtime``):
 
-* The ViT backbone is recomputed only every ``backbone_every`` detect frames;
-  ``_detect_with_backbone`` reuses the cached features in between — the 2-4x
-  speed win, resolution-independent.
+* The ViT backbone is recomputed only every ``backbone_every`` detect passes
+  (or sooner once it is ``max_backbone_age_ms`` old); ``_detect_with_backbone``
+  reuses the cached features in between — the 2-4x speed win,
+  resolution-independent. Geometry from a cached backbone describes the frame
+  that backbone saw, so items carry that frame's id/timestamp and an honest
+  ``stale_ms``.
 * Between detect frames the last detection set is re-emitted with the same
   IDs ("held"), stamped with ``track_state="predicted"`` and honest
   ``stale_ms`` measured on the source's own clock, so consumers can tell lag
@@ -36,13 +39,21 @@ DEFAULT_DETECT_EVERY = 6
 DEFAULT_BACKBONE_EVERY = 15
 DEFAULT_IOU_THRESHOLD = 0.3
 DEFAULT_MAX_LOST = 10
+# Matches the previous effective refresh interval at 12 fps (every 30 steps).
+DEFAULT_MAX_BACKBONE_AGE_MS = 2500
+_U32 = 1 << 32
 
 _lock = threading.Lock()
 _loaded: dict[tuple[str, int], dict[str, Any]] = {}
 
 
 def _ensure_loaded(model: str, resolution: int, threshold: float):
-    """Lazy-load SAM 3.1 model/processor/predictor once per (model, res)."""
+    """Lazy-load SAM 3.1 model/processor/predictor once per (model, res).
+
+    ``threshold`` is re-applied to the predictor on a cache hit too — a later
+    tracker built with a different threshold must not silently run at the
+    first-load value.
+    """
     global _loaded
     key = (model, resolution)
     with _lock:
@@ -61,7 +72,17 @@ def _ensure_loaded(model: str, resolution: int, threshold: float):
             _loaded[key] = {"model": m, "processor": proc, "predictor": pred}
             log.info("SAM 3.1 tracking loaded")
         entry = _loaded[key]
-        return entry["model"], entry["processor"], entry["predictor"]
+        predictor = entry["predictor"]
+        try:
+            predictor.score_threshold = float(threshold)
+        except AttributeError:
+            pass  # injected test double without predictor attributes
+        return entry["model"], entry["processor"], predictor
+
+
+def _elapsed_ms(now_ms: int, then_ms: int) -> int:
+    """Source-clock difference; timestamps are wrapped u32 milliseconds."""
+    return (int(now_ms) - int(then_ms)) % _U32
 
 
 def _default_backbone(model, pixel_values):
@@ -117,6 +138,7 @@ class LiveSamTracker:
         backbone_every: int = DEFAULT_BACKBONE_EVERY,
         iou_threshold: float = DEFAULT_IOU_THRESHOLD,
         max_lost: int = DEFAULT_MAX_LOST,
+        max_backbone_age_ms: int = DEFAULT_MAX_BACKBONE_AGE_MS,
         backbone_fn: Optional[Callable] = None,
         detect_fn: Optional[Callable] = None,
         tracker=None,
@@ -130,6 +152,7 @@ class LiveSamTracker:
         self.backbone_every = max(1, int(backbone_every))
         self._iou_threshold = iou_threshold
         self._max_lost = max_lost
+        self.max_backbone_age_ms = int(max_backbone_age_ms)
         self._backbone_fn = backbone_fn or _default_backbone
         self._detect_fn = detect_fn or _default_detect
         self._preprocess_fn = preprocess_fn or _default_preprocess
@@ -137,11 +160,12 @@ class LiveSamTracker:
         # painted mask shape, not just the box around it; callers may still
         # inject their own tracer (or None to disable).
         self._mask_to_polygon = mask_to_polygon or _default_mask_to_polygon
-        self._tracker = tracker  # injectable; else lazily built
+        self._injected_tracker = tracker  # injectable; else lazily built
         self.reset()
 
     def reset(self) -> None:
         """Clear tracker state (new shot/scene); backbone cache is dropped."""
+        self._tracker = self._injected_tracker
         if self._tracker is None:
             try:
                 from mlx_vlm.models.sam3.generate import SimpleTracker
@@ -152,7 +176,11 @@ class LiveSamTracker:
             except Exception:
                 self._tracker = None
         self._detect_ticks = 0
+        self._detect_passes = 0
         self._backbone_cache = None
+        self._backbone_frame_id: int | None = None
+        self._backbone_timestamp_ms = 0
+        self._config_key: Any = None
         self._encoder_cache: dict[str, Any] = {}
         self._last_items: list[dict[str, Any]] = []
 
@@ -165,21 +193,36 @@ class LiveSamTracker:
         height: int,
         frame_id: int,
         timestamp_ms: int,
+        source_key: Any = None,
     ) -> list[dict[str, Any]]:
-        """Run one tracking step; returns normalized detection items."""
+        """Run one tracking step; returns normalized detection items.
+
+        ``source_key`` identifies the producer (id and epoch). Any change to it,
+        the prompts, task, threshold or frame size drops the held items and the
+        cached backbone.
+        """
+        config_key = (
+            tuple(prompts), task, self.threshold, int(width), int(height), source_key
+        )
+        if config_key != self._config_key:
+            if self._config_key is not None:
+                self.reset()
+            self._config_key = config_key
         do_detect = self._detect_ticks % self.detect_every == 0
 
-        if not do_detect and self._last_items:
-            # Held re-publish: keep last IDs + original observation provenance,
-            # marked predicted so consumers distinguish lag from new measures.
+        if not do_detect:
+            # Held re-publish — even when the last detect found nothing
+            # (empty set held as empty): an empty scene must not defeat the
+            # detect_every throttle by forcing a full detect every frame.
             # stale_ms uses the source's own clock so phone-vs-Mac skew cancels;
             # reporting 0 would be a lie with teeth — downstream evidence
             # filtering treats stale_ms == 0 as "current measurement".
             held = []
             for it in self._last_items:
                 d = dict(it)
-                observed = int(d.get("observed_timestamp_ms") or timestamp_ms)
-                d["stale_ms"] = max(0, int(timestamp_ms) - observed)
+                observed = d.get("observed_timestamp_ms")
+                observed = timestamp_ms if observed is None else observed
+                d["stale_ms"] = _elapsed_ms(timestamp_ms, observed)
                 d["track_state"] = "predicted"
                 held.append(d)
             self._detect_ticks += 1
@@ -189,13 +232,19 @@ class LiveSamTracker:
             self.model, self.resolution, self.threshold
         )
 
-        # Recompute the ViT backbone only every backbone_every detect ticks.
+        # Recompute the ViT backbone only every backbone_every detect passes,
+        # or once the cached one is too old.
         if (
             self._backbone_cache is None
-            or self._detect_ticks % self.backbone_every == 0
+            or self._detect_passes % self.backbone_every == 0
+            or _elapsed_ms(timestamp_ms, self._backbone_timestamp_ms)
+            > self.max_backbone_age_ms
         ):
             pixels = self._preprocess_fn(processor, image)
             self._backbone_cache = self._backbone_fn(model, pixels)
+            self._backbone_frame_id = frame_id
+            self._backbone_timestamp_ms = timestamp_ms
+        backbone_age_ms = _elapsed_ms(timestamp_ms, self._backbone_timestamp_ms)
 
         self._encoder_cache.clear()
         result = self._detect_fn(
@@ -237,11 +286,11 @@ class LiveSamTracker:
                 "source": "sam",
                 "track_id": tid,
                 "color_id": tid % 8,
-                "track_state": "active",
+                "track_state": "active" if backbone_age_ms == 0 else "predicted",
                 "track_confidence": round(float(scores[i]), 4),
-                "observed_frame_id": frame_id,
-                "observed_timestamp_ms": timestamp_ms,
-                "stale_ms": 0,
+                "observed_frame_id": self._backbone_frame_id,
+                "observed_timestamp_ms": self._backbone_timestamp_ms,
+                "stale_ms": backbone_age_ms,
             }
             if task == "segment" and masks is not None and i < len(masks):
                 mask = masks[i]
@@ -253,4 +302,5 @@ class LiveSamTracker:
 
         self._last_items = items
         self._detect_ticks += 1
+        self._detect_passes += 1
         return items

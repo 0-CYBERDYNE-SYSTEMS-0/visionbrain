@@ -46,7 +46,10 @@ async def _token_auth(request: Request, call_next) -> Response:
     """
     if service.token_enabled():
         path = request.url.path
-        if path.startswith("/api/") and path != "/api/healthz":
+        if (
+            (path.startswith("/api/") and path != "/api/healthz")
+            or path.startswith("/uploads/")
+        ):
             provided = request.headers.get("x-auth-token") or request.query_params.get("token")
             if not service.check_token(provided):
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
@@ -81,6 +84,7 @@ app.include_router(_live_router)
 
 # ── Job store ──────────────────────────────────────────────────────────────────
 _jobs: dict[str, dict] = {}
+_MAX_JOBS_REMEMBERED = 200  # finished jobs evicted (oldest first) past this cap
 
 
 def _new_job(kind: str) -> dict:
@@ -91,10 +95,42 @@ def _new_job(kind: str) -> dict:
                 last_heartbeat_at=now, last_output_at=None, phase="pending",
                 output=[], results={}, error=None)
     _jobs[jid] = job
+    _prune_jobs()
     return job
 
 
+def _prune_jobs() -> None:
+    """Keep the job store bounded — full stdout logs otherwise accumulate
+    for the life of a long-running hub. Never evicts unfinished jobs."""
+    excess = len(_jobs) - _MAX_JOBS_REMEMBERED
+    if excess <= 0:
+        return
+    finished = sorted(
+        (j for j in _jobs.values() if j.get("status") in ("done", "error")),
+        key=lambda j: j.get("ts", 0.0),
+    )
+    for job in finished[:excess]:
+        _jobs.pop(job["id"], None)
+
+
 async def _exec(job: dict, cmd: list[str], outputs: dict[str, str]) -> None:
+    """Run a job's subprocess, mapping every failure into job state.
+
+    A launch error (spawn failure, cancelled task) must leave the job in
+    ``error`` — an exception escaping here would strand the job as
+    ``running`` forever, heartbeating an SSE stream that never ends.
+    """
+    try:
+        await _exec_run(job, cmd, outputs)
+    except Exception as exc:  # noqa: BLE001 — job state is the error channel
+        job["status"] = "error"
+        job["phase"] = "error"
+        job["ended_at"] = time.time()
+        job["last_heartbeat_at"] = time.time()
+        job["error"] = f"launch failed: {exc}"
+
+
+async def _exec_run(job: dict, cmd: list[str], outputs: dict[str, str]) -> None:
     """Run CLI command async; stream stdout into job.output[]."""
     now = time.time()
     job["status"] = "running"
@@ -658,10 +694,9 @@ async def serve_file(jid: str, kind: str):
 
 @app.get("/uploads/{fid}")
 async def serve_upload(fid: str):
-    matches = list(UPLOADS.glob(f"{fid}*"))
-    if not matches:
-        raise HTTPException(404)
-    return FileResponse(str(matches[0]))
+    # _find_upload skips sidecar directories and prefers the shortest name —
+    # the raw matches[0] here once served the {fid}_stills dir as a 500.
+    return FileResponse(str(_find_upload(fid)))
 
 
 @app.get("/api/clips/{name}")

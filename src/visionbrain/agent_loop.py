@@ -2,11 +2,21 @@
 
 The agent alternates between:
   1. Sending the current message history to a VLM (GPT-4o or OpenAI-compatible).
-  2. Parsing the <tool> call from the VLM response.
+  2. Resolving the requested tool call from the response — either native
+     OpenAI-style ``message.tool_calls`` (returned by ``VLMClient.chat`` as a
+     ``ChatResponse``) or a textual ``<tool>...</tool>`` JSON block in the
+     response content. Native tool calls take precedence.
   3. Executing the tool (FP inference, crop extraction, or relation computation).
   4. Appending the tool result back to the message history.
 
 The loop terminates when the VLM calls the `answer` tool.
+
+Error contract:
+  - A native tool call whose ``function.arguments`` is not valid JSON is
+    reported back to the VLM as a user-role error message so it can retry on
+    the next turn (the loop does not crash).
+  - A response containing neither native tool calls nor a ``<tool>`` tag
+    raises ``ValueError``.
 
 Usage::
 
@@ -68,6 +78,82 @@ def _load_system_prompt() -> str:
 # VLM Client interface
 # ──────────────────────────────────────────────────────────────────────────────
 
+@dataclass
+class ChatResponse:
+    """Normalized assistant turn returned by :meth:`VLMClient.chat`.
+
+    Attributes:
+        content: assistant text content ("" when absent or None).
+        tool_calls: native tool calls in backend order, each a dict of the
+            form ``{"name": str, "parameters": dict}``. When a call's JSON
+            arguments could not be parsed, ``parameters`` falls back to ``{}``
+            and the extra keys ``arguments_error`` (reason) and
+            ``arguments_raw`` (original JSON string) are included so callers
+            (see :func:`run_agent`) can surface a retryable error.
+    """
+
+    content: str = ""
+    tool_calls: list[dict] = field(default_factory=list)
+
+
+def _chat_response_from_message(message: Any) -> ChatResponse:
+    """Map a native OpenAI-style response message to a :class:`ChatResponse`.
+
+    ``message.tool_calls[*].function`` entries are converted to plain
+    ``{"name", "parameters"}`` dicts. ``function.arguments`` is a JSON string
+    in the OpenAI format; on ``json.JSONDecodeError`` the mapping keeps going
+    with ``parameters={}`` plus ``arguments_raw``/``arguments_error`` markers
+    instead of crashing. Dict-shaped tool calls (some OpenAI-compatible
+    backends) are handled too.
+    """
+    content = getattr(message, "content", None) or ""
+    calls: list[dict] = []
+    for tc in getattr(message, "tool_calls", None) or []:
+        function = getattr(tc, "function", None)
+        if function is None and isinstance(tc, dict):
+            function = tc.get("function")
+        name = getattr(function, "name", None)
+        raw_args = getattr(function, "arguments", None)
+        if isinstance(function, dict):
+            name = function.get("name", name)
+            raw_args = function.get("arguments", raw_args)
+
+        call: dict[str, Any] = {"name": name or "", "parameters": {}}
+        if isinstance(raw_args, dict):
+            call["parameters"] = raw_args
+        elif isinstance(raw_args, str) and raw_args.strip():
+            try:
+                parsed = json.loads(raw_args)
+            except json.JSONDecodeError as exc:
+                call["arguments_error"] = str(exc)
+                call["arguments_raw"] = raw_args
+            else:
+                if isinstance(parsed, dict):
+                    call["parameters"] = parsed
+                else:
+                    call["arguments_error"] = "tool arguments must be a JSON object"
+                    call["arguments_raw"] = raw_args
+        calls.append(call)
+    return ChatResponse(content=content, tool_calls=calls)
+
+
+def _normalize_chat_response(result: Any) -> ChatResponse:
+    """Normalize a ``chat()`` return value to a :class:`ChatResponse`.
+
+    Accepts a ``ChatResponse`` as-is, or a plain ``str`` for legacy
+    ``VLMClient`` subclasses that override ``chat`` to return only the
+    assistant text. Anything else raises ``TypeError``.
+    """
+    if isinstance(result, ChatResponse):
+        return result
+    if isinstance(result, str):
+        return ChatResponse(content=result)
+    raise TypeError(
+        "VLMClient.chat() must return ChatResponse or str, got "
+        f"{type(result).__name__}"
+    )
+
+
 class VLMClient:
     """Minimal VLM client for the agent loop.
 
@@ -92,8 +178,15 @@ class VLMClient:
         self,
         messages: list[dict],
         tools: Optional[list] = None,
-    ) -> str:
-        """Send a multi-modal message list, return the assistant's text response."""
+    ) -> ChatResponse:
+        """Send a multi-modal message list, return the normalized assistant turn.
+
+        Native OpenAI-style ``message.tool_calls`` are mapped to
+        ``ChatResponse.tool_calls`` as ``{"name", "parameters"}`` dicts (the
+        ``function.arguments`` JSON string is decoded; malformed JSON falls
+        back to ``{}`` with ``arguments_error``/``arguments_raw`` markers).
+        ``content`` stays ``message.content or ""``.
+        """
         params: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -101,7 +194,7 @@ class VLMClient:
         if tools:
             params["tools"] = tools
         resp = self._client.chat.completions.create(**params)
-        return resp.choices[0].message.content or ""
+        return _chat_response_from_message(resp.choices[0].message)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -325,10 +418,18 @@ def run_agent(
 ) -> AgentResult:
     """Run the VisionBrain agent on *image* answering *question*.
 
+    Tool-call resolution per turn: if the chat result carries native
+    ``tool_calls`` the FIRST one is used; otherwise the textual
+    ``<tool>...</tool>`` block in the content is parsed. A response with
+    neither raises ``ValueError``. A native call with malformed JSON
+    arguments is reported back to the VLM as a user-role error message and
+    the loop continues (consuming a generation).
+
     Args:
         image: PIL Image to analyze
         question: user's question about the image
-        client: VLMClient instance for LLM calls
+        client: VLMClient instance for LLM calls (``chat`` may return a
+            ``ChatResponse`` or, for legacy subclasses, a plain ``str``)
         system_prompt: optional custom system prompt
         max_generations: max tool-call rounds before giving up
         verbose: print step-by-step progress
@@ -368,22 +469,55 @@ def run_agent(
         # ── Call VLM ────────────────────────────────────────────────────────
         n_vlm_calls += 1
         t0 = __import__("time").perf_counter()
-        response_text = client.chat(messages, tools=AGENT_TOOLS)
+        chat_result = _normalize_chat_response(client.chat(messages, tools=AGENT_TOOLS))
+        response_text = chat_result.content
         if verbose:
             print(f"  VLM response in {__import__('time').perf_counter()-t0:.2f}s")
             think = re.search(r"<think>(.*?)</think>", response_text, re.DOTALL)
             if think:
                 print(f"  [think] {think.group(1).strip()[:200]}")
 
-        messages.append({"role": "assistant", "content": [{"type": "text", "text": response_text}]})
+        # Keep history faithful: for native tool calls, append a compact JSON
+        # note of the requested call so the turn stays interpretable after
+        # _prune_context (the backend never sees native tool_call rows here).
+        assistant_text = response_text
+        if chat_result.tool_calls:
+            call_note = json.dumps(
+                {"requested_tool_call": chat_result.tool_calls[0]},
+                separators=(",", ":"),
+                default=str,
+            )
+            assistant_text = (
+                f"{response_text}\n{call_note}" if response_text.strip() else call_note
+            )
+        messages.append({"role": "assistant", "content": [{"type": "text", "text": assistant_text}]})
 
-        # ── Parse tool call ─────────────────────────────────────────────────
-        tool_call = _parse_tool_call(response_text)
+        # ── Resolve tool call (native first, then textual <tool> tag) ───────
+        tool_call = (
+            chat_result.tool_calls[0]
+            if chat_result.tool_calls
+            else _parse_tool_call(response_text)
+        )
         if tool_call is None:
             raise ValueError(
                 f"Could not parse <tool> tag from VLM response at step {step + 1}.\n"
                 f"Response: {response_text[:500]}"
             )
+
+        # Native call with unparseable JSON arguments: surface a retryable
+        # user-role error to the VLM instead of dispatching or crashing.
+        if tool_call.get("arguments_error"):
+            retry_text = (
+                f"Error: arguments for tool '{tool_call.get('name', '')}' were not "
+                f"valid JSON ({tool_call['arguments_error']}). "
+                f"Raw arguments: {tool_call.get('arguments_raw', '')!r}. "
+                "Re-issue the tool call with valid JSON arguments."
+            )
+            if verbose:
+                print(f"  ! {retry_text}")
+            messages.append({"role": "user", "content": [{"type": "text", "text": retry_text}]})
+            messages = _prune_context(messages)
+            continue
 
         tool_name = tool_call.get("name", "")
         params = tool_call.get("parameters", {})
