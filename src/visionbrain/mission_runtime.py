@@ -1432,7 +1432,13 @@ class MissionRuntime:
                 raise _CommandError("finding_not_found", "finding does not exist")
             if finding.get("review") is not None:
                 raise _CommandError("finding_already_reviewed", "finding has already been reviewed")
-            finding["review"] = {"decision": decision, "actor": principal.principal_id, "note": note, "time_ms": now}
+            finding["review"] = {
+                "decision": decision,
+                "actor": principal.principal_id,
+                "note": note,
+                "time_ms": now,
+                "mission_revision": int(snapshot["revision"]) + 1,
+            }
             updated["findings"] = findings
             updated = self._update_with_event(tx, snapshot, updated, "finding_reviewed", {"finding_id": finding_id, "snapshot": None}, now)
             self._replace_event_snapshot(tx, updated)
@@ -2215,8 +2221,14 @@ class MissionRuntime:
             merged_findings, new_findings, observation_updates = self._reconcile_watch_findings(
                 merged_findings, findings, now
             )
+            cycle_finding_ids = list(dict.fromkeys(
+                update.get("finding_id")
+                for update in observation_updates
+                if isinstance(update.get("finding_id"), str)
+            ))
         else:
             merged_findings.extend(findings)
+            cycle_finding_ids = [item.get("finding_id") for item in findings]
         if len(merged_findings) > MAX_MISSION_FINDINGS:
             await self._set_waiting(mission_id, generation, "finding_budget_exhausted", "Finding history reached its bounded limit; review or export before creating another mission.", state="paused")
             return
@@ -2250,7 +2262,7 @@ class MissionRuntime:
                 "brief_sha256": snapshot.get("brief_sha256"),
                 "model_provenance": dict(snapshot.get("model_provenance", {})),
                 "evidence_refs": evidence_refs,
-                "finding_ids": [item.get("finding_id") for item in findings],
+                "finding_ids": cycle_finding_ids,
                 "outcome": "completed",
                 "finished_at_ms": now,
             }
