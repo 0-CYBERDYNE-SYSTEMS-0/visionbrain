@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -24,6 +25,7 @@ from .mission_contracts import (
 )
 
 DEFAULT_QUOTA_BYTES = 2 * 1024 * 1024 * 1024
+_LOGGER = logging.getLogger(__name__)
 MAX_PLANNER_DIAGNOSTIC_BYTES = 32 * 1024
 MAX_PLANNER_DIAGNOSTICS_PER_MISSION = 64
 MAX_PLANNER_DIAGNOSTICS_TOTAL = 1_024
@@ -91,6 +93,15 @@ def _file_fingerprint(value: os.stat_result) -> tuple[int, int, int, int, int]:
         int(value.st_mtime_ns),
         int(value.st_ctime_ns),
     )
+
+
+def _cleanup_retired_paths(paths: list[Path]) -> None:
+    """Delete retired media after commit; report failures without undoing committed state."""
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            _LOGGER.warning("retired evidence cleanup deferred for %s: %s", path.name, exc)
 
 
 def _jpeg_dimensions(data: bytes) -> tuple[int, int]:
@@ -618,14 +629,13 @@ class MissionStore:
             try:
                 value = operation(tx)
                 self._connection.commit()
-                for path in tx._retired_paths:
-                    path.unlink(missing_ok=True)
-                return TransactionResult(value, tuple(tx.events))
             except BaseException:
                 self._connection.rollback()
                 for path in tx._created_paths:
                     path.unlink(missing_ok=True)
                 raise
+            _cleanup_retired_paths(tx._retired_paths)
+            return TransactionResult(value, tuple(tx.events))
 
     def perform_read(self, operation: Callable[[StoreTransaction], Mapping[str, Any]]) -> RequestResult:
         """Run a read command transaction without storing its reply for replay."""
@@ -667,15 +677,14 @@ class MissionStore:
                     (principal_id, request_id, payload_digest, _json(reply), int(now_ms)),
                 )
                 self._connection.commit()
-                for path in tx._retired_paths:
-                    path.unlink(missing_ok=True)
-                return RequestResult(reply, False, tuple(tx.events))
             except BaseException:
                 if self._connection.in_transaction:
                     self._connection.rollback()
                 for path in tx._created_paths:
                     path.unlink(missing_ok=True)
                 raise
+            _cleanup_retired_paths(tx._retired_paths)
+            return RequestResult(reply, False, tuple(tx.events))
 
     def transact(self, operation: Callable[[StoreTransaction], Any]) -> TransactionResult:
         """Atomically mutate mission state and append any events in ``operation``."""
