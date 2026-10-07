@@ -6,13 +6,17 @@ uses Pillow lazily, and model/runtime dependencies are deliberately absent.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
 import os
 import sqlite3
+import stat
 import threading
+import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -25,6 +29,11 @@ from .mission_contracts import (
 )
 
 DEFAULT_QUOTA_BYTES = 2 * 1024 * 1024 * 1024
+DEFAULT_ROOT_QUOTA_BYTES = 100_000_000_000
+MAX_ROOT_QUOTA_SCAN_ENTRIES = 100_000
+MAX_ROOT_QUOTA_SCAN_SECONDS = 2.0
+MAX_ROOT_QUOTA_SCAN_DEPTH = 64
+MAX_ROOT_QUOTA_LOCK_WAIT_SECONDS = 1.0
 _LOGGER = logging.getLogger(__name__)
 MAX_PLANNER_DIAGNOSTIC_BYTES = 32 * 1024
 MAX_PLANNER_DIAGNOSTICS_PER_MISSION = 64
@@ -62,6 +71,10 @@ class InvalidEvidence(MissionStoreError):
 
 class QuotaExceeded(MissionStoreError):
     """Persisting evidence would exceed the configured durable media quota."""
+
+
+class QuotaAccountingIncomplete(QuotaExceeded):
+    """Evidence-root usage could not be measured safely within configured bounds."""
 
 
 @dataclass(frozen=True)
@@ -133,6 +146,18 @@ class StoreTransaction:
         self.events: list[dict[str, Any]] = []
         self._created_paths: list[Path] = []
         self._retired_paths: list[Path] = []
+        self._root_quota_guard = None
+
+    def _ensure_root_quota_guard(self) -> None:
+        if self._root_quota_guard is None:
+            guard = self._store._root_quota_lock()
+            guard.__enter__()
+            self._root_quota_guard = guard
+
+    def _release_root_quota_guard(self) -> None:
+        guard, self._root_quota_guard = self._root_quota_guard, None
+        if guard is not None:
+            guard.__exit__(None, None, None)
 
     def get_mission(self, mission_id: str) -> dict[str, Any] | None:
         row = self._connection.execute(
@@ -356,6 +381,7 @@ class StoreTransaction:
         ).fetchone()
         if row is None:
             return None
+        self._ensure_root_quota_guard()
         metadata = json.loads(row[1])
         metadata["available"] = False
         metadata["availability_reason"] = "rolled_off"
@@ -417,6 +443,10 @@ class StoreTransaction:
         used = self.total_evidence_usage()[1]
         if used + len(jpeg_bytes) > self._store.quota_bytes:
             raise QuotaExceeded("mission evidence store quota exceeded")
+        self._ensure_root_quota_guard()
+        root_used = self._store._root_evidence_usage()
+        if root_used + len(jpeg_bytes) > self._store.root_quota_bytes:
+            raise QuotaExceeded("mission evidence root quota exceeded")
         mission_count, mission_used = self.evidence_usage(mission_id)
         if mission_count >= MAX_MISSION_EVIDENCE:
             raise QuotaExceeded(
@@ -503,6 +533,7 @@ class MissionStore:
         evidence_root: str | Path | None = None,
         *,
         quota_bytes: int = DEFAULT_QUOTA_BYTES,
+        root_quota_bytes: int = DEFAULT_ROOT_QUOTA_BYTES,
     ) -> None:
         base = Path.home() / ".visionbrain" / "missions"
         self.database_path = Path(database_path) if database_path is not None else base / "missions.sqlite3"
@@ -511,12 +542,18 @@ class MissionStore:
         )
         if quota_bytes <= 0:
             raise ValueError("quota_bytes must be positive")
+        if root_quota_bytes <= 0:
+            raise ValueError("root_quota_bytes must be positive")
         self.quota_bytes = int(quota_bytes)
+        self.root_quota_bytes = int(root_quota_bytes)
         if str(self.database_path) != ":memory:":
             self.database_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             os.chmod(self.database_path.parent, 0o700)
         self.evidence_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.evidence_root = self.evidence_root.resolve(strict=True)
         os.chmod(self.evidence_root, 0o700)
+        root_key = hashlib.sha256(os.fsencode(self.evidence_root)).hexdigest()
+        self._root_quota_lock_path = self.evidence_root.parent / f".mission-root-quota-{root_key}.lock"
         self._lock = threading.RLock()
         self._connection = sqlite3.connect(
             str(self.database_path), timeout=30, check_same_thread=False
@@ -528,6 +565,121 @@ class MissionStore:
             self._connection.execute("PRAGMA journal_mode = WAL")
             self._connection.execute("PRAGMA synchronous = FULL")
         self._initialize()
+
+    @contextmanager
+    def _root_quota_lock(self):
+        """Serialize cooperating writers that share this canonical evidence root."""
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        fd = None
+        try:
+            fd = os.open(self._root_quota_lock_path, flags, 0o600)
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError("quota lock is not a regular file")
+            os.fchmod(fd, 0o600)
+            deadline = time.monotonic() + MAX_ROOT_QUOTA_LOCK_WAIT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise QuotaAccountingIncomplete(
+                            "mission evidence root quota accounting incomplete: root lock busy (wait limit exceeded)"
+                        )
+                    time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+                except InterruptedError as exc:
+                    raise QuotaAccountingIncomplete(
+                        "mission evidence root quota accounting incomplete: root lock acquisition interrupted"
+                    ) from exc
+        except BaseException as exc:
+            if fd is not None:
+                os.close(fd)
+            if isinstance(exc, (QuotaAccountingIncomplete, KeyboardInterrupt, SystemExit)):
+                raise
+            if isinstance(exc, OSError):
+                raise QuotaAccountingIncomplete(
+                    f"mission evidence root quota accounting incomplete: root lock unavailable ({exc})"
+                ) from exc
+            raise
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+    def _root_evidence_usage(self) -> int:
+        """Sum regular-file sizes without following links, within finite scan bounds."""
+        directory_flag = getattr(os, "O_DIRECTORY", 0)
+        nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
+        if not directory_flag or not nofollow_flag:
+            raise QuotaAccountingIncomplete(
+                "mission evidence root quota accounting incomplete: safe directory traversal unavailable"
+            )
+        deadline = time.monotonic() + MAX_ROOT_QUOTA_SCAN_SECONDS
+        directory_flags = os.O_RDONLY | directory_flag | nofollow_flag
+        entries_seen = 0
+        total_bytes = 0
+
+        def check_deadline() -> None:
+            if time.monotonic() > deadline:
+                raise QuotaAccountingIncomplete(
+                    "mission evidence root quota accounting incomplete: scan time limit exceeded"
+                )
+
+        def scan_directory(directory_fd: int, depth: int) -> None:
+            nonlocal entries_seen, total_bytes
+            check_deadline()
+            try:
+                iterator = os.scandir(directory_fd)
+            except OSError as exc:
+                raise QuotaAccountingIncomplete(
+                    f"mission evidence root quota accounting incomplete: directory scan failed ({exc})"
+                ) from exc
+            with iterator:
+                for entry in iterator:
+                    check_deadline()
+                    entries_seen += 1
+                    if entries_seen > MAX_ROOT_QUOTA_SCAN_ENTRIES:
+                        raise QuotaAccountingIncomplete(
+                            "mission evidence root quota accounting incomplete: entry limit exceeded"
+                        )
+                    try:
+                        metadata = entry.stat(follow_symlinks=False)
+                        if stat.S_ISREG(metadata.st_mode):
+                            total_bytes += metadata.st_size
+                        elif stat.S_ISDIR(metadata.st_mode):
+                            if depth >= MAX_ROOT_QUOTA_SCAN_DEPTH:
+                                raise QuotaAccountingIncomplete(
+                                    "mission evidence root quota accounting incomplete: depth limit exceeded"
+                                )
+                            child_fd = os.open(entry.name, directory_flags, dir_fd=directory_fd)
+                            try:
+                                scan_directory(child_fd, depth + 1)
+                            finally:
+                                os.close(child_fd)
+                    except QuotaAccountingIncomplete:
+                        raise
+                    except OSError as exc:
+                        raise QuotaAccountingIncomplete(
+                            f"mission evidence root quota accounting incomplete: entry inspection failed ({exc})"
+                        ) from exc
+            check_deadline()
+
+        try:
+            root_fd = os.open(self.evidence_root, directory_flags)
+            try:
+                scan_directory(root_fd, 0)
+            finally:
+                os.close(root_fd)
+        except QuotaAccountingIncomplete:
+            raise
+        except OSError as exc:
+            raise QuotaAccountingIncomplete(
+                f"mission evidence root quota accounting incomplete: root scan failed ({exc})"
+            ) from exc
+        return total_bytes
 
     def _initialize(self) -> None:
         with self._lock:
@@ -625,17 +777,21 @@ class MissionStore:
     def _run_transaction(self, operation: Callable[[StoreTransaction], Any]) -> TransactionResult:
         with self._lock:
             tx = StoreTransaction(self, self._connection)
-            self._connection.execute("BEGIN IMMEDIATE")
             try:
+                self._connection.execute("BEGIN IMMEDIATE")
                 value = operation(tx)
                 self._connection.commit()
             except BaseException:
-                self._connection.rollback()
+                if self._connection.in_transaction:
+                    self._connection.rollback()
                 for path in tx._created_paths:
                     path.unlink(missing_ok=True)
                 raise
-            _cleanup_retired_paths(tx._retired_paths)
-            return TransactionResult(value, tuple(tx.events))
+            else:
+                _cleanup_retired_paths(tx._retired_paths)
+                return TransactionResult(value, tuple(tx.events))
+            finally:
+                tx._release_root_quota_guard()
 
     def perform_read(self, operation: Callable[[StoreTransaction], Mapping[str, Any]]) -> RequestResult:
         """Run a read command transaction without storing its reply for replay."""
@@ -657,8 +813,8 @@ class MissionStore:
         payload_digest = _payload_hash(payload)
         with self._lock:
             tx = StoreTransaction(self, self._connection)
-            self._connection.execute("BEGIN IMMEDIATE")
             try:
+                self._connection.execute("BEGIN IMMEDIATE")
                 row = self._connection.execute(
                     "SELECT payload_sha256, reply_json FROM requests "
                     "WHERE principal_id = ? AND request_id = ?",
@@ -683,8 +839,11 @@ class MissionStore:
                 for path in tx._created_paths:
                     path.unlink(missing_ok=True)
                 raise
-            _cleanup_retired_paths(tx._retired_paths)
-            return RequestResult(reply, False, tuple(tx.events))
+            else:
+                _cleanup_retired_paths(tx._retired_paths)
+                return RequestResult(reply, False, tuple(tx.events))
+            finally:
+                tx._release_root_quota_guard()
 
     def transact(self, operation: Callable[[StoreTransaction], Any]) -> TransactionResult:
         """Atomically mutate mission state and append any events in ``operation``."""
