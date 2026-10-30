@@ -356,6 +356,7 @@ Pure (stdlib only; module imports with no MLX/PIL):
 **Public API:**
 - `LiveSamTracker(*, model, resolution, threshold, detect_every, backbone_every, tracker=None, backbone_fn=None, detect_fn=None, preprocess_fn=None, mask_to_polygon=None)` — `mask_to_polygon` defaults to `detection_core.mask_to_polygon` (pass `None`-producing custom or `lambda *a: None` to disable)
 - `.step(image, prompts, task, width, height, frame_id, timestamp_ms) -> list[dict]` — one frame in, normalized items out (`label/score/box/source="sam"/track_id/color_id/track_state/stale_ms`, plus `polygon` whenever the task yields masks)
+- `.set_threshold(threshold) -> None` — change the confidence threshold used by the next step; configuration invalidation clears cached tracking state without reloading checkpoint weights
 - `.reset()` — new shot/scene
 
 ViT backbone cached across frames (recompute every `backbone_every`); between detects the last items are re-emitted held with `track_state="predicted"` and honest `stale_ms`. Loader and all three compute hooks are injectable → unit-testable without mlx_vlm or weights.

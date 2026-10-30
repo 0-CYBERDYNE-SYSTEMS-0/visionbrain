@@ -128,3 +128,50 @@ def test_same_config_keeps_cache():
     for n in (1, 2):
         tracker.step("x", ["car"], "detect", 100, 100, n, n * 100, source_key=("scout", 1))
     assert len(fakes.backbones) == 1
+
+
+def test_threshold_updates_apply_both_directions_without_reloading_weights(monkeypatch):
+    fakes = Fakes()
+    predictor = types.SimpleNamespace(score_threshold=None)
+    loaded = {"model": None, "loads": 0}
+    thresholds = []
+
+    def ensure_loaded(model, resolution, threshold):
+        if loaded["model"] is None:
+            loaded["model"] = object()
+            loaded["loads"] += 1
+        predictor.score_threshold = float(threshold)
+        return loaded["model"], object(), predictor
+
+    def detect(predictor_arg, features, prompts, size, threshold, cache):
+        thresholds.append(threshold)
+        assert predictor_arg.score_threshold == threshold
+        scores = np.array([0.4]) if 0.4 >= threshold else np.array([])
+        boxes = np.array([[10.0, 10.0, 50.0, 50.0]]) if len(scores) else np.empty((0, 4))
+        labels = ["car"] if len(scores) else []
+        return types.SimpleNamespace(
+            scores=scores, boxes=boxes, labels=labels, masks=None, track_ids=None
+        )
+
+    monkeypatch.setattr(lt, "_ensure_loaded", ensure_loaded)
+    tracker = lt.LiveSamTracker(
+        threshold=0.15,
+        detect_every=1,
+        backbone_every=100,
+        backbone_fn=fakes.backbone,
+        detect_fn=detect,
+        preprocess_fn=fakes.preprocess,
+        tracker=types.SimpleNamespace(update=lambda result: result),
+    )
+
+    first = tracker.step("a", ["car"], "detect", 100, 100, 1, 100)
+    tracker.set_threshold(0.6)
+    raised = tracker.step("b", ["car"], "detect", 100, 100, 2, 200)
+    tracker.set_threshold(0.15)
+    lowered = tracker.step("c", ["car"], "detect", 100, 100, 3, 300)
+
+    assert len(first) == 1
+    assert raised == []
+    assert len(lowered) == 1
+    assert thresholds == [0.15, 0.6, 0.15]
+    assert loaded["loads"] == 1

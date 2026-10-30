@@ -184,6 +184,10 @@ class LiveSamTracker:
         self._encoder_cache: dict[str, Any] = {}
         self._last_items: list[dict[str, Any]] = []
 
+    def set_threshold(self, threshold: float) -> None:
+        """Set the confidence threshold used by the next tracking step."""
+        self.threshold = float(threshold)
+
     def step(
         self,
         image,
