@@ -401,7 +401,7 @@ Pure asyncio/stdlib primitives for LAN/business deployments (no fastapi or MLX i
 
 - `MODELS = {"gemma": gemma-4-e2b-it-4bit, "lfm": LFM2.5-VL-450M-MLX-4bit, "lfm3b": LFM2.5-VL-3B-MLX-4bit}`
 - `set_model(key) / current_key() / current_model() / available()`
-- `ask(question, detections=None, prompts=None, image=None) -> str`; `generate_report(summary_text, report_type="field", image=None) -> str` — multimodal generation via mlx_vlm with shared sampling policy (min_p=0.15, repetition_penalty=1.05)
+- `ask(question, detections=None, prompts=None, image=None, cancel_event=None) -> str`; `generate_report(summary_text, report_type="field", image=None, cancel_event=None) -> str` — multimodal generation via mlx_vlm with shared sampling policy (min_p=0.15, repetition_penalty=1.05); an optional cancellation event is checked before model work and at generated-token boundaries while composing with and restoring the tokenizer's original EOS criterion.
 - `position_label(x, y)`, `format_detection_lines(dets)` — shared plain-language rendering for prompts/HUDs
 - `SYSTEM_PROMPT` — anti-hallucination copilot contract (detector counts are authoritative but never a full inventory)
 
