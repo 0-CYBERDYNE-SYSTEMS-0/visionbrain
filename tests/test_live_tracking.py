@@ -165,9 +165,9 @@ def test_threshold_updates_apply_both_directions_without_reloading_weights(monke
     )
 
     first = tracker.step("a", ["car"], "detect", 100, 100, 1, 100)
-    tracker.set_threshold(0.6)
+    tracker.threshold = 0.6
     raised = tracker.step("b", ["car"], "detect", 100, 100, 2, 200)
-    tracker.set_threshold(0.15)
+    tracker.threshold = 0.15
     lowered = tracker.step("c", ["car"], "detect", 100, 100, 3, 300)
 
     assert len(first) == 1
