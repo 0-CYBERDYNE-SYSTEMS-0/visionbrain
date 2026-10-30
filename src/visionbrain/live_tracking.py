@@ -31,9 +31,16 @@ import logging
 import threading
 from typing import Any, Callable, Optional
 
+from .sam3_model_host import (
+    SAM31_HF_REPO,
+    acquire_sam31_model,
+    release_sam31_model,
+    serialized_sam31,
+)
+
 log = logging.getLogger("visionbrain.live_tracking")
 
-DEFAULT_MODEL = "mlx-community/sam3.1-bf16"
+DEFAULT_MODEL = SAM31_HF_REPO
 DEFAULT_RESOLUTION = 1008
 DEFAULT_DETECT_EVERY = 6
 DEFAULT_BACKBONE_EVERY = 15
@@ -47,6 +54,7 @@ _lock = threading.Lock()
 _loaded: dict[tuple[str, int], dict[str, Any]] = {}
 
 
+@serialized_sam31
 def _ensure_loaded(model: str, resolution: int, threshold: float):
     """Lazy-load SAM 3.1 model/processor/predictor once per (model, res).
 
@@ -60,16 +68,25 @@ def _ensure_loaded(model: str, resolution: int, threshold: float):
         if key not in _loaded:
             from mlx_vlm.models.sam3_1.generate import Sam3Predictor
             from mlx_vlm.models.sam3_1.processing_sam3_1 import Sam31Processor
-            from mlx_vlm.utils import get_model_path, load_model
+            from mlx_vlm.utils import get_model_path
 
             log.info("loading SAM 3.1 %s (res=%s) for tracking...", model, resolution)
             mp = get_model_path(model)
-            m = load_model(mp)
-            proc = Sam31Processor.from_pretrained(str(mp))
-            if resolution != 1008:
-                proc.image_size = resolution
-            pred = Sam3Predictor(m, proc, score_threshold=threshold)
-            _loaded[key] = {"model": m, "processor": proc, "predictor": pred}
+            m = acquire_sam31_model(model)
+            try:
+                proc = Sam31Processor.from_pretrained(str(mp))
+                if resolution != 1008:
+                    proc.image_size = resolution
+                pred = Sam3Predictor(m, proc, score_threshold=threshold)
+            except BaseException:
+                release_sam31_model(model)
+                raise
+            _loaded[key] = {
+                "model": m,
+                "model_id": model,
+                "processor": proc,
+                "predictor": pred,
+            }
             log.info("SAM 3.1 tracking loaded")
         entry = _loaded[key]
         predictor = entry["predictor"]
@@ -78,6 +95,16 @@ def _ensure_loaded(model: str, resolution: int, threshold: float):
         except AttributeError:
             pass  # injected test double without predictor attributes
         return entry["model"], entry["processor"], predictor
+
+
+@serialized_sam31
+def _clear_loaded() -> None:
+    """Release this module's model holds after serialized tracker use ends."""
+    with _lock:
+        model_ids = [entry["model_id"] for entry in _loaded.values()]
+        _loaded.clear()
+    for model_id in model_ids:
+        release_sam31_model(model_id)
 
 
 def _elapsed_ms(now_ms: int, then_ms: int) -> int:
@@ -184,6 +211,7 @@ class LiveSamTracker:
         self._encoder_cache: dict[str, Any] = {}
         self._last_items: list[dict[str, Any]] = []
 
+    @serialized_sam31
     def step(
         self,
         image,

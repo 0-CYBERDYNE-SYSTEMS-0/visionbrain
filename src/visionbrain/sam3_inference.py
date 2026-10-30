@@ -17,6 +17,11 @@ import numpy as np
 from PIL import Image
 
 from .loader import sam31_cache_path, _check_mlx, SAM31_HF_REPO
+from .sam3_model_host import (
+    acquire_sam31_model,
+    release_sam31_model,
+    serialized_sam31,
+)
 
 HF_REPO = SAM31_HF_REPO  # "mlx-community/sam3.1-bf16"
 
@@ -38,6 +43,7 @@ def sam31_available() -> bool:
 _sam_model_cache: dict = {}
 
 
+@serialized_sam31
 def _ensure_sam31(
     model_path: Optional[str] = None,
     threshold: float = 0.15,
@@ -52,7 +58,7 @@ def _ensure_sam31(
                 "Then restart this session."
             )
 
-        from mlx_vlm.utils import get_model_path, load_model
+        from mlx_vlm.utils import get_model_path
         from mlx_vlm.models.sam3_1.processing_sam3_1 import Sam31Processor
         from mlx_vlm.models.sam3_1.generate import Sam3Predictor
 
@@ -60,12 +66,17 @@ def _ensure_sam31(
         hf_repo = model_path or HF_REPO
         print(f"Loading SAM 3.1 from {hf_repo}...")
         mp = get_model_path(hf_repo)
-        model = load_model(mp)
-        processor = Sam31Processor.from_pretrained(str(mp))
-        predictor = Sam3Predictor(model, processor, score_threshold=threshold)
+        model = acquire_sam31_model(hf_repo)
+        try:
+            processor = Sam31Processor.from_pretrained(str(mp))
+            predictor = Sam3Predictor(model, processor, score_threshold=threshold)
+        except BaseException:
+            release_sam31_model(hf_repo)
+            raise
         print(f"  Loaded in {time.perf_counter()-t0:.2f}s")
 
         _sam_model_cache["model"] = model
+        _sam_model_cache["model_id"] = hf_repo
         _sam_model_cache["processor"] = processor
         _sam_model_cache["predictor"] = predictor
         _sam_model_cache["native_image_size"] = processor.image_size
@@ -85,6 +96,15 @@ def _ensure_sam31(
         _sam_model_cache["processor"],
         _sam_model_cache["predictor"],
     )
+
+
+@serialized_sam31
+def _clear_sam_model_cache() -> None:
+    """Release this module's raw-model hold after all serialized use ends."""
+    model_id = _sam_model_cache.get("model_id")
+    _sam_model_cache.clear()
+    if model_id is not None:
+        release_sam31_model(model_id)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -207,6 +227,7 @@ def predict_multi_fast(
     )
 
 
+@serialized_sam31
 def detect_multi(
     image: Image.Image,
     prompts: list[str],
@@ -281,6 +302,7 @@ class VideoTrackStats:
     output_path: str
 
 
+@serialized_sam31
 def track_video(
     video_path: str,
     prompts: list[str],
@@ -502,6 +524,7 @@ def render_review_outputs(
     }
 
 
+@serialized_sam31
 def track_video_with_json(
     video_path: str,
     prompts: list[str],
@@ -1075,6 +1098,7 @@ def _iou_match_track_ids(
     return id_map
 
 
+@serialized_sam31
 def track_video_chunked(
     video_path: str,
     prompts: list[str],
