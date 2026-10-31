@@ -389,7 +389,6 @@ Pure asyncio/stdlib primitives for LAN/business deployments (no fastapi or MLX i
 ### `model_host.py` — Refcounted MLX Checkpoint Residency
 
 - `HOST.acquire(key, loader) / HOST.release(key) / HOST.resident()` — payload-agnostic refcount cache; entry freed + `mx.clear_cache()` when the last holder releases. Lets engine and VLM share one LFM checkpoint.
-- SAM 3.1 consumers acquire the raw model through one shared `ModelHost` key; still-image and live-tracking processors/predictors remain separate, and their load/use/release paths serialize through the canonical SAM lock.
 
 ### `mlx_compat.py` — mlx_vlm Load Compatibility Shims
 
