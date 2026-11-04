@@ -1,0 +1,1183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VisionBridge — one persistent watch over roofs, perimeters and open ground, on any camera or drone feed</title>
+<meta name="description" content="VisionBridge turns the CCTV, cameras and drone feeds you already run into one persistent watch — over a roofline, a fence line, a whole event site, or an open boundary — and puts a masked frame of anything that should not be there on your field team's phones in about three seconds. A drone can hold station over a fixed point, or a fleet can rotate out mid-watch inside a geofence. Runs on an on-site machine, a virtual machine, a cloud instance or a mobile unit.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..600&family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #eef1f3;
+    --paper-2: #e4e9ec;
+    --ink: #101820;
+    --graphite: #5b6570;
+    --rule: #c8d0d6;
+    --signal: #c8361a;        /* detection / alert only — never decoration */
+    --signal-ink: #9c2a13;
+    --max: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-weight: 400;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 { font-family: Fraunces, Georgia, serif; font-weight: 500; letter-spacing: -0.02em; }
+  a { color: var(--signal-ink); }
+  .wrap { width: min(var(--max), calc(100% - 48px)); margin: 0 auto; }
+
+  header.top {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 24px;
+    padding: 28px 0 20px; border-bottom: 1px solid var(--rule);
+  }
+  .mark { font-family: Fraunces, serif; font-weight: 600; font-size: 21px; letter-spacing: -0.01em; }
+  .mark span { color: var(--signal); }
+  .top nav { display: flex; gap: 20px; font-size: 14px; flex-wrap: wrap; }
+  .top nav a { color: var(--graphite); text-decoration: none; }
+  .top nav a:hover { color: var(--ink); }
+
+  .hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; align-items: end; padding: 76px 0 40px; }
+  .hero h1 { font-size: clamp(42px, 5.4vw, 78px); line-height: 1.02; margin: 0 0 26px; }
+  .hero p.lede { font-size: 19px; color: var(--graphite); max-width: 46ch; margin: 0 0 30px; }
+  .hero p.lede b { color: var(--ink); font-weight: 500; }
+  .hero .plate { margin-right: calc(-1 * max(0px, (100vw - var(--max)) / 2)); }
+  .plate img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); }
+  .plate figcaption { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--graphite); padding-top: 10px; }
+
+  .readout { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); margin: 30px 0 0; padding: 22px 0; }
+  .readout div {
+    font-family: "IBM Plex Mono", monospace; font-size: 13.5px; color: var(--graphite);
+    display: flex; gap: 14px; padding: 3px 0; flex-wrap: wrap;
+  }
+  .readout div b { color: var(--ink); font-weight: 500; min-width: 190px; }
+  .readout div em { color: var(--signal-ink); font-style: normal; }
+
+  section { padding: 84px 0; border-top: 1px solid var(--rule); }
+  section.bleed { border-top: 0; }
+  h2 { font-size: clamp(30px, 3.6vw, 48px); line-height: 1.08; margin: 0 0 22px; max-width: 22ch; }
+  .two { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: 56px; }
+  .two p { max-width: 68ch; }
+  p.big { font-size: 21px; line-height: 1.5; }
+  .quiet { color: var(--graphite); font-size: 15px; }
+  .meta { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--graphite); margin: 0 0 22px; }
+  .spec { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--graphite); }
+
+  .diagram { margin-top: 8px; }
+  .diagram svg { width: 100%; height: auto; display: block; }
+  .beats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-top: 34px; border-top: 1px solid var(--rule); }
+  .beats > div { padding: 20px 22px 4px 0; }
+  .beats > div + div { border-left: 1px solid var(--rule); padding-left: 22px; }
+  .beats h3 { font-size: 17px; margin: 0 0 8px; }
+  .beats p { margin: 0; font-size: 14.5px; color: var(--graphite); }
+  .beats .n { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--signal-ink); display: block; margin-bottom: 10px; }
+
+  .measure { margin-top: 30px; border: 1px solid var(--ink); }
+  .measure table { width: 100%; border-collapse: collapse; font-family: "IBM Plex Mono", monospace; font-size: 13.5px; }
+  .measure th, .measure td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--rule); }
+  .measure th { font-weight: 500; background: var(--paper-2); }
+  .measure tr:last-child td { border-bottom: 0; }
+  .measure td.t { color: var(--signal-ink); }
+  .measure caption { caption-side: top; text-align: left; font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--graphite); padding: 10px 16px 0; }
+
+  .case { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; }
+  .case ol { margin: 0; padding-left: 20px; }
+  .case li { margin-bottom: 14px; max-width: 62ch; }
+  .case .stamp { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--graphite); margin-top: 22px; }
+
+  .alert { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 56px; align-items: start; }
+  .alert img { width: 100%; max-width: 340px; height: auto; display: block; border: 1px solid var(--rule); }
+  .alert ul { margin: 0; padding-left: 18px; }
+  .alert li { margin-bottom: 12px; max-width: 56ch; }
+
+  .deploy dl { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 9fr); gap: 10px 40px; margin: 0; }
+  .deploy dt { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--graphite); padding-top: 3px; }
+  .deploy dd { margin: 0 0 12px; max-width: 66ch; }
+
+  /* two-column honesty block: what is measured vs what is supported */
+  .ledger { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin-top: 34px; border: 1px solid var(--ink); }
+  .ledger > div { padding: 24px 26px 26px; }
+  .ledger > div + div { border-left: 1px solid var(--ink); background: var(--paper-2); }
+  .ledger h3 { font-size: 16px; margin: 0 0 14px; }
+  .ledger ul { margin: 0; padding-left: 18px; }
+  .ledger li { font-size: 14.5px; margin-bottom: 9px; max-width: 44ch; }
+  .ledger .tag { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--graphite); display: block; margin-bottom: 10px; }
+
+  .cta { background: var(--ink); color: var(--paper); margin-top: 20px; }
+  .cta .wrap { padding: 78px 0; }
+  .cta h2 { color: var(--paper); }
+  .cta p { color: #aab4bd; max-width: 58ch; }
+  .cta a.button {
+    display: inline-block; margin-top: 26px; padding: 15px 30px; border: 1px solid var(--paper);
+    color: var(--ink); background: var(--paper); text-decoration: none; font-size: 15px;
+    transition: background-color 160ms ease-out, color 160ms ease-out, border-color 160ms ease-out;
+  }
+  .cta a.button:hover { background: var(--signal); border-color: var(--signal); color: #fff; }
+  footer { padding: 30px 0 56px; font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--graphite); }
+
+  .svg-label { font-family: "IBM Plex Sans", system-ui, sans-serif; font-size: 15px; fill: #101820; }
+  .svg-mono { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; fill: #5b6570; }
+
+  .reveal { opacity: 1; }
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal { opacity: 0; transform: translateY(14px); transition: opacity 520ms ease-out, transform 520ms ease-out; }
+    .reveal.in { opacity: 1; transform: none; }
+    .pulse { animation: pulse 2400ms ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+  }
+  @media (max-width: 900px) {
+    .hero, .two, .case, .alert, .deploy dl, .ledger { grid-template-columns: 1fr; }
+    .ledger > div + div { border-left: 0; border-top: 1px solid var(--ink); }
+    .beats { grid-template-columns: 1fr 1fr; }
+    .beats > div { border-left: 0 !important; padding-left: 0; }
+    .hero .plate { margin-right: 0; }
+    .measure { overflow-x: auto; }
+  }
+
+  /* v3 */
+/* ============================================================================
+   VisionBridge v3 · component CSS — the numbered step row (.beats)
+   and the readout band (.readout).                     Dana Whitlock, component lead.
+
+   MERGE INSTRUCTIONS (for the orchestrator)
+   -----------------------------------------
+   Delete these v2 rules from site/index-v2.html's single <style> block:
+       lines 55-61   the four .readout rules        (border/div/b/em)
+       lines 75-80   the six .beats rules           (grid/child/borders/h3/p/.n)
+       lines 138-139 .beats + .beats > div, inside the @media (max-width:900px) block
+         — the "border-left: 0 !important" pair.  That !important exists only to
+           undo the base border rule; the block below redefines the structure at
+           each breakpoint instead, so nothing needs !important.
+   Then paste everything between BEGIN COMPONENT CSS and END COMPONENT CSS,
+   verbatim and in order, anywhere after the v2 rules it replaces.  The block is
+   self-contained: it references no other selector on the page and no other rule
+   references these.  It relies on :root tokens from the page (no new token).
+
+   WHAT IS IN THE BLOCK
+     A. .beats       — numbered step row
+     B. @supports    — no-subgrid fallback for A
+     C. .readout     — key/value readout band
+     D. breakpoints  — 900px (2-up / mid band), 620px (1-up), 560px (stacked band)
+
+   PROPERTY-LEVEL CHANGES vs v2 (full list, nothing else was touched)
+     .beats        grid-template-columns repeat(4,1fr) -> repeat(4, minmax(0,1fr))
+                   + grid-template-rows: auto auto 1fr   (NEW: one row grid shared
+                     by all four cards, so ordinal / title / body all start on the
+                     same line in every card)
+                   + column-gap: 48px  (NEW: gutters come from the grid, not from
+                     per-card padding, so all four text columns are the same width)
+                   + row-gap: 0, padding: 0, list-style: none (NEW: the row is now
+                     an <ol>, so the UA list furniture is reset)
+                   margin-top 34px (unchanged)
+     .beats > *    replacing ".beats > div": display: grid NEW, grid-row: span 3 NEW,
+                     grid-template-rows: subgrid NEW, align-content: start NEW,
+                     margin: 0 NEW
+                   padding 20px 22px 4px 0 -> 24px 0 32px
+     .beats > *::before  NEW: the column hairline is a pseudo-element centred in the
+                     grid gutter (left: -24.5px, width: 1px, --rule), shown on all
+                     but the first card.  v2 used border-left on the card itself,
+                     which forced the padding-left/padding-right asymmetry and the
+                     !important reset at 2-up.
+     .beats .n     color var(--signal-ink) -> var(--ink)   (red is semantic on this
+                     page: #9c2a13 is the token for a label attached to a detection,
+                     not for a step number.  SPEC §1.)
+                   display block -> block (unchanged), + line-height 16px NEW
+                     (the ordinal now has its own fixed slot), + font-weight 500 NEW,
+                   + font-variant-numeric: tabular-nums NEW (01–04 all the same
+                     advance width), + letter-spacing .08em NEW,
+                   margin-bottom 10px -> 12px
+     .beats h3     font-size 17px -> 18px, + line-height 1.25 NEW,
+                   + text-wrap: balance NEW, margin 0 0 8px -> 0 0 10px
+     .beats p      font-size 14.5px -> 15px, + line-height 1.55 NEW,
+                   + text-wrap: pretty NEW, + max-width 60ch NEW
+     .readout      + display: grid NEW, + grid-template-columns: max-content
+                     minmax(0,1fr) NEW  (the old fixed 190px key width is gone;
+                     the key column is now exactly as wide as its widest key and
+                     shrinks with the viewport), + column-gap: 28px NEW,
+                   + align-items: baseline NEW (key and value share the first
+                     baseline in every row), + row-gap: 0 NEW,
+                   margin 30px 0 0 -> 30px auto 0  (FIX: the v2 shorthand set
+                     margin-left/right to 0 and silently beat .wrap's "margin: 0
+                     auto" — measured, the whole band sat flush to the left
+                     viewport edge, at 0px while the sections sat at 130px at
+                     1440.  The band's two rules now align with the page measure),
+                   padding 22px 0 -> 20px 0 22px,
+                   border-top / border-bottom (unchanged)
+     .readout > div  NEW: display: contents, so the <b> and <span> of every row
+                     become cells of the band's single two-column grid and line up
+                     across all six rows.  Replaces v2's per-line flex row.
+                     (v2 rule was ".readout div": font-family mono, font-size
+                     13.5px, color graphite, display flex, gap 14px, padding 3px 0,
+                     flex-wrap wrap — all of that is gone.)
+     .readout > div > b        NEW selector: mono 13px / weight 500 / --ink /
+                     padding 5px 0.  (v2 ".readout div b": --ink, weight 500,
+                     min-width 190px — min-width deleted.)
+     .readout > div > span     NEW selector: IBM Plex Sans 14.5px / line-height 21px
+                     / --graphite / padding 5px 0.  This is the architecture-claim
+                     type: if a value is set in Sans it is a claim about what the
+                     architecture supports, not a measurement.
+     .readout > div.ro-measured > span   NEW: mono 13.5px, same graphite.
+     .readout > div.ro-measured > span em  NEW: font-style normal, weight 500,
+                     color --ink.  (v2 ".readout div em": color var(--signal-ink) —
+                     red removed from all five places it was used in this band:
+                     "1.3 s", "1.8 s", "2 s", "drone feeds", "walls", "mobile unit".
+                     Four of those are pure decoration and the two latency figures
+                     are timings, not detection labels; the page's one red rule is
+                     worth more than the accent.  To restore it if the owner
+                     disagrees, that is one line: add
+                     "color: var(--signal-ink)" to the ro-measured em rule.)
+     .ro-head      NEW class: the band's category label — mono 11.5px / .04em /
+                     --graphite / spans both grid columns / padding 0 0 6px.
+     .ro-head-mid  NEW class: the second category label carries the hairline that
+                     separates the two categories (border-top 1px --rule,
+                     margin-top 10px, padding-top 14px).
+     Breakpoints   @media (max-width:900px): .beats 2 columns, structural switch
+                     (column-gap 0, real border-left on the right-hand card,
+                     border-top on the lower row, pseudo hairlines hidden) —
+                     replaces v2's "border-left: 0 !important".
+                   @media (max-width:620px): .beats 1 column, all vertical rules off
+                     by explicit specificity-matched reset, horizontal rule between
+                     cards.
+                   @media (max-width:560px): .readout collapses to one column and
+                     each key/value pair stacks, so no key column has to survive a
+                     narrow viewport.
+
+   NOT IN THE BLOCK: no new colour, no gradient, no shadow, no filter, no
+   transition, no animation, no @font-face.  Motion families used: none.
+   ============================================================================ */
+
+/* ======================= BEGIN COMPONENT CSS ============================== */
+
+  /* ---------- A. the numbered step row -------------------------------------- */
+  .beats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: auto auto 1fr;   /* ordinal · title · body, shared by all cards */
+    column-gap: 48px;
+    row-gap: 0;
+    margin: 34px 0 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--rule);
+  }
+  .beats > * {
+    position: relative;
+    display: grid;
+    grid-row: span 3;
+    grid-template-rows: subgrid;        /* every card subscribes to the shared rows */
+    align-content: start;
+    margin: 0;
+    padding: 24px 0 32px;
+  }
+  .beats > *::before {                  /* column hairline, centred in the gutter */
+    content: "";
+    position: absolute;
+    left: -24.5px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--rule);
+    display: none;
+  }
+  .beats > *:nth-child(n+2)::before { display: block; }
+
+  .beats .n {                           /* the ordinal: fixed slot, tabular figures */
+    display: block;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .08em;
+    color: var(--ink);
+    margin: 0 0 12px;
+  }
+  .beats h3 {
+    font-size: 18px;
+    line-height: 1.25;
+    text-wrap: balance;
+    margin: 0 0 10px;
+  }
+  .beats p {
+    margin: 0;
+    max-width: 60ch;
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--graphite);
+    text-wrap: pretty;
+  }
+
+  /* ---------- B. fallback for browsers without subgrid ---------------------- */
+  @supports not (grid-template-rows: subgrid) {
+    .beats > * {
+      display: flex;
+      flex-direction: column;
+      grid-row: auto;
+      grid-template-rows: none;
+    }
+  }
+
+  /* ---------- C. the readout band ------------------------------------------- */
+  .readout {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    column-gap: 28px;
+    row-gap: 0;
+    align-items: baseline;               /* key and value share a first baseline */
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+    /* v2 wrote "margin: 30px 0 0" here, which silently killed .wrap's
+       margin: 0 auto and left the whole band flush to the left viewport edge
+       (measured: band left 0px at 1440 while every other .wrap sits at 130px).
+       "auto" restores the centring the band was always meant to have. */
+    margin: 30px auto 0;
+    padding: 20px 0 22px;
+  }
+  .readout > div { display: contents; }  /* row cells become cells of the band grid */
+
+  .readout > div > b {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+    min-width: 0;                        /* neutralises v2's min-width: 190px */
+    padding: 5px 0;
+  }
+  .readout > div > span {                /* default value type = architecture claim */
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 14.5px;
+    line-height: 21px;
+    min-width: 0;
+    color: var(--graphite);
+    padding: 5px 0;
+  }
+  .readout > div.ro-measured > span {    /* measured type = mono */
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13.5px;
+    line-height: 21px;
+  }
+  .readout > div.ro-measured > span em { /* the measured figure itself */
+    font-style: normal;
+    font-weight: 500;
+    color: var(--ink);
+  }
+
+  .ro-head {
+    grid-column: 1 / -1;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11.5px;
+    line-height: 18px;
+    letter-spacing: .04em;
+    color: var(--graphite);
+    margin: 0;
+    padding: 0 0 6px;
+  }
+  .ro-head-mid {
+    border-top: 1px solid var(--rule);
+    margin-top: 10px;
+    padding-top: 14px;
+  }
+
+  /* ---------- D. breakpoints ------------------------------------------------- */
+  @media (max-width: 900px) {
+    .beats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: 0;
+    }
+    .beats > * { padding-right: 30px; }
+    /* hide the gutter hairlines at every width below 900 — written against the
+       same selector as the base "display: block" rule, because a bare
+       ".beats > *::before" loses to it on specificity and leaves a second
+       1px rule standing 24.5px away from the real column rule (measured at
+       768px: an orphan hairline at x=359.5 next to the card rule at x=384). */
+    .beats > *:nth-child(n+2)::before { display: none; }
+    .beats > *:nth-child(even) {
+      border-left: 1px solid var(--rule);
+      padding-left: 30px;
+      padding-right: 0;
+    }
+    .beats > *:nth-child(n+3) { border-top: 1px solid var(--rule); }
+  }
+
+  @media (max-width: 620px) {
+    .beats { grid-template-columns: minmax(0, 1fr); }
+    .beats > * { padding: 24px 0 26px; }
+    .beats > *:nth-child(even) { border-left: 0; padding-left: 0; }
+    .beats > *:nth-child(n+2) { border-top: 1px solid var(--rule); }
+  }
+
+  @media (max-width: 560px) {
+    .readout {
+      grid-template-columns: minmax(0, 1fr);
+      column-gap: 0;
+      align-items: start;
+    }
+    .readout > div > b { padding: 12px 0 0; }
+    .readout > div > span { padding: 2px 0 4px; }
+    .ro-head-mid { margin-top: 12px; }
+  }
+
+/* ======================== END COMPONENT CSS =============================== */
+
+/* ============================================================================
+   v3 · plate legibility at phone widths
+   ----------------------------------------------------------------------------
+   Each plate is 1120 user units wide. At a 390px viewport the page measure is
+   342px, so a plate is drawn at ~0.305x — which renders 12.5px IBM Plex Mono as
+   ~3.8px. The text is present, uncollided and contrast-compliant, but it is
+   texture rather than readable text. That is a real defect on a page whose
+   diagram labels carry the argument.
+
+   The page already solves exactly this problem for its data table
+   (.measure { overflow-x: auto } inside the <=900px query). The plates get the
+   same treatment: below 760px the drawing keeps a legible size and the container
+   scrolls, instead of the whole plate shrinking into illegibility.
+
+   Chosen width 700px: 700/1120 = 0.625x, so 12.5px mono renders at ~7.8px and
+   15px labels at ~9.4px — the smallest sizes that still read as text.
+   The overflow is contained by .diagram, so page-level horizontal overflow
+   stays at 0 (verified at 390/768/1440).
+   ============================================================================ */
+@media (max-width: 760px) {
+  .diagram {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .diagram svg {
+    width: 700px;
+    min-width: 700px;
+  }
+}
+
+
+/* ---------------------------------------------------------------- v4 · "where it holds"
+   Four parallel site shapes. Deliberately NO ordinal eyebrow: plate 3's card row is
+   numbered because it is a sequence, and these are not — they are four equal choices.
+   Same grid and hairline language as the existing card row so the page has one hand. */
+.contexts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  margin-top: 34px;
+  border-top: 1px solid var(--rule);
+}
+.contexts > div { padding: 22px 22px 4px 0; }
+.contexts > div + div { border-left: 1px solid var(--rule); padding-left: 22px; }
+.contexts h3 { font-family: Fraunces, Georgia, serif; font-size: 17px; margin: 0 0 8px; letter-spacing: -0.01em; }
+.contexts p { margin: 0; font-size: 14.5px; color: var(--graphite); }
+@media (max-width: 900px) {
+  .contexts { grid-template-columns: 1fr 1fr; }
+  .contexts > div { border-left: 0; padding-left: 0; }
+}
+@media (max-width: 560px) {
+  .contexts { grid-template-columns: 1fr; }
+}
+/* hero quick bullets (v5): tight 2x2 grid under the lede. No new colours, no
+   new fonts. The <b> lead-in gets the ink weight, the rest stays graphite. */
+ul.quick {
+  list-style: none;
+  margin: 28px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 28px;
+  max-width: 56ch;
+}
+ul.quick li {
+  position: relative;
+  padding-left: 16px;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--graphite);
+}
+ul.quick li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 6px;
+  height: 6px;
+  background: var(--rule);
+}
+ul.quick li b { color: var(--ink); font-weight: 500; }
+@media (max-width: 560px) {
+  ul.quick { grid-template-columns: 1fr; }
+}
+
+
+/* the fine-print note that sits before the footer */
+.limits-note {
+  border-top: 1px solid var(--rule);
+  margin-top: 64px;
+  padding: 22px 0 30px;
+  max-width: 74ch;
+}
+.limits-note .meta {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: var(--graphite);
+  margin: 0 0 10px;
+  text-transform: none;
+}
+.limits-note p.quiet { margin: 0; font-size: 14px; line-height: 1.65; }
+</style>
+</head>
+<body>
+
+<header class="top wrap">
+  <div class="mark">Vision<span>Bridge</span></div>
+  <nav>
+    <a href="#how">How it works</a>
+    <a href="#inputs">Inputs</a>
+    <a href="#fleet">Drone fleets</a>
+    <a href="#contexts">Where it holds</a>
+    <a href="#runs">Where it runs</a>
+    <a href="#surfaces">Surfaces</a>
+    <a href="#measured">Measured</a>
+    <a href="#pilot">Pilot a site</a>
+  </nav>
+</header>
+
+<main>
+  <section class="wrap bleed hero">
+    <div>
+      <h1>No more blind spots. Period.</h1>
+      <ul class="quick">
+      <li><b>Your cameras, your CCTV, your drones</b> — all feeding one quiet watch.</li>
+      <li><b>If someone is where they shouldn't be</b>, your team knows in <b>about 3 seconds</b> — with the photo attached.</li>
+            <li><b>It uses what you already own.</b> No new cameras, no new wiring — your existing setup keeps working as it is.</li>
+      <li><b>One roof or a whole campus</b>, a building or a four-day event — it fits the site you have.</li>
+    </ul>
+    </div>
+    <figure class="plate reveal">
+      <img src="assets/01-hero-locked-person.jpg" width="1024" height="1024" alt="Aerial view of a rooftop with a person on it, outlined by a red segmentation mask and a detection label.">
+      <figcaption>Someone on a roof, found and circled. Real output from the system, real model, this machine.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============================================================================
+     VisionBridge v3 · component B — the readout band (six key/value lines)
+     Owner: Dana Whitlock (HTML/CSS component specialist).
+     Replaces: <div class="wrap readout"> … </div> in site/index-v2.html,
+     lines 173-180, i.e. the band that sits directly under the hero.
+
+     Class names: .readout, and the <div>/<b>/<span>/<em> furniture, are kept.
+     Added classes: .ro-head, .ro-head-mid, .ro-measured.
+
+     WHAT THE BAND NOW SAYS
+     The six lines are split into the page's two honesty categories, stated in
+     the band itself rather than left to be inferred:
+       measured on this machine  — detection (1.3 s) and mask (1.8 s). These two
+         figures are the warm_ms values in out/falcon_results.json
+         (falcon_lowres_detect.warm_ms = 1281; sam31.segment_warm_ms = 1807).
+       supported in the architecture — alert delivery, inputs, surfaces, where
+         it runs.  "under 2 s after mask" is a stage budget, not a benchmark:
+         no push-path latency exists in falcon_results.json or in the page's
+         table, so it must not be set in measured type.  (The measured
+         end-to-end figure the page already publishes is "under three seconds
+         at a 1 fps sampling rate", on the ledger's measured side.)
+
+     Group membership is markup, not CSS: moving a <p class="ro-head-mid"> one
+     row is all it takes to reclassify a line.
+     ============================================================================ -->
+  <div class="wrap readout">
+    <p class="ro-head">measured on this machine</p>
+    <div class="ro-measured"><b>detection</b><span>person on a surface · low-res tripwire · <em>1.3 s</em> warm</span></div>
+    <div class="ro-measured"><b>mask</b><span>SAM 3.1 segmentation · <em>1.8 s</em> warm</span></div>
+    <p class="ro-head ro-head-mid">supported in the architecture</p>
+    <div><b>alert</b><span>annotated frame to field phones · under 2 s after mask</span></div>
+    <div><b>inputs</b><span>existing CCTV · fixed cameras · drone feeds · one core reads all of them</span></div>
+    <div><b>aircraft</b><span>one holding station inside a geofence · patrol · a fleet rotating out mid-watch</span></div>
+    <div><b>surfaces</b><span>roofs · walls · perimeters · building faces · open ground</span></div>
+    <div><b>where it runs</b><span>on-site machine · virtual machine · cloud · mobile unit</span></div>
+  </div>
+
+  <section class="wrap" id="how">
+    <h2>How it works, in plain words</h2>
+    <p class="big" style="max-width:70ch">It keeps one question in its head — <i>is someone where they shouldn't be?</i> — watches every feed you give it, and tells your people the moment the answer is yes.</p>
+
+    <div class="diagram">
+      <svg viewBox="0 0 1120 472" role="img" aria-label="Signal-flow plate for VisionBridge. Left column, inputs: your existing CCTV network, cameras you already own on a wall or parapet, and drone feeds from one aircraft or a fleet. All three cross the same boundary into one reasoning core, drawn in the middle column, which runs three steps in order: detect whether a person is on a surface, mask the exact shape rather than a box, and fuse many views into one picture. Right column, outputs: field phones receive the annotated frame, and an operator console holds the zone, confidence, timestamp and log. The core's output figures are the architecture, not a measurement taken on this machine.">
+        <defs>
+          <marker id="p1-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#5b6570"/>
+          </marker>
+        </defs>
+
+        <!-- ============================== HEADER ============================== -->
+        <text x="28" y="44" class="svg-label" font-weight="500">how it works</text>
+        <text x="148" y="44" class="svg-mono">· three inputs, one core, one frame out</text>
+        <line x1="28" y1="60" x2="1092" y2="60" stroke="#c8d0d6" stroke-width="1"/>
+
+        <!-- ============================== INPUTS ============================== -->
+        <text x="28" y="84" class="svg-mono">inputs — whichever you already have</text>
+
+        <rect x="28" y="108" width="364" height="288" fill="none" stroke="#c8d0d6" stroke-width="1.5"/>
+        <line x1="28" y1="204" x2="392" y2="204" stroke="#c8d0d6" stroke-width="1"/>
+        <line x1="28" y1="300" x2="392" y2="300" stroke="#c8d0d6" stroke-width="1"/>
+
+        <!-- input 1 — existing cctv network -->
+        <rect x="52" y="140" width="48" height="32" fill="#e4e9ec" stroke="#101820" stroke-width="1.5"/>
+        <line x1="60" y1="148" x2="92" y2="148" stroke="#5b6570" stroke-width="1"/>
+        <line x1="60" y1="156" x2="86" y2="156" stroke="#5b6570" stroke-width="1"/>
+        <line x1="60" y1="164" x2="90" y2="164" stroke="#5b6570" stroke-width="1"/>
+        <line x1="100" y1="156" x2="108" y2="156" stroke="#101820" stroke-width="1.5" stroke-dasharray="3 3"/>
+        <rect x="108" y="148" width="24" height="16" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <circle cx="132" cy="156" r="4" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <text x="168" y="144" class="svg-label" font-weight="500">your existing CCTV</text>
+        <text x="168" y="168" class="svg-mono">NVR or VMS · we read the stream</text>
+
+        <!-- input 2 — fixed cameras you already own -->
+        <line x1="52" y1="224" x2="52" y2="280" stroke="#101820" stroke-width="1.5"/>
+        <rect x="56" y="228" width="48" height="32" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <rect x="110" y="236" width="24" height="16" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <circle cx="138" cy="244" r="4" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <text x="168" y="240" class="svg-label" font-weight="500">cameras you already own</text>
+        <text x="168" y="264" class="svg-mono">on a wall, a gatepost, a parapet</text>
+
+        <!-- input 3 — drone feeds -->
+        <g fill="none" stroke="#101820" stroke-width="1.5">
+          <circle cx="84" cy="348" r="4"/>
+          <line x1="62" y1="326" x2="106" y2="370"/>
+          <line x1="106" y1="326" x2="62" y2="370"/>
+          <circle cx="62" cy="326" r="4"/>
+          <circle cx="106" cy="326" r="4"/>
+          <circle cx="62" cy="370" r="4"/>
+          <circle cx="106" cy="370" r="4"/>
+        </g>
+        <text x="168" y="336" class="svg-label" font-weight="500">drone feeds</text>
+        <text x="168" y="360" class="svg-mono">one aircraft, or a fleet</text>
+
+        <!-- converge on one boundary -->
+        <circle cx="416" cy="252" r="2.5" fill="#5b6570"/>
+        <path d="M392 156 C 412 156, 420 252, 440 252" fill="none" stroke="#5b6570" stroke-width="1.5"/>
+        <path d="M392 252 L440 252" fill="none" stroke="#5b6570" stroke-width="1.5"/>
+        <path d="M392 348 C 412 348, 420 252, 440 252" fill="none" stroke="#5b6570" stroke-width="1.5"/>
+
+        <!-- ============================== THE CORE ============================== -->
+        <rect x="440" y="108" width="328" height="288" fill="#e4e9ec" stroke="#101820" stroke-width="1.5"/>
+        <text x="464" y="144" class="svg-label" font-weight="500">one reasoning core</text>
+
+        <text x="464" y="208" class="svg-mono" font-weight="500">1 detect</text>
+        <text x="532" y="208" class="svg-label" font-weight="500">is a person on a surface?</text>
+
+        <text x="464" y="264" class="svg-mono" font-weight="500">2 mask</text>
+        <text x="532" y="264" class="svg-label" font-weight="500">the exact shape, not a box</text>
+
+        <rect x="464" y="280" width="280" height="44" fill="none" stroke="#c8361a" stroke-width="2" class="pulse"/>
+        <path d="M528 324 L528 308 L572 308 L572 300 L580 288 L628 288 L636 300 L636 308 L680 308 L680 324 Z" fill="none" stroke="#c8361a" stroke-width="2"/>
+
+        <text x="464" y="368" class="svg-mono" font-weight="500">3 fuse</text>
+        <text x="532" y="368" class="svg-label" font-weight="500">many views, one picture</text>
+
+        <!-- ============================== OUTPUTS ============================== -->
+        <text x="840" y="84" class="svg-mono">outputs — where the frame lands</text>
+
+        <line x1="768" y1="252" x2="792" y2="252" stroke="#5b6570" stroke-width="1.5"/>
+        <circle cx="792" cy="252" r="2.5" fill="#5b6570"/>
+        <path d="M792 252 C 812 252, 820 156, 840 156" fill="none" stroke="#5b6570" stroke-width="1.5" marker-end="url(#p1-ar)"/>
+        <path d="M792 252 C 812 252, 820 348, 840 348" fill="none" stroke="#5b6570" stroke-width="1.5" marker-end="url(#p1-ar)"/>
+
+        <!-- output 1 — field phones -->
+        <rect x="840" y="108" width="52" height="96" rx="9" fill="none" stroke="#101820" stroke-width="2"/>
+        <rect x="848" y="128" width="36" height="56" fill="#101820"/>
+        <path d="M856 180 L856 168 L862 162 L866 162 L866 156 L870 152 L874 156 L874 162 L878 162 L880 168 L880 180 Z" fill="#c8361a"/>
+        <rect x="848" y="190" width="36" height="8" fill="none" stroke="#5b6570" stroke-width="1"/>
+        <text x="918" y="144" class="svg-label" font-weight="500">field phones</text>
+        <text x="918" y="168" class="svg-mono">the masked frame, pushed</text>
+        <text x="918" y="186" class="svg-mono">to phones on the ground</text>
+
+        <!-- output 2 — operator console -->
+        <rect x="840" y="300" width="252" height="96" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <text x="864" y="328" class="svg-label" font-weight="500">operator console</text>
+        <text x="864" y="358" class="svg-mono">zone · confidence · timestamp</text>
+        <text x="864" y="376" class="svg-mono">and the log of the frame</text>
+
+        <!-- ============================== FOOTNOTE ============================== -->
+        <line x1="28" y1="420" x2="1092" y2="420" stroke="#c8d0d6" stroke-width="1"/>
+        <text x="28" y="440" class="svg-mono">all three input classes cross the same boundary · one frame out</text>
+      </svg>
+    </div>
+
+    <!-- ============================================================================
+     VisionBridge v3 · component A — the numbered "how it works" step row
+     Owner: Dana Whitlock (HTML/CSS component specialist).
+     Replaces: <div class="beats"> … </div> in site/index-v2.html, lines 309-314,
+     i.e. the row that sits directly below plate 1 inside <section id="how">.
+
+     Class names: .beats and .n are the existing names and are kept unchanged.
+     No class was added. Children are <li> rather than <div> so that the page's
+     one numbered sequence is a real ordered list for assistive tech
+     (role="list" is repeated because WebKit drops list semantics when
+     list-style is none).  All CSS in beats.css is written against
+     ".beats > *", so the orchestrator may keep <div> children if the merge is
+     easier that way — the only requirement is the child order:
+     ordinal span, then h3, then p.
+
+     Copy is byte-identical to v2 except the ordinal words ONE/TWO/THREE/FOUR,
+     which become the two-digit numerals 01/02/03/04: the numerals are tabular
+     in IBM Plex Mono, so all four eyebrows are the same advance width and
+     optically identical, which ONE/TWO/THREE/FOUR (3, 3, 5 and 4 characters)
+     can never be.  No claim was added, removed or softened.
+     ============================================================================ -->
+    <ol class="beats" role="list">
+      <li><span class="n">01</span><h3>Watch the zone</h3><p>Pick the places nobody watches — the roof, the wall, the gate, the field.</p></li>
+      <li><span class="n">02</span><h3>Ask one narrow question</h3><p>It asks one question over and over, fast. A clear answer in about a second.</p></li>
+      <li><span class="n">03</span><h3>Draw the shape</h3><p>When the answer is yes, it shows your team exactly who and where — not a vague dot.</p></li>
+      <li><span class="n">04</span><h3>Push it out</h3><p>Your people get it on their phones, see it for themselves, and walk over. Done.</p></li>
+    </ol>
+  </section>
+
+  <section class="wrap" id="inputs">
+    <div class="two">
+      <h2>You probably already own everything it needs</h2>
+      <div>
+        <p>VisionBridge isn't a camera — it's the brain that goes in front of the cameras you already own and keeps an eye on things for you, around the clock.</p>
+        <p><b>Your existing CCTV.</b> We plug into what's already recording. No new wiring.</p>
+        <p><b>Cameras you already have.</b> If it looks at a surface, it can watch one.</p>
+        <p><b>Drones.</b> One flying a route, or several taking turns — all reporting to the same place.</p>
+        <p class="quiet">Mix any of them — a camera here, a drone there. They all report to your team the same way.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap" id="fleet">
+    <div class="two">
+      <h2>Working together, not flying alone</h2>
+      <div>
+        <p>One camera sees one corner. Several aircraft cover the whole site — and they share what they see, so nothing slips between them.</p>
+        <p>When one aircraft hands over to the next, the alert doesn't restart — it carries on. No gap, no lost track.</p>
+        <p>Two cameras watching the same spot become one clear alert, not two confusing ones.</p>
+        <p><b>It can stay put.</b> Tell it to hover over one place — a school roof, a gate — and it holds there on its own.</p>
+        <p><b>It never gets tired.</b> When one aircraft comes down, the next one takes over — the watch doesn't pause for a battery.</p>
+      </div>
+    </div>
+
+    <div class="diagram">
+      <svg viewBox="0 0 1120 420" role="img" aria-labelledby="p2-fleet-title" aria-label="Measured plan view of a site drawn to scale: three aircraft with coverage circles of radius 75 metres, the two overlap lenses drawn and dimensioned, a person tracked along a roof route that stays inside at least one coverage circle at every step, and a single alert stream.">
+        <title id="p2-fleet-title">Drone fleet plan view, three aircraft, measured coverage overlaps</title>
+
+        <!-- site footprint -->
+        <rect x="56" y="40" width="1008" height="300" fill="none" stroke="#101820" stroke-width="1.5" stroke-dasharray="7 6"/>
+        <text x="56" y="28" class="svg-mono">site boundary · fence line · 504 m × 150 m</text>
+
+        <!-- building, drawn before the lenses so the lens outlines read over it -->
+        <rect x="310" y="170" width="420" height="150" fill="#e4e9ec" stroke="#101820" stroke-width="2"/>
+        <g stroke="#5b6570" stroke-width="1">
+          <line x1="328" y1="180" x2="358" y2="180"/><line x1="358" y1="180" x2="358" y2="200"/>
+          <line x1="380" y1="180" x2="410" y2="180"/><line x1="410" y1="180" x2="410" y2="200"/>
+          <line x1="432" y1="180" x2="462" y2="180"/><line x1="462" y1="180" x2="462" y2="200"/>
+          <line x1="484" y1="180" x2="514" y2="180"/><line x1="514" y1="180" x2="514" y2="200"/>
+          <line x1="536" y1="180" x2="566" y2="180"/><line x1="566" y1="180" x2="566" y2="200"/>
+          <line x1="588" y1="180" x2="618" y2="180"/><line x1="618" y1="180" x2="618" y2="200"/>
+          <line x1="640" y1="180" x2="670" y2="180"/><line x1="670" y1="180" x2="670" y2="200"/>
+        </g>
+
+        <!-- measured overlap lenses: computed from the two circle centres, not eyeballed.
+             TWO defects were found and fixed here by measurement (arctest.mjs):
+               1. the old fill (#e4e9ec) was the building's own value, so an overlap crossing
+                  the roof would have vanished into it;
+               2. worse, both arcs originally carried the same sweep flag and therefore selected
+                  the SAME circle centre. The two arcs coincided, the path enclosed 0 u^2, and the
+                  lens rendered as a bare arc line instead of an area. Measured filled area:
+                  L1 0 u^2 -> 1822 u^2 (correct 1876); L2 0 u^2 -> 1388 u^2 (correct 1427).
+             The rule tone #c8d0d6 is used because an overlap region must read as a covered AREA
+             over both the paper ground and the roof plane, and it is the only mid-tone in the set. -->
+        <path d="M403.88 259.54 A150 150 0 0 0 408.12 142.46 A150 150 0 0 0 403.88 259.54 Z" fill="#c8d0d6" stroke="#5b6570" stroke-width="1"/>
+        <path d="M685.91 254.59 A150 150 0 0 0 682.09 147.41 A150 150 0 0 0 685.91 254.59 Z" fill="#c8d0d6" stroke="#5b6570" stroke-width="1"/>
+
+        <!-- person route across the roof plane. Drawn AFTER the lenses on purpose: an opaque
+             lens painted over the route cut the track exactly where it crosses an overlap,
+             which is the one thing this polyline exists to demonstrate. -->
+        <polyline points="330,246 405,220 690,214" fill="none" stroke="#5b6570" stroke-width="1.5" stroke-dasharray="2 6" stroke-linecap="round"/>
+
+        <!-- coverage circles: r = 150 units = 75 m, every circle fully on the plate -->
+        <circle cx="268" cy="196" r="150" fill="none" stroke="#5b6570" stroke-width="1" stroke-dasharray="4 5"/>
+        <circle cx="544" cy="206" r="150" fill="none" stroke="#5b6570" stroke-width="1" stroke-dasharray="4 5"/>
+        <circle cx="824" cy="196" r="150" fill="none" stroke="#5b6570" stroke-width="1" stroke-dasharray="4 5"/>
+
+        <!-- radius dimensions -->
+        <g stroke="#5b6570" stroke-width="1" stroke-dasharray="3 3">
+          <line x1="268" y1="196" x2="118" y2="196"/>
+          <line x1="544" y1="206" x2="544" y2="56"/>
+          <line x1="824" y1="196" x2="974" y2="196"/>
+        </g>
+
+        <!-- mesh links carrying shared detections and reasoning -->
+        <g stroke="#5b6570" stroke-width="1.5" stroke-dasharray="6 5">
+          <line x1="268" y1="196" x2="544" y2="206"/>
+          <line x1="544" y1="206" x2="824" y2="196"/>
+        </g>
+
+        <!-- drones -->
+        <g stroke="#101820" stroke-width="1.75" fill="none">
+          <circle cx="268" cy="196" r="5"/>
+          <line x1="254" y1="182" x2="282" y2="210"/><line x1="282" y1="182" x2="254" y2="210"/>
+          <circle cx="254" cy="182" r="4.5"/><circle cx="282" cy="182" r="4.5"/><circle cx="254" cy="210" r="4.5"/><circle cx="282" cy="210" r="4.5"/>
+        </g>
+        <g stroke="#101820" stroke-width="1.75" fill="none">
+          <circle cx="544" cy="206" r="5"/>
+          <line x1="530" y1="192" x2="558" y2="220"/><line x1="558" y1="192" x2="530" y2="220"/>
+          <circle cx="530" cy="192" r="4.5"/><circle cx="558" cy="192" r="4.5"/><circle cx="530" cy="220" r="4.5"/><circle cx="558" cy="220" r="4.5"/>
+        </g>
+        <g stroke="#101820" stroke-width="1.75" fill="none">
+          <circle cx="824" cy="196" r="5"/>
+          <line x1="810" y1="182" x2="838" y2="210"/><line x1="838" y1="182" x2="810" y2="210"/>
+          <circle cx="810" cy="182" r="4.5"/><circle cx="838" cy="182" r="4.5"/><circle cx="810" cy="210" r="4.5"/><circle cx="838" cy="210" r="4.5"/>
+        </g>
+
+        <!-- detection on the roof -->
+        <circle cx="405" cy="220" r="5" fill="#c8361a"/>
+        <rect x="393" y="208" width="24" height="24" fill="none" stroke="#c8361a" stroke-width="2" class="pulse"/>
+
+        <!-- leader lines -->
+        <g stroke="#5b6570" stroke-width="1">
+          <line x1="500" y1="148" x2="516" y2="203"/>
+          <line x1="688" y1="196" x2="712" y2="148"/>
+        </g>
+
+        <!-- scale bar: 2 units = 1 m, so the bar is 100 m -->
+        <g stroke="#101820" stroke-width="1.5">
+          <line x1="56" y1="384" x2="256" y2="384"/>
+          <line x1="56" y1="378" x2="56" y2="390"/>
+          <line x1="156" y1="378" x2="156" y2="390"/>
+          <line x1="256" y1="378" x2="256" y2="390"/>
+        </g>
+
+        <!-- captions -->
+        <text x="126" y="184" class="svg-mono">r = 75 m</text>
+        <text x="554" y="76" class="svg-mono">r = 75 m</text>
+        <text x="880" y="184" class="svg-mono">r = 75 m</text>
+        <text x="440" y="140" class="svg-mono">shared track + reasoning</text>
+        <text x="706" y="140" class="svg-mono">same track id · both aircraft</text>
+        <text x="214" y="246" class="svg-mono">A-01</text>
+        <text x="530" y="180" class="svg-mono">A-02</text>
+        <text x="830" y="170" class="svg-mono">A-03</text>
+        <text x="421" y="252" class="svg-label" fill="#9c2a13">person on the roof</text>
+        <text x="421" y="276" class="svg-mono">masked · timestamped</text>
+        <text x="328" y="302" class="svg-mono">building · the roof plane is the watch surface</text>
+        <text x="56" y="356" class="svg-mono">overlapping coverage · three aircraft · one alert stream</text>
+        <text x="640" y="356" class="svg-mono">handover lens · both aircraft share the same pixels</text>
+        <text x="56" y="400" class="svg-mono">0</text>
+        <text x="148" y="400" class="svg-mono">50 m</text>
+        <text x="248" y="400" class="svg-mono">100 m</text>
+        <text x="320" y="400" class="svg-mono">drawn to scale · 1 unit = 0.5 m · circles are measured footprints</text>
+      </svg>
+    </div>
+  </section>
+
+  <section class="wrap" id="contexts">
+    <h2>Where it holds</h2>
+    <p class="big" style="max-width:70ch">Roofs started it, and roofs will always matter. But the same system that watches a roof handles other jobs you might not expect — each one falling to the same set of eyes.</p>
+
+    <div class="contexts">
+      <div>
+        <h3>A site that stands still</h3>
+        <p>A school, a yard, a depot. Places that can't watch themselves at night — and shouldn't have to. Eyes on the roof and the fence line, all night, without getting bored.</p>
+      </div>
+      <div>
+        <h3>An event with a date on it</h3>
+        <p>One offsite event, a week of fairgrounds, a tour stop. You bring the venue and the crowd; we bring the watch. Mobile unit in, job done, gone when the site packs up.</p>
+      </div>
+      <div>
+        <h3>A fleet instead of a camera</h3>
+        <p>One aircraft is fine. Several, working together, are better: one lands, another is already up, and the watching never stops. Boundaries are drawn on a map — no one has to fly it by hand.</p>
+      </div>
+      <div>
+        <h3>Ground you cannot put a camera on</h3>
+        <p>Sometimes there's nowhere to put a camera. A long fence, a rail line, a turning circle. A drone flies the line instead, and it all reports to the same place.</p>
+      </div>
+    </div>
+
+    <p class="quiet" style="margin-top:26px;max-width:74ch">Those four are what the system is built to do. The numbers below come from the machine in this room on real footage — see them for yourself.</p>
+  </section>
+
+  <section class="wrap" id="runs">
+    <h2>Wherever you need it, on your own terms</h2>
+    <p class="big" style="max-width:70ch">On a small box at your building, in a virtual machine you already run, in the cloud, or in a mobile unit that shows up for the job. Permanent, or gone after the event.</p>
+
+    <div class="diagram">
+      <!-- PLATE 3 · where it runs — four deployment modes, four panels, one core -->
+<svg viewBox="0 0 1120 272" role="img" aria-label="Four deployment modes of the same core, one per panel: a machine on the site with nothing leaving the building; a virtual machine riding hardware and backups you already run; a cloud instance in a region you choose, managed, with no box to fit on site; and a mobile unit in a vehicle at the site, gone when the job is done.">
+  <g id="p3-mode-site">
+    <rect x="32" y="28" width="240" height="216" fill="#e4e9ec" stroke="#c8d0d6" stroke-width="1.5"/>
+    <path d="M104,132 L104,76 L152,52 L200,76 L200,132 L124,132 L124,112 L108,112 L108,132 Z" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="132" y="88" width="40" height="28" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="146" y="100" width="12" height="8" fill="#101820"/>
+    <text class="svg-label" font-weight="500" text-anchor="middle" x="152" y="176">On the site</text>
+    <text class="svg-mono" text-anchor="middle" x="152" y="200">a machine in the building</text>
+    <text class="svg-mono" text-anchor="middle" x="152" y="220">nothing leaves the site</text>
+  </g>
+  <g id="p3-mode-vm">
+    <rect x="304" y="28" width="240" height="216" fill="#e4e9ec" stroke="#c8d0d6" stroke-width="1.5"/>
+    <rect x="376" y="52" width="96" height="80" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <line x1="376" y1="120" x2="472" y2="120" stroke="#101820" stroke-width="1"/>
+    <rect x="404" y="88" width="40" height="28" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="418" y="100" width="12" height="8" fill="#101820"/>
+    <text class="svg-label" font-weight="500" text-anchor="middle" x="424" y="176">In a virtual machine</text>
+    <text class="svg-mono" text-anchor="middle" x="424" y="200">rides the hardware and</text>
+    <text class="svg-mono" text-anchor="middle" x="424" y="220">backups you already run</text>
+  </g>
+  <g id="p3-mode-instance">
+    <rect x="576" y="28" width="240" height="216" fill="#e4e9ec" stroke="#c8d0d6" stroke-width="1.5"/>
+    <path d="M665,132 A17,17 0 0 1 656.827,100.093 A40,40 0 1 1 735.173,100.093 A17,17 0 0 1 727,132 Z" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="676" y="88" width="40" height="28" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="690" y="100" width="12" height="8" fill="#101820"/>
+    <text class="svg-label" font-weight="500" text-anchor="middle" x="696" y="176">In an instance</text>
+    <text class="svg-mono" text-anchor="middle" x="696" y="200">in a region you choose</text>
+    <text class="svg-mono" text-anchor="middle" x="696" y="220">managed · no box to fit</text>
+  </g>
+  <g id="p3-mode-mobile">
+    <rect x="848" y="28" width="240" height="216" fill="#e4e9ec" stroke="#c8d0d6" stroke-width="1.5"/>
+    <path d="M920,124 L920,52 L980,52 L980,68 L1016,68 L1016,124 Z" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <circle cx="936" cy="124" r="8" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <circle cx="1000" cy="124" r="8" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="948" y="88" width="40" height="28" fill="none" stroke="#101820" stroke-width="1.5"/>
+    <rect x="962" y="100" width="12" height="8" fill="#101820"/>
+    <text class="svg-label" font-weight="500" text-anchor="middle" x="968" y="176">On a mobile unit</text>
+    <text class="svg-mono" text-anchor="middle" x="968" y="200">in a vehicle at the site</text>
+    <text class="svg-mono" text-anchor="middle" x="968" y="220">gone when the job is done</text>
+  </g>
+</svg>
+    </div>
+    <p class="quiet" style="margin-top:22px;max-width:74ch">Every setup works the same for your team and sends the same alerts. Choose what fits your building, your IT, your way of working.</p>
+  </section>
+
+  <section class="wrap" id="surfaces">
+    <h2>Roofs are just the start</h2>
+    <p class="big" style="max-width:70ch">The question stays simple — <i>is someone where they shouldn't be?</i> — and the answer applies anywhere: roofs, walls, perimeters, yards, open ground.</p>
+
+    <div class="diagram">
+      <svg viewBox="0 0 1120 360" role="img" aria-label="Elevation of an industrial site at one scale: a main building 12.5 m high, a lower annex, and a 3 m perimeter wall with a gate. Four detections are marked in red — a person on the roof, a person on the wall top, a person on the building face, and a person inside the line at the gate after hours. A 10 m scale bar with a 1.75 m figure fixes the vertical scale.">
+
+        <!-- ============ datum: one ground line, one plinth course ============ -->
+        <line x1="40" y1="284" x2="1080" y2="284" stroke="#101820" stroke-width="2"/>
+        <line x1="300" y1="276" x2="840" y2="276" stroke="#5b6570" stroke-width="1"/>
+        <line x1="880" y1="276" x2="1060" y2="276" stroke="#5b6570" stroke-width="1"/>
+
+        <!-- ============ main building: 300–660, 12.5 m ============ -->
+        <rect x="300" y="84" width="360" height="200" fill="#e4e9ec" stroke="#101820" stroke-width="1.5"/>
+        <line x1="300" y1="74" x2="660" y2="74" stroke="#101820" stroke-width="1.5"/>
+        <g stroke="#5b6570" stroke-width="1" fill="none">
+          <rect x="330" y="118" width="42" height="34"/>
+          <rect x="404" y="118" width="42" height="34"/>
+          <rect x="478" y="118" width="42" height="34"/>
+          <rect x="552" y="118" width="42" height="34"/>
+          <rect x="330" y="188" width="42" height="34"/>
+          <rect x="404" y="188" width="42" height="34"/>
+          <rect x="478" y="188" width="42" height="34"/>
+          <rect x="552" y="188" width="42" height="34"/>
+        </g>
+
+        <!-- ============ annex: same module, same plinth, lower mass ============ -->
+        <rect x="660" y="188" width="180" height="96" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <line x1="660" y1="178" x2="840" y2="178" stroke="#101820" stroke-width="1.5"/>
+        <g stroke="#5b6570" stroke-width="1" fill="none">
+          <rect x="684" y="222" width="42" height="34"/>
+          <rect x="758" y="222" width="42" height="34"/>
+        </g>
+
+        <!-- ============ perimeter wall: 3.0 m, gate between two piers ============ -->
+        <rect x="880" y="236" width="180" height="48" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <line x1="876" y1="226" x2="1064" y2="226" stroke="#101820" stroke-width="1.5"/>
+        <g stroke="#5b6570" stroke-width="1">
+          <line x1="940" y1="236" x2="940" y2="284"/>
+          <line x1="1000" y1="236" x2="1000" y2="284"/>
+          <line x1="960" y1="236" x2="960" y2="284"/>
+        </g>
+
+        <!-- ============ scale reference: 10 m bar, 1.75 m figure, wall dimension ============ -->
+        <g stroke="#5b6570" stroke-width="1.5">
+          <line x1="40" y1="326" x2="200" y2="326"/>
+          <line x1="40" y1="326" x2="40" y2="318"/>
+          <line x1="200" y1="326" x2="200" y2="318"/>
+        </g>
+        <line x1="120" y1="326" x2="120" y2="322" stroke="#5b6570" stroke-width="1"/>
+        <g stroke="#101820" stroke-width="1.5" fill="none">
+          <circle cx="64" cy="302" r="3.5"/>
+          <line x1="64" y1="306" x2="64" y2="316"/>
+          <line x1="58" y1="310" x2="70" y2="310"/>
+          <line x1="64" y1="316" x2="59" y2="326"/>
+          <line x1="64" y1="316" x2="69" y2="326"/>
+        </g>
+        <text x="216" y="330" class="svg-mono">1.75 m figure &#183; this bar spans 10 m</text>
+        <g stroke="#5b6570" stroke-width="1">
+          <line x1="1046" y1="236" x2="1046" y2="284"/>
+          <line x1="1040" y1="236" x2="1052" y2="236"/>
+          <line x1="1040" y1="284" x2="1052" y2="284"/>
+        </g>
+        <text x="1058" y="306" class="svg-mono" text-anchor="end">wall &#183; 3.0 m</text>
+
+        <!-- ============ detection 1: on the roof ============ -->
+        <path d="M408 48 H432 V72 H408 Z M411 51 V69 H429 V51 Z M416 60 a4 4 0 1 0 8 0 a4 4 0 1 0 -8 0 Z" fill="#c8361a" fill-rule="evenodd" class="pulse"/>
+        <line x1="432" y1="48" x2="488" y2="48" stroke="#5b6570" stroke-width="1"/>
+        <text x="500" y="40" class="svg-label" fill="#9c2a13">on the roof</text>
+        <text x="500" y="58" class="svg-mono">the first surface &#8212; nobody watches it</text>
+
+        <!-- ============ detection 2: on the wall top ============ -->
+        <path d="M988 200 H1012 V224 H988 Z M991 203 V221 H1009 V203 Z M996 212 a4 4 0 1 0 8 0 a4 4 0 1 0 -8 0 Z" fill="#c8361a" fill-rule="evenodd" class="pulse"/>
+        <polyline points="988,200 988,168 724,168" fill="none" stroke="#5b6570" stroke-width="1"/>
+        <text x="700" y="128" class="svg-label" fill="#9c2a13">on the wall</text>
+        <text x="700" y="146" class="svg-mono">over the fence, at the top of it</text>
+
+        <!-- ============ detection 3: on the building face ============ -->
+        <path d="M276 188 H300 V212 H276 Z M279 191 V209 H297 V191 Z M284 200 a4 4 0 1 0 8 0 a4 4 0 1 0 -8 0 Z" fill="#c8361a" fill-rule="evenodd" class="pulse"/>
+        <line x1="276" y1="196" x2="148" y2="196" stroke="#5b6570" stroke-width="1"/>
+        <text x="44" y="228" class="svg-label" fill="#9c2a13">on the face</text>
+        <text x="44" y="246" class="svg-mono">climbing, or at a ledge</text>
+
+        <!-- ============ detection 4: inside the line, at the gate ============ -->
+        <path d="M948 260 H972 V284 H948 Z M951 263 V281 H969 V263 Z M956 272 a4 4 0 1 0 8 0 a4 4 0 1 0 -8 0 Z" fill="#c8361a" fill-rule="evenodd" class="pulse"/>
+        <line x1="948" y1="284" x2="948" y2="300" stroke="#5b6570" stroke-width="1"/>
+        <text x="932" y="300" class="svg-label" text-anchor="end" fill="#9c2a13">inside the line, after hours</text>
+        <text x="932" y="318" class="svg-mono" text-anchor="end">a person where no person belongs</text>
+
+        <text x="44" y="42" class="svg-mono">the question is narrow &#183; the surfaces are not</text>
+      </svg>
+    </div>
+
+    <div class="two" style="margin-top:34px">
+      <div></div>
+      <div>
+        <p>It also catches things that are just <i>off</i>: a door standing open, a hatch lifted, something where nothing belongs.</p>
+        <p class="quiet">It watches <b>places and things</b>, not people's identities. No face scans, no profiles — just a clear picture your team can act on.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap" id="measured">
+    <div class="two">
+      <h2>The numbers are real — we tested them</h2>
+      <div>
+        <p>Every number here was measured on the actual machine running it, on real footage — not guessed, not promised. Here's what we got:</p>
+        <div class="measure">
+          <table>
+            <caption>how fast it works, on a 1024-pixel frame, models already loaded</caption>
+            <thead><tr><th>stage</th><th>what it produces</th><th>cold</th><th>warm</th></tr></thead>
+            <tbody>
+              <tr><td>tripwire detect</td><td>is a person present — low-res frame</td><td>1.6–8.0 s</td><td class="t">1.3 s</td></tr>
+              <tr><td>full detect</td><td>boxes at full resolution</td><td>4.3–9.7 s</td><td class="t">3.9 s</td></tr>
+              <tr><td>SAM 3.1 detect</td><td>boxes, high confidence</td><td>1.8–11.3 s</td><td class="t">1.8 s</td></tr>
+              <tr><td>SAM 3.1 segment</td><td>pixel mask of the person</td><td>1.8 s</td><td class="t">1.8 s</td></tr>
+              <tr><td>Falcon segment</td><td>mask via the 3B grounding model</td><td>10.1–34.9 s</td><td class="t">9.8–11.0 s</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="quiet">Method: warm means the model is already loaded; at one frame per second, a first alert lands in under three seconds from a person appearing. The mask is exact to the pixel, not a box.</p>
+        <figure class="plate" style="margin:34px 0 0" >
+          <img src="assets/02-wide-magnified.jpg" width="1024" height="1024" alt="Wide aerial view with a tiny marked figure on a roof and a magnified inset showing the same person enlarged, masked in red.">
+          <figcaption>The same find at 140 metres, zoomed in 6×. The mask is the system's own output; the inset is the same frame, just enlarged.</figcaption>
+        </figure>
+      </div>
+    </div>
+
+    <div class="ledger">
+      <div>
+        <span class="tag">measured on this machine · 15 Sept 2026</span>
+        <h3>What these numbers mean for you</h3>
+        <ul>
+          <li>How long a detection and a mask take, cold and warm, on this machine.</li>
+          <li>A first alert in under three seconds at one frame per second.</li>
+          <li>Exact masks, from real output — the pictures on this very page.</li>
+        </ul>
+      </div>
+      <div>
+        <span class="tag">supported in the architecture</span>
+        <h3>What the system is set up to do</h3>
+        <ul>
+          <li>Uses what you already run — CCTV, fixed cameras, drones.</li>
+          <li>Sits on a machine you own, in your cloud, or on a unit that comes to you.</li>
+          <li>Fleets work together, hold a position, and hand over without a break.</li>
+          <li>Watches roofs, walls, yards and open ground — for a building or a single event.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap" id="butler">
+    <div class="case">
+      <div>
+        <h2>Why we started with roofs</h2>
+        <p class="quiet">Butler, Pennsylvania — 13 July 2024</p>
+      </div>
+      <div>
+        <p>On 13 July 2024, a shooter sat on a roof 400–450 feet from a stage that everyone else was watching. Nobody was watching that roof. Here's what that missed watch cost:</p>
+        <ol>
+          <li>The building housed three police counter-snipers assigned to cover the event. None of them were on the roof, because of a staffing shortage.</li>
+          <li>The roof's angle and a tree line hid him from the teams that were there.</li>
+          <li>Bystanders saw a man on the roof and reported him to police minutes before the shots.</li>
+          <li>The independent reviews that followed called it the agency's most significant security failure since 1981.</li>
+        </ol>
+        <p>Not a lack of people. Not a lack of cameras. A roof nobody could see continuously, and a report that had to travel up the chain by radio.</p>
+        <p>VisionBridge doesn't replace your security team or their radios. It's the quiet, tireless layer underneath them — watching the same surfaces every second, and getting the picture straight to the people who can walk over.</p>
+        <p>That's why roofs come first — the most visible, most preventable miss. The same watch moves to a fence, an event, or a school just as easily.</p>
+        <p class="stamp">Sources: public reporting on the 13 July 2024 shooting, incl. the Senate Homeland Security &amp; Governmental Affairs review and contemporaneous investigative reporting. Facts stated as reported; figures in the table above measured on our own hardware, 15 Sept 2026.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap alert" id="field">
+    <div>
+      <h2>What your people see</h2>
+      <ul>
+        <li>The picture, the confidence, and the zone — right in the alert.</li>
+        <li>No login, no delay — it goes straight to the phone in someone's pocket.</li>
+        <li>One tap shows the angle before they set off.</li>
+        <li>Everything is logged with the time and the picture, so the day can be replayed.</li>
+        <li>Overlapping feeds and aircraft handovers stay one alert, not three.</li>
+      </ul>
+    </div>
+    <figure style="margin:0">
+      <img src="assets/03-field-alert.jpg" width="1080" height="1920" alt="Phone screen showing a roof alert with the masked frame, zone name, confidence and an open-mask button.">
+    </figure>
+  </section>
+
+  <section class="wrap deploy" id="deploy">
+    <h2>Getting started is simple</h2>
+    <dl>
+      <dt>what it uses</dt><dd>Your existing cameras and drones. We work with what's already on site.</dd>
+      <dt>where it lives</dt><dd>On a small machine at your site, in your cloud, or in a unit that comes to you.</dd>
+      <dt>drones</dt><dd>One that stays put, one that patrols, or a fleet that hands over without a break.</dd>
+      <dt>privacy</dt><dd>On-site, nothing leaves your building. In your cloud, it's your data over an encrypted link.</dd>
+      <dt>setup</dt><dd>Point it at the places that matter, tell it what to watch, add your people. That's it.</dd>
+      <dt>what it is not</dt><dd>Not a weapon, not face recognition, and not a replacement for your people. It watches and it tells — your team decides what happens next.</dd>
+    </dl>
+  </section>
+
+  <section class="cta" id="pilot">
+    <div class="wrap">
+      <h2>Try it on one site.</h2>
+      <p>We're taking a small number of pilot sites. Pick the one that worries you — a school, a venue, a yard, a fence line — and we'll put a watch on it with what you already have, on a handful of phones. If it misses anything, you tell us and we fix it.</p>
+      <a class="button" href="mailto:pilots@example.com?subject=VisionBridge%20pilot%20site">Request a pilot site</a>
+    </div>
+  </section>
+</main>
+
+<div class="wrap limits-note">
+    <p class="meta">on the headline</p>
+    <p class="quiet">&ldquo;No more blind spots&rdquo; is the aim, not a guarantee &mdash; and a page that publishes its own measurements is not the place to pretend otherwise. A camera can be occluded, a lens can be dirty, and a model can be wrong. So every alert carries the actual frame rather than a dot on a map, every alert is logged so the day can be replayed, and the numbers above are published with the machine and the method attached. If it misses something on a pilot site, that is the most useful thing you can tell us.</p>
+  </div>
+
+  <footer class="wrap">
+  <div>VisionBridge · a persistent watch over roofs, perimeters and open ground · runs on your hardware · <span id="yr">2026</span></div>
+</footer>
+
+<script>
+  (() => {
+    const els = [...document.querySelectorAll('.reveal')];
+    if (!('IntersectionObserver' in window) || !els.length) return;
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+    }, { rootMargin: '60px' });
+    els.forEach((el) => io.observe(el));
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CM-00 Ratification — VisionBrain Scout-first Productization</title>
+<style>
+  :root{
+    --bg:#0b1120; --panel:#111a2e; --panel2:#0e1626; --line:#1e2a44;
+    --ink:#e6edf7; --dim:#8fa3bf; --faint:#5c6f8c;
+    --cyan:#4fd1e8; --amber:#f5b453; --green:#5ad191; --red:#ef7373;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding-bottom:120px}
+  .wrap{max-width:920px;margin:0 auto;padding:0 24px}
+  header{border-bottom:1px solid var(--line);padding:28px 0 20px;margin-bottom:8px;
+    background:linear-gradient(180deg,#0d1526 0%,var(--bg) 100%)}
+  .kicker{font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--cyan);text-transform:uppercase}
+  h1{font-size:26px;font-weight:700;margin:6px 0 4px;letter-spacing:-.01em}
+  .sub{color:var(--dim);font-size:14px;max-width:760px}
+  .meta{display:flex;flex-wrap:wrap;gap:14px;margin-top:14px;font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+  .meta b{color:var(--dim);font-weight:600}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px 22px;margin-top:18px}
+  h2{font-size:13px;font-family:var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--amber);margin-bottom:12px}
+  h2 .n{color:var(--faint)}
+  p.note{color:var(--dim);font-size:13.5px;margin-bottom:12px}
+  code{font-family:var(--mono);font-size:12.5px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:1px 6px;color:var(--cyan)}
+  .pipe{font-family:var(--mono);font-size:12.5px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);
+    border-radius:8px;padding:12px 16px;white-space:pre;overflow-x:auto;line-height:1.7}
+  .opt{display:block;border:1px solid var(--line);border-radius:8px;padding:13px 16px;margin-bottom:10px;cursor:pointer;
+    background:var(--panel2);transition:border-color .15s}
+  .opt:hover{border-color:#2c3d63}
+  .opt input{margin-right:10px;accent-color:var(--cyan)}
+  .opt.sel{border-color:var(--cyan);box-shadow:0 0 0 1px var(--cyan)}
+  .opt .t{font-weight:600}
+  .opt .d{color:var(--dim);font-size:13px;margin-top:3px}
+  .badge{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.1em;padding:2px 8px;border-radius:99px;
+    background:rgba(90,209,145,.12);color:var(--green);border:1px solid rgba(90,209,145,.35);vertical-align:2px;margin-left:8px}
+  .badge.warn{background:rgba(245,180,83,.1);color:var(--amber);border-color:rgba(245,180,83,.35)}
+  label.f{display:block;margin:14px 0 5px;font-size:13px;color:var(--dim)}
+  label.f .req{color:var(--red)}
+  input[type=text],input[type=number],select,textarea{width:100%;background:var(--panel2);border:1px solid var(--line);
+    border-radius:7px;color:var(--ink);padding:9px 12px;font-size:14px;font-family:inherit}
+  input[type=number]{font-family:var(--mono)}
+  select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);
+    background-position:calc(100% - 18px) 50%,calc(100% - 13px) 50%;background-size:5px 5px;background-repeat:no-repeat}
+  textarea{resize:vertical;min-height:64px}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--cyan)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:0 22px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 22px}
+  .hint{font-size:12px;color:var(--faint);margin-top:4px}
+  .kv{display:grid;grid-template-columns:230px 1fr;gap:6px 14px;font-size:13.5px}
+  .kv .k{color:var(--dim)}
+  .kv .v{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+  .chip{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:99px;padding:3px 12px;background:var(--panel2)}
+  .check{display:flex;gap:10px;align-items:flex-start;margin-top:12px;font-size:13.5px;color:var(--dim);cursor:pointer}
+  .check input{margin-top:3px;accent-color:var(--green)}
+  .check.req input{accent-color:var(--red)}
+  .sig{display:grid;grid-template-columns:1fr 1fr;gap:0 22px}
+  .bar{position:fixed;bottom:0;left:0;right:0;background:rgba(13,21,38,.92);backdrop-filter:blur(8px);
+    border-top:1px solid var(--line);padding:14px 0;z-index:10}
+  .bar .wrap{display:flex;align-items:center;gap:14px}
+  .btn{font-family:var(--mono);font-size:13px;letter-spacing:.06em;padding:11px 22px;border-radius:8px;border:1px solid var(--cyan);
+    background:var(--cyan);color:#06222b;font-weight:700;cursor:pointer}
+  .btn:hover{filter:brightness(1.1)}
+  .btn.ghost{background:transparent;color:var(--cyan);font-weight:400}
+  .btn[disabled]{opacity:.4;cursor:not-allowed}
+  .bar .msg{font-size:12.5px;color:var(--red);flex:1}
+  #out{display:none;margin-top:18px;background:var(--panel);border:1px solid var(--green);border-radius:10px;padding:20px 22px}
+  #out h2{color:var(--green)}
+  pre#md{background:#050a14;border:1px solid var(--line);border-radius:8px;padding:16px;font-family:var(--mono);
+    font-size:12px;color:#b7c8e0;white-space:pre-wrap;max-height:420px;overflow:auto}
+  .ok{color:var(--green)}
+  .err{border-color:var(--red)!important}
+  @media(max-width:680px){.grid,.grid3,.sig,.kv{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="kicker">VisionBrain · Connected Mission · Decision Gate</div>
+    <h1>CM-00 — Ratification Record</h1>
+    <div class="sub">Founder signature page for the Scout-first productization scope, per
+      <b>PRODUCTIZATION_EXECUTION_PLAN.md</b> (VB-P0-01) and <b>NEXT_DEVELOPMENT_SPEC.md</b> §3.
+      Everything below is pre-filled with the recommended defaults; change what you disagree with, sign, and generate the record.</div>
+    <div class="meta">
+      <span>BASELINE VB <b>main @ b56ea08</b></span>
+      <span>BRIDGE <b>productization/scout-first-v1 @ 1cdeeb6</b></span>
+      <span>DISPOSITION <b>docs/CM00_DISPOSITION.md</b></span>
+      <span>MANIFEST <b>docs/PAIRED_BASELINE_MANIFEST.md</b></span>
+      <span>DATE <b id="today"></b></span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<section>
+  <h2><span class="n">01 ·</span> Product slice — Scout-first</h2>
+  <p class="note">The ratified pipeline. Deliberately narrower than Connected Mission v1: completing it does <b>not</b> complete CM-06 adaptive investigation, CM-07 business actions, Watch mode, multi-camera, or the full A01–A18 release.</p>
+  <div class="pipe">one supported Scout phone
+    → one bridge runtime on the designated M2
+    → VisionBrain perception and reasoning components
+    → exact source evidence plus candidate findings
+    → named human review
+    → durable, exportable inspection packet</div>
+  <label class="check req"><input type="checkbox" id="ack-slice"><span><b>Ratify this slice</b> as the only funded workflow entering delivery. <span class="req">*</span></span></label>
+</section>
+
+<section>
+  <h2><span class="n">02 ·</span> CM-02 width conflict — resolution</h2>
+  <p class="note">The two plans define the shared contract at different widths. This decision is reserved to CM-00.</p>
+  <label class="opt" id="opt-subset">
+    <input type="radio" name="width" value="subset" checked>
+    <span class="t">Released subset <span class="badge">RECOMMENDED · PRE-SELECTED</span></span>
+    <div class="d">Freeze only the five released records — observation, evidence, inspection packet, runtime capability, perception adapter — in an MLX-free <code>mission_contracts.py</code> with golden Python/Kotlin/browser fixtures. Unblocks the Scout-first P0 ladder now.</div>
+  </label>
+  <label class="opt" id="opt-full">
+    <input type="radio" name="width" value="full">
+    <span class="t">Full mission.v1 contract</span>
+    <div class="d">Freeze the entire NEXT_DEVELOPMENT_SPEC §4 contract (commands, missions, business actions). Broader, slower, and gates the Scout-first slice behind Connected Mission scope.</div>
+  </label>
+  <div class="hint">Either way, the full mission.v1 contract work returns at P1 / CM-06 (adaptive Inspect). This choice only decides what freezes <i>first</i>.</div>
+</section>
+
+<section>
+  <h2><span class="n">03 ·</span> Prospect workflow — the one funded demonstration</h2>
+  <p class="note">One problem, from actual prospect access, with a defined visual target. This becomes the D1 demonstration and the pilot-eval dataset subject.</p>
+  <div class="grid">
+    <div>
+      <label class="f">Workflow <span class="req">*</span></label>
+      <select id="workflow">
+        <option value="Cleaning / facilities inspection" selected>Cleaning / facilities inspection (PB-00 commercial hypothesis)</option>
+        <option value="Recorded-site review">Recorded-site review</option>
+        <option value="Aerial inspection">Aerial inspection</option>
+        <option value="Warehouse checklist">Warehouse checklist</option>
+        <option value="CCTV review">CCTV review</option>
+      </select>
+    </div>
+    <div>
+      <label class="f">Prospect / access source <span class="req">*</span></label>
+      <input type="text" id="prospect" placeholder="Named prospect or access agreement (required for D1)">
+    </div>
+  </div>
+  <label class="f">Defined visual target — what the system must actually find <span class="req">*</span></label>
+  <textarea id="target" placeholder="e.g., missing fixtures and uncleaned zones in post-clean photo sets of a facility, verifiable against the checklist template"></textarea>
+</section>
+
+<section>
+  <h2><span class="n">04 ·</span> Named human review</h2>
+  <p class="note">A named person reviews every released packet. Candidate findings never become supported findings without this review.</p>
+  <div class="grid">
+    <div>
+      <label class="f">Reviewer name <span class="req">*</span></label>
+      <input type="text" id="reviewer" placeholder="Full name">
+    </div>
+    <div>
+      <label class="f">Role / authority</label>
+      <input type="text" id="reviewer-role" placeholder="e.g., site manager (packet accept/reject authority)">
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">05 ·</span> Budgets</h2>
+  <p class="note">Pre-filled with NEXT_DEVELOPMENT_SPEC §"State and execution" suggested starting bounds. CM-00 records the final values.</p>
+  <div class="grid3">
+    <div>
+      <label class="f">Active investigations (simultaneous)</label>
+      <input type="number" id="b-inv" value="1" min="1">
+    </div>
+    <div>
+      <label class="f">Tool calls per investigation</label>
+      <input type="number" id="b-tools" value="10" min="1">
+    </div>
+    <div>
+      <label class="f">Active investigation seconds</label>
+      <input type="number" id="b-secs" value="180" min="10">
+    </div>
+  </div>
+  <div class="grid3">
+    <div>
+      <label class="f">Human-wait timeout (minutes)</label>
+      <input type="number" id="b-wait" value="60" min="1">
+      <div class="hint">Evidence/approval waits; timeout stops new dispatch.</div>
+    </div>
+    <div>
+      <label class="f">Review capacity (packets/day)</label>
+      <input type="number" id="b-packets" value="20" min="1">
+      <div class="hint">Reviewer throughput bound for the pilot.</div>
+    </div>
+    <div>
+      <label class="f">Storage quota (GB, evidence root)</label>
+      <input type="number" id="b-quota" value="100" min="1">
+      <div class="hint">Exhaustion → explicit state; never silent erasure.</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">06 ·</span> Thresholds — predeclared, measured at gate A18</h2>
+  <p class="note">Recorded now so measurement cannot move the goalposts. Revising a threshold later requires a new recorded decision, not a quiet edit.</p>
+  <div class="grid3">
+    <div>
+      <label class="f">Missed targets ≤ %</label>
+      <input type="number" id="t-miss" value="10" min="0">
+    </div>
+    <div>
+      <label class="f">False candidates ≤ %</label>
+      <input type="number" id="t-false" value="10" min="0">
+    </div>
+    <div>
+      <label class="f">Unsupported positives ≤ %</label>
+      <input type="number" id="t-unsup" value="0" min="0">
+      <div class="hint">Conclusions without task evidence: target zero.</div>
+    </div>
+  </div>
+  <div class="grid3">
+    <div>
+      <label class="f">Unresolved rate ≤ %</label>
+      <input type="number" id="t-unres" value="25" min="0">
+    </div>
+    <div>
+      <label class="f">p95 capture→packet ≤ seconds</label>
+      <input type="number" id="t-lat" value="120" min="5">
+    </div>
+    <div>
+      <label class="f">Review effort ≤ min/packet</label>
+      <input type="number" id="t-rev" value="10" min="1">
+    </div>
+  </div>
+  <div class="hint" style="margin-top:8px">Latency is wall-clock capture→exported-packet on the designated M2 — not <code>pilot_eval.py</code>'s sampled media-timeline offset. p50/p95 reported with sample counts.</div>
+</section>
+
+<section>
+  <h2><span class="n">07 ·</span> Supported configuration &amp; exclusions</h2>
+  <div class="kv">
+    <span class="k">Capture surface</span><span class="v">one Scout Android phone (supported device only)</span>
+    <span class="k">Runtime host</span><span class="v">designated M2 bridge host (no VPS move; no CI auto-deploy)</span>
+    <span class="k">Ask/report backends</span><span class="v">as-resolved (ollama | remote | local via vlm_registry); release records actual checkpoint, never a marketing name</span>
+    <span class="k">Handoff disclosure</span><span class="v">Scout→Ground Control transfer is manual until PB-10 durable transfer exists</span>
+  </div>
+  <label class="f" style="margin-top:14px">Explicitly deferred (from the productization plan — unchanged)</label>
+  <div class="chips">
+    <span class="chip">repo merger</span><span class="chip">third backend service</span><span class="chip">live-engine parity</span>
+    <span class="chip">multi-camera / multi-tenant</span><span class="chip">cross-camera identity</span><span class="chip">aircraft/robot motion</span>
+    <span class="chip">public-safety claims</span><span class="chip">production business writes (pre-CM-07)</span>
+    <span class="chip">cloud/VPS migration</span><span class="chip">custom training / RF-DETR / Roboflow</span>
+    <span class="chip">unrestricted agents</span><span class="chip">broad UI redesign</span><span class="chip">one-demo accuracy claims</span>
+  </div>
+</section>
+
+<section>
+  <h2><span class="n">08 ·</span> Binding rules acknowledged</h2>
+  <label class="check req"><input type="checkbox" id="ack-state"><span><b>State language is binding:</b> observation / visual finding / identity / review / packet / business action stay separate layers; a high model score never creates <i>supported</i> without defined task evidence; an empty detection list never approves an inspection; every transition records actor, time, prior revision, reason, evidence. <span class="req">*</span></span></label>
+  <label class="check req"><input type="checkbox" id="ack-release"><span><b>Release rule:</b> an assisted demo is ready only with D1 evidence; a customer pilot only with D2's applicable P0 gates; no checklist box, code review, or founder decision upgrades a capability without recorded evidence. <span class="req">*</span></span></label>
+  <label class="check"><input type="checkbox" id="ack-software" checked><span>Software invariants (wrong-source evidence, stale-shown-current, duplicate mutation, false business completion, competing model loads) are zero-tolerance.</span></label>
+</section>
+
+<section>
+  <h2><span class="n">09 ·</span> Signature</h2>
+  <div class="sig">
+    <div>
+      <label class="f">Founder / integration lead — full name <span class="req">*</span></label>
+      <input type="text" id="sig-name" placeholder="Legal name">
+    </div>
+    <div>
+      <label class="f">Date</label>
+      <input type="text" id="sig-date">
+    </div>
+  </div>
+  <label class="f">Attestation <span class="req">*</span></label>
+  <label class="check req"><input type="checkbox" id="ack-sign"><span>I have read <b>PRODUCTIZATION_EXECUTION_PLAN.md</b> and <b>NEXT_DEVELOPMENT_SPEC.md</b>; I ratify the decisions recorded on this page as CM-00 for the Scout-first delivery cycle; the generated record plus the paired baseline manifest constitute its evidence. <span class="req">*</span></span></label>
+</section>
+
+<div id="out">
+  <h2><span class="n">✓</span> Generated decision record — save as <code>docs/CM00_DECISION_RECORD.md</code></h2>
+  <pre id="md"></pre>
+  <div style="display:flex;gap:12px;margin-top:14px">
+    <button class="btn" id="dl">↓ Download CM00_DECISION_RECORD.md</button>
+    <button class="btn ghost" id="cp">Copy markdown</button>
+  </div>
+  <p class="hint" style="margin-top:10px">Committing the record is a separate, explicit step — per the plan, the decision record and working-tree disposition precede implementation, and nothing is committed or tagged merely because a document exists.</p>
+</div>
+
+</div>
+
+<div class="bar">
+  <div class="wrap">
+    <button class="btn" id="gen">Generate CM-00 decision record</button>
+    <button class="btn ghost" id="reset">Reset to recommended defaults</button>
+    <span class="msg" id="msg"></span>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  document.getElementById("today").textContent = new Date().toISOString().slice(0,10);
+  document.getElementById("sig-date").value = new Date().toISOString().slice(0,10);
+
+  function optStyle(){
+    document.querySelectorAll(".opt").forEach(function(o){
+      o.classList.toggle("sel", o.querySelector("input").checked);
+    });
+  }
+  document.querySelectorAll(".opt input").forEach(function(i){ i.addEventListener("change", optStyle); });
+  optStyle();
+
+  var req = ["prospect","target","reviewer","sig-name"];
+  function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+
+  function validate(){
+    var missing = [];
+    if(!document.getElementById("ack-slice").checked) missing.push("§01 ratify slice");
+    if(!document.getElementById("prospect").value.trim()) missing.push("§03 prospect");
+    if(!document.getElementById("target").value.trim()) missing.push("§03 visual target");
+    if(!document.getElementById("reviewer").value.trim()) missing.push("§04 reviewer");
+    ["ack-state","ack-release","ack-sign"].forEach(function(id){
+      if(!document.getElementById(id).checked) missing.push("§08/09 attestation");
+    });
+    if(!document.getElementById("sig-name").value.trim()) missing.push("§09 signature");
+    return missing;
+  }
+
+  function v(id){ return document.getElementById(id).value.trim(); }
+  function num(id){ return document.getElementById(id).value; }
+
+  function buildMd(){
+    var width = document.querySelector('input[name="width"]:checked').value;
+    var L = [];
+    L.push("# CM-00 Decision Record — Scout-first productization (VisionBrain)");
+    L.push("");
+    L.push("Date: " + v("sig-date") + "  ");
+    L.push("Authorized by: " + esc(v("sig-name")) + ", founder / integration lead (signed via docs/cm00-ratification.html)  ");
+    L.push("Status: ratified for the Scout-first delivery cycle. This record plus [PAIRED_BASELINE_MANIFEST.md](PAIRED_BASELINE_MANIFEST.md) and [CM00_DISPOSITION.md](CM00_DISPOSITION.md) constitute its evidence.");
+    L.push("");
+    L.push("## Ratified decisions");
+    L.push("");
+    L.push("1. **Product slice**: the Scout-first pipeline is the only funded workflow entering delivery: one supported Scout phone → one bridge runtime on the designated M2 → VisionBrain perception/reasoning → exact source evidence plus candidate findings → named human review → durable, exportable inspection packet.");
+    L.push("2. **CM-02 width**: the **released subset** is frozen first (observation, evidence, inspection packet, runtime capability, perception adapter records; MLX-free `mission_contracts.py` + golden Python/Kotlin/browser fixtures per VB-P0-03). The full mission.v1 contract returns at P1 / CM-06." );
+    if(width === "full") L[3] = L[3].replace("the **released subset** is frozen first", "the **full mission.v1** contract is frozen first (deviation from recommendation, recorded deliberately)");
+    L.push("3. **Prospect workflow**: " + esc(v("workflow")) + " — prospect/access: " + esc(v("prospect")) + ". Visual target: " + esc(v("target")));
+    L.push("4. **Named reviewer**: " + esc(v("reviewer")) + (v("reviewer-role") ? " (" + esc(v("reviewer-role")) + ")" : "") + " — reviews every released packet; candidate findings require this review to become supported.");
+    L.push("5. **Budgets**: " + num("b-inv") + " simultaneous active investigation(s); " + num("b-tools") + " tool calls per investigation; " + num("b-secs") + " s active investigation time; " + num("b-wait") + " min human-wait timeout; reviewer capacity " + num("b-packets") + " packets/day; evidence-root quota " + num("b-quota") + " GB (exhaustion → explicit state, never silent erasure).");
+    L.push("6. **Thresholds (predeclared, measured at A18)**: missed targets ≤ " + num("t-miss") + "%; false candidates ≤ " + num("t-false") + "%; unsupported positives ≤ " + num("t-unsup") + "%; unresolved rate ≤ " + num("t-unres") + "%; p95 capture→packet ≤ " + num("t-lat") + " s wall-clock on the designated M2; review effort ≤ " + num("t-rev") + " min/packet. Revising a threshold requires a new recorded decision.");
+    L.push("7. **Supported configuration**: one Scout Android phone; designated M2 bridge host; ask/report backends recorded by actual checkpoint/backend (never a marketing name); Scout→Ground Control transfer disclosed as manual until PB-10 durable transfer exists; no CI auto-deploy or M2 restarts.");
+    L.push("8. **State language binding**: observation / visual finding / identity / review / packet / business action remain separate layers; high model scores do not create `supported` without defined task evidence; empty detection lists do not approve inspections; every transition records actor, time, prior revision, reason, and evidence references.");
+    L.push("9. **Release rule**: assisted demos require D1 evidence; customer pilots require D2's applicable P0 gates; no checklist box, code review, synthetic test, or founder decision upgrades a capability to customer-ready without its required recorded evidence.");
+    L.push("10. **Exclusions**: the deferred list of PRODUCTIZATION_EXECUTION_PLAN.md stands unchanged (repo merger, third backend, live-engine parity, multi-camera/multi-tenant, cross-camera identity, aircraft/robot motion, public-safety claims, production business writes before CM-07, cloud/VPS migration, custom training/RF-DETR/Roboflow, unrestricted agents, broad UI redesign, one-demo accuracy claims).");
+    L.push("");
+    L.push("## Paired baseline (see PAIRED_BASELINE_MANIFEST.md)");
+    L.push("");
+    L.push("- VisionBrain `main` @ `b56ea08` (productization/scout-first-v1 = f5c04d4 + manifest commit), suite 317 passed / 4 skipped");
+    L.push("- visionBrain-bridge `productization/scout-first-v1` @ `1cdeeb6` (PB-00 record landed; PB-01 ledger + PB-04/06 subsets + PB-02 truthfulness subset green, 203 passed)");
+    L.push("- Working-tree disposition: `docs/CM00_DISPOSITION.md`; snapshots preserved on `wip/snapshot-20260913` in both repos");
+    L.push("");
+    L.push("## Attestation");
+    L.push("");
+    L.push("Signed: " + esc(v("sig-name")) + " — " + v("sig-date"));
+    L.push("");
+    return L.join("\n");
+  }
+
+  var lastMd = "";
+  document.getElementById("gen").addEventListener("click", function(){
+    var msg = document.getElementById("msg");
+    var missing = validate();
+    document.querySelectorAll("input,select,textarea").forEach(function(e){ e.classList.remove("err"); });
+    if(missing.length){
+      msg.textContent = "Missing / incomplete: " + missing.join(", ");
+      req.forEach(function(id){ if(!v(id)) document.getElementById(id).classList.add("err"); });
+      return;
+    }
+    msg.textContent = "";
+    lastMd = buildMd();
+    document.getElementById("md").textContent = lastMd;
+    var out = document.getElementById("out");
+    out.style.display = "block";
+    out.scrollIntoView({behavior:"smooth"});
+  });
+
+  document.getElementById("dl").addEventListener("click", function(){
+    if(!lastMd) return;
+    var blob = new Blob([lastMd], {type:"text/markdown"});
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "CM00_DECISION_RECORD.md";
+    document.body.appendChild(a); a.click(); a.remove();
+  });
+
+  document.getElementById("cp").addEventListener("click", function(){
+    if(!lastMd) return;
+    var t = document.createElement("textarea");
+    t.value = lastMd; document.body.appendChild(t); t.select();
+    try{ document.execCommand("copy"); }catch(e){}
+    t.remove();
+    document.getElementById("cp").textContent = "Copied ✓";
+    setTimeout(function(){ document.getElementById("cp").textContent = "Copy markdown"; }, 1500);
+  });
+
+  document.getElementById("reset").addEventListener("click", function(){ location.reload(); });
+})();
+</script>
+</body>
+</html>

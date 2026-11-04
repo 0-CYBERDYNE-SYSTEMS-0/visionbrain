@@ -64,7 +64,26 @@ SYSTEM_PROMPT = (
     "the detector listed them itself."
 )
 
+MISSION_PLANNER_SYSTEM_PROMPT = (
+    "You are a bounded visual-inspection planner. Inspect the supplied image and "
+    "the operator's expertise and objective. Choose exactly one next action from "
+    "the supplied tool schemas, or finish. Return one JSON object only, with no "
+    "markdown or surrounding prose. Never invent coordinates, evidence IDs, item "
+    "IDs, detector results, OCR text, permissions, model settings, or tool names. "
+    "Use perception tools to ground localization. Visual interpretations remain "
+    "hypotheses unless a deterministic tool result supports them. Ask for a human "
+    "close-up when the visible evidence is insufficient. Never issue flight, "
+    "robot-motion, shell, URL, or external-write commands."
+)
+
+MISSION_CROP_SYSTEM_PROMPT = (
+    "Inspect only the supplied image crop and answer the visual question briefly. "
+    "Describe visible evidence and uncertainty. Do not invent text, coordinates, "
+    "measurements, object identity, or facts outside the crop. Return plain text."
+)
+
 _lock = threading.Lock()
+_generation_lock = threading.RLock()
 _model = None
 _processor = None
 _config = None
@@ -139,27 +158,74 @@ def _ensure_loaded():
         return _model, _processor, _config
 
 
-def _generate(user_text: str, image, max_tokens: int) -> str:
-    model, processor, config = _ensure_loaded()
-    from mlx_vlm.generate import generate
-    from mlx_vlm.prompt_utils import apply_chat_template
+class _CancellationStoppingCriteria:
+    """Stop at a token boundary while preserving the tokenizer's EOS rule."""
 
-    images = [image] if image is not None else []
-    prompt = apply_chat_template(
-        processor,
-        config,
-        f"{SYSTEM_PROMPT}\n\n{user_text}",
-        num_images=len(images),
-    )
-    kwargs = {
-        "max_tokens": max_tokens,
-        "verbose": False,
-        "temperature": TEMPERATURE,
-        "min_p": MIN_P,
-        "repetition_penalty": REPETITION_PENALTY,
-    }
-    result = generate(model, processor, prompt, image=images or None, **kwargs)
-    return str(getattr(result, "text", result)).strip()
+    def __init__(self, eos_criteria, cancel_event: threading.Event) -> None:
+        self._eos_criteria = eos_criteria
+        self._cancel_event = cancel_event
+
+    def __call__(self, token) -> bool:
+        return self._cancel_event.is_set() or self._eos_criteria(token)
+
+
+def _generate(
+    user_text: str,
+    image,
+    max_tokens: int,
+    cancel_event: threading.Event | None = None,
+) -> str:
+    """Generate through the shared VLM registry under its native-call lock."""
+    with _generation_lock:
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("generation cancelled")
+        model, processor, config = _ensure_loaded()
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("generation cancelled")
+        from mlx_vlm.generate import generate
+        from mlx_vlm.prompt_utils import apply_chat_template
+
+        images = [image] if image is not None else []
+        prompt = apply_chat_template(
+            processor,
+            config,
+            f"{SYSTEM_PROMPT}\n\n{user_text}",
+            num_images=len(images),
+        )
+        kwargs = {
+            "max_tokens": max_tokens,
+            "verbose": False,
+            "temperature": TEMPERATURE,
+            "min_p": MIN_P,
+            "repetition_penalty": REPETITION_PENALTY,
+        }
+        tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
+        original_stopping_criteria = None
+        if cancel_event is not None:
+            original_stopping_criteria = tokenizer.stopping_criteria
+            if not callable(original_stopping_criteria):
+                raise TypeError("tokenizer stopping_criteria must be callable")
+            kwargs["stopping_criteria"] = _CancellationStoppingCriteria(
+                original_stopping_criteria, cancel_event
+            )
+        try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("generation cancelled")
+            try:
+                result = generate(model, processor, prompt, image=images or None, **kwargs)
+            finally:
+                if cancel_event is not None:
+                    # Keep the registry lock until asynchronous MLX work and
+                    # native generation cleanup have completed on cancellation.
+                    import mlx.core as mx
+
+                    mx.synchronize()
+        finally:
+            if cancel_event is not None:
+                tokenizer.stopping_criteria = original_stopping_criteria
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("generation cancelled")
+        return str(getattr(result, "text", result)).strip()
 
 
 def position_label(x: float, y: float) -> str:
@@ -193,6 +259,7 @@ def ask(
     detections: list[dict] | None = None,
     prompts: list[str] | None = None,
     image=None,
+    cancel_event: threading.Event | None = None,
 ) -> str:
     """Answer a question about the current frame (+ optional detector output)."""
     if image is None:
@@ -215,10 +282,15 @@ def ask(
     if armed:
         sections.append(f"## Armed prompts\n{', '.join(armed)}")
     sections.append(f"## Question\n{question}\n\nAnswer in at most 4 short sentences.")
-    return _generate("\n\n".join(sections), image, ASK_MAX_TOKENS)
+    return _generate("\n\n".join(sections), image, ASK_MAX_TOKENS, cancel_event)
 
 
-def generate_report(summary_text: str, report_type: str = "field", image=None) -> str:
+def generate_report(
+    summary_text: str,
+    report_type: str = "field",
+    image=None,
+    cancel_event: threading.Event | None = None,
+) -> str:
     """Write a field/brief report on the current frame + detector summary."""
     summary = (summary_text or "").strip()
     # An unframed summary reads as a prose hint, and both Gemma and LFM answer
@@ -245,4 +317,4 @@ def generate_report(summary_text: str, report_type: str = "field", image=None) -
         f"Be factual and brief; describe the scene as well as the detector output.\n\n"
         f"{detector_block}"
     )
-    return _generate(user_text, image, REPORT_MAX_TOKENS)
+    return _generate(user_text, image, REPORT_MAX_TOKENS, cancel_event)

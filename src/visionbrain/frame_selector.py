@@ -32,6 +32,7 @@ class FrameScore:
     detection_count: int
     top_label: str
     has_query_match: bool
+    failed: bool = False  # True when Falcon inference raised for this frame
 
 
 @dataclass
@@ -55,6 +56,8 @@ class FrameScores:
     quick_answer: str
     regions: list[TemporalRegion] = field(default_factory=list)
     frame_scores: list[FrameScore] = field(default_factory=list)
+    frames_failed: int = 0
+    sampled_span_s: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -63,6 +66,8 @@ class FrameScores:
             "fps": self.fps,
             "duration_s": round(self.duration_s, 2),
             "frames_scored": self.frames_scored,
+            "frames_failed": self.frames_failed,
+            "sampled_span_s": round(self.sampled_span_s, 2),
             "is_relevant": self.is_relevant,
             "quick_answer": self.quick_answer,
             "regions": [
@@ -81,6 +86,7 @@ class FrameScores:
                     "score": round(f.relevance_score, 3),
                     "dets": f.detection_count,
                     "label": f.top_label,
+                    "failed": f.failed,
                 }
                 for f in self.frame_scores
             ],
@@ -90,6 +96,41 @@ class FrameScores:
 # ──────────────────────────────────────────────────────────────────────────────
 # Core scoring function
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+def _select_sample_indices(
+    total_frames: int,
+    fps: float,
+    sample_every_n_seconds: float,
+    max_frames: int,
+) -> list[int]:
+    """Select deterministic frame indices to sample, spanning the whole video.
+
+    Candidates are drawn every ``sample_every_n_seconds`` seconds starting at
+    frame 0. When there are more candidates than ``max_frames``, an evenly
+    spaced subset covering the full video duration is returned instead of the
+    earliest ``max_frames`` (so a "not relevant" answer is honest about the
+    whole video, not just its opening minutes).
+
+    Args:
+        total_frames: Total number of frames in the video.
+        fps: Video frames per second.
+        sample_every_n_seconds: Draw one candidate frame every N seconds.
+        max_frames: Maximum number of frames to return.
+
+    Returns:
+        Sorted list of unique frame indices (length <= max_frames).
+    """
+    if total_frames <= 0 or max_frames <= 0:
+        return []
+    sample_interval = max(1, int(sample_every_n_seconds * fps))
+    candidates = list(range(0, total_frames, sample_interval))
+    if len(candidates) <= max_frames:
+        return candidates
+    # Evenly spaced subset over the candidate list, spanning the full duration.
+    positions = np.linspace(0, len(candidates) - 1, num=max_frames)
+    picked = sorted({candidates[int(round(float(p)))] for p in positions})
+    return picked
 
 
 def score_frames(
@@ -103,10 +144,12 @@ def score_frames(
 ) -> FrameScores:
     """Score video frames by relevance to a query using Falcon Perception.
 
-    Extracts frames at uniform intervals (default: every 5s, max 60 frames),
-    runs Falcon detect at low resolution (default 360p), scores each frame
-    by detection count and query match, clusters high-scoring frames into
-    temporal regions, and returns a quick natural-language answer.
+    Extracts frames at uniform intervals (default: every 5s, max 60 frames).
+    When the candidate count exceeds ``max_frames``, an evenly spaced subset
+    spanning the full video duration is scored. Runs Falcon detect at low
+    resolution (default 360p), scores each frame by detection count and query
+    match, clusters high-scoring frames into temporal regions, and returns a
+    quick natural-language answer.
 
     Args:
         video_path: Path to the video file.
@@ -117,7 +160,8 @@ def score_frames(
         min_relevance: Minimum relevance score to count as a region (default 0.2).
 
     Returns:
-        FrameScores with quick answer, temporal regions, and per-frame scores.
+        FrameScores with quick answer, temporal regions, per-frame scores,
+        the sampled coverage span, and a count of frames that failed to score.
     """
     from .loader import falcon_perception_record
     from .fp_inference import detect
@@ -139,11 +183,17 @@ def score_frames(
             "Cannot run fast-path scan."
         )
 
-    # Determine which frame indices to sample
-    sample_interval = max(1, int(sample_every_n_seconds * fps))
-    candidate_indices = list(range(0, total_frames, sample_interval))
-    if len(candidate_indices) > max_frames:
-        candidate_indices = candidate_indices[:max_frames]
+    # Determine which frame indices to sample (evenly spread over the video)
+    candidate_indices = _select_sample_indices(
+        total_frames, fps, sample_every_n_seconds, max_frames
+    )
+    sampled_start_s = (
+        candidate_indices[0] / fps if candidate_indices and fps > 0 else 0.0
+    )
+    sampled_end_s = (
+        candidate_indices[-1] / fps if candidate_indices and fps > 0 else 0.0
+    )
+    sampled_span_s = sampled_end_s - sampled_start_s
 
     t_start = time.perf_counter()
     scored_frames: list[FrameScore] = []
@@ -175,7 +225,8 @@ def score_frames(
                 max_new_tokens=100,  # Low token budget for speed
             )
         except Exception:
-            # If Falcon fails on a frame, skip it gracefully
+            # If Falcon fails on a frame, record it as failed so failures are
+            # never silently indistinguishable from "nothing there"
             scored_frames.append(
                 FrameScore(
                     frame_index=frame_idx,
@@ -184,6 +235,7 @@ def score_frames(
                     detection_count=0,
                     top_label="",
                     has_query_match=False,
+                    failed=True,
                 )
             )
             continue
@@ -220,6 +272,7 @@ def score_frames(
     cap.release()
 
     elapsed = time.perf_counter() - t_start
+    frames_failed = sum(1 for f in scored_frames if f.failed)
 
     # Determine if video is relevant at all
     is_relevant = any(f.relevance_score >= min_relevance for f in scored_frames)
@@ -229,11 +282,21 @@ def score_frames(
 
     # Build quick answer
     quick_answer = _build_quick_answer(
-        scored_frames, regions, query, is_relevant, duration_s, fps
+        scored_frames,
+        regions,
+        query,
+        is_relevant,
+        duration_s,
+        fps,
+        min_relevance=min_relevance,
+        frames_failed=frames_failed,
+        sampled_start_s=sampled_start_s,
+        sampled_end_s=sampled_end_s,
     )
 
     print(
-        f"  Fast scan: scored {len(scored_frames)} frames in {elapsed:.1f}s — "
+        f"  Fast scan: scored {len(scored_frames)} frames "
+        f"({frames_failed} failed) in {elapsed:.1f}s — "
         f"{'RELEVANT' if is_relevant else 'not relevant'}"
     )
 
@@ -247,6 +310,8 @@ def score_frames(
         quick_answer=quick_answer,
         regions=regions,
         frame_scores=scored_frames,
+        frames_failed=frames_failed,
+        sampled_span_s=sampled_span_s,
     )
 
 
@@ -341,19 +406,46 @@ def _build_quick_answer(
     is_relevant: bool,
     duration_s: float,
     fps: float,
+    min_relevance: float = 0.2,
+    frames_failed: int = 0,
+    sampled_start_s: float = 0.0,
+    sampled_end_s: float = 0.0,
 ) -> str:
-    """Build a concise natural-language answer from scored frames."""
+    """Build a concise natural-language answer from scored frames.
+
+    Args:
+        frames: Per-frame scores (includes frames that failed to score).
+        regions: Clustered temporal regions of high relevance.
+        query: The original natural-language query.
+        is_relevant: Whether any frame met ``min_relevance``.
+        duration_s: Total video duration in seconds.
+        fps: Video frames per second.
+        min_relevance: Threshold used to count detections (default 0.2).
+        frames_failed: Number of sampled frames whose inference failed.
+        sampled_start_s: Timestamp of the first sampled frame.
+        sampled_end_s: Timestamp of the last sampled frame.
+
+    Returns:
+        Concise answer string. Negative answers always qualify that they
+        describe only the sampled coverage, never the whole video.
+    """
     if not frames:
         return "Could not read any frames from the video."
 
     if not is_relevant:
+        failed_note = (
+            f" ({frames_failed} frames failed to score)" if frames_failed else ""
+        )
         return (
-            f"No {query!r} detected in this video "
-            f"({_format_timestamp(duration_s, fps)} total). "
-            f"Consider re-phrasing the query."
+            f"No {query!r} detected in {len(frames)} sampled frames covering "
+            f"{_format_timestamp(sampled_start_s, fps)}–"
+            f"{_format_timestamp(sampled_end_s, fps)} of "
+            f"{_format_timestamp(duration_s, fps)} total{failed_note}."
         )
 
-    total_dets = sum(f.detection_count for f in frames if f.relevance_score > 0.2)
+    total_dets = sum(
+        f.detection_count for f in frames if f.relevance_score >= min_relevance
+    )
 
     if not regions:
         return f"{query!r} possibly present throughout the video."
@@ -367,7 +459,7 @@ def _build_quick_answer(
     if len(region_strs) == 1:
         return (
             f"{query!r} DETECTED — {region_strs[0]}. "
-            f"({len(regions[0].label)} total detections across video)"
+            f"({total_dets} total detections across video)"
         )
 
     return (

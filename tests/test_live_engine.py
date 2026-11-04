@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import struct
 import sys
+import threading
+import time
 from pathlib import Path
 
 # Ensure visionbrain is importable
@@ -159,9 +161,21 @@ class TestLiveEngine:
     def test_validate_control_empty_prompts(self):
         import visionbrain.live_engine as le
 
-        # Empty list, non-list, and blank/None entries are all invalid —
-        # on both start and set_prompts.
-        bad_prompts = ([], "person", ["", " "], [None], [123], None)
+        # An EMPTY list is valid on start and set_prompts — the hub-protocol
+        # "detection off" pause semantics the Android clients send (the server
+        # stops until prompts are restored). Non-list and blank/non-string
+        # entries stay invalid.
+        action, payload = le.validate_control({
+            "action": "start", "source": "file",
+            "file_id": "abc", "prompts": [],
+        })
+        assert (action, payload) == (
+            "start", {"source": "file", "file_id": "abc", "prompts": []},
+        )
+        assert le.validate_control({"action": "set_prompts", "prompts": []}) == (
+            "set_prompts", {"prompts": []},
+        )
+        bad_prompts = ("person", ["", " "], [None], [123], None)
         for prompts in bad_prompts:
             action, _ = le.validate_control({
                 "action": "start", "source": "file",
@@ -646,7 +660,7 @@ class TestWorkerTargets:
         import visionbrain.live_engine as le
 
         return le._EngineWorker(
-            {"source": "webcam", "camera": 0, "prompts": ["person"]}, None, None
+            {"source": "webcam", "camera": 0, "prompts": ["person"]}, set()
         )
 
     def test_add_target_default_labels_sequence(self):
@@ -986,3 +1000,1053 @@ class TestLiveEngineAuth:
         with client.websocket_connect("/api/live/ws") as ws:
             msg = json.loads(ws.receive_text())
         assert msg == {"type": "status", "note": "local engine ready"}
+
+
+class TestValidateControlTuning:
+    """Live-tunable knobs (start keys + set_* controls) and the hub-protocol
+    controls the local engine now answers instead of silently no-oping."""
+
+    def test_start_tuning_keys_pass(self):
+        import visionbrain.live_engine as le
+
+        action, payload = le.validate_control({
+            "action": "start", "source": "file", "file_id": "abc",
+            "prompts": ["person"], "threshold": 0.3, "detect_every": 4,
+            "resolution": 720, "backbone_every": 5,
+            "jpeg_quality": 55, "send_width": 960, "task": "detect",
+        })
+        assert action == "start"
+        assert payload["backbone_every"] == 5
+        assert payload["jpeg_quality"] == 55
+        assert payload["send_width"] == 960
+        assert payload["task"] == "detect"
+
+    def test_start_tuning_bogus_values_dropped(self):
+        import visionbrain.live_engine as le
+
+        action, payload = le.validate_control({
+            "action": "start", "source": "webcam", "camera": 0,
+            "prompts": ["person"], "jpeg_quality": 200, "send_width": 10,
+            "task": "yolo", "backbone_every": 0, "threshold": 5,
+        })
+        assert action == "start"
+        for key in ("jpeg_quality", "send_width", "task", "backbone_every", "threshold"):
+            assert key not in payload
+
+    def test_set_threshold(self):
+        import visionbrain.live_engine as le
+
+        assert le.validate_control({"type": "set_threshold", "threshold": 0.4}) == (
+            "set_threshold", {"threshold": 0.4},
+        )
+        for bad in (0, 1, -0.1, "0.4", True, None):
+            assert le.validate_control({"type": "set_threshold", "threshold": bad}) == (
+                "unknown", {},
+            )
+
+    def test_set_stream(self):
+        import visionbrain.live_engine as le
+
+        assert le.validate_control(
+            {"type": "set_stream", "jpeg_quality": 50, "send_width": 640}
+        ) == ("set_stream", {"jpeg_quality": 50, "send_width": 640})
+        assert le.validate_control({"type": "set_stream", "jpeg_quality": 80}) == (
+            "set_stream", {"jpeg_quality": 80},
+        )
+        # empty payload, out-of-range quality, non-int quality, bad width
+        assert le.validate_control({"type": "set_stream"}) == ("unknown", {})
+        assert le.validate_control({"type": "set_stream", "jpeg_quality": 29}) == ("unknown", {})
+        assert le.validate_control({"type": "set_stream", "jpeg_quality": 96}) == ("unknown", {})
+        assert le.validate_control({"type": "set_stream", "jpeg_quality": 55.5}) == ("unknown", {})
+        assert le.validate_control({"type": "set_stream", "send_width": 100}) == ("unknown", {})
+
+    def test_set_task(self):
+        import visionbrain.live_engine as le
+
+        assert le.validate_control({"type": "set_task", "task": "detect"}) == (
+            "set_task", {"task": "detect"},
+        )
+        assert le.validate_control({"type": "set_task", "task": "segment"}) == (
+            "set_task", {"task": "segment"},
+        )
+        assert le.validate_control({"type": "set_task", "task": "yolo"}) == ("unknown", {})
+
+    def test_set_engine_accepts_bools_and_lfm_model(self):
+        import visionbrain.live_engine as le
+
+        action, payload = le.validate_control({
+            "type": "set_engine", "sam": True, "falcon": False, "lfm_model": "lfm3b",
+        })
+        assert action == "set_engine"
+        assert payload == {"sam": True, "falcon": False, "lfm_model": "lfm3b"}
+        assert le.validate_control({"type": "set_engine", "sam": "yes"}) == ("unknown", {})
+        assert le.validate_control({"type": "set_engine", "lfm_model": "gemma"}) == ("unknown", {})
+
+    def test_set_vlm(self):
+        import visionbrain.live_engine as le
+
+        assert le.validate_control({"type": "set_vlm", "model": "lfm"}) == (
+            "set_vlm", {"model": "lfm"},
+        )
+        assert le.validate_control({"type": "set_vlm", "model": "  "}) == ("unknown", {})
+        assert le.validate_control({"type": "set_vlm", "model": 3}) == ("unknown", {})
+
+    def test_ask(self):
+        import visionbrain.live_engine as le
+
+        action, payload = le.validate_control({"type": "ask", "question": "  what do you see? "})
+        assert (action, payload) == ("ask", {"question": "what do you see?"})
+        assert le.validate_control({"type": "ask", "question": "   "}) == ("unknown", {})
+        assert le.validate_control({"type": "ask", "question": "x" * 501}) == ("unknown", {})
+        assert le.validate_control({"type": "ask"}) == ("unknown", {})
+
+    def test_report(self):
+        import visionbrain.live_engine as le
+
+        assert le.validate_control(
+            {"type": "report", "summary": "2x person", "report_type": "field"}
+        ) == ("report", {"summary": "2x person", "report_type": "field"})
+        assert le.validate_control({"type": "report"}) == (
+            "report", {"summary": "", "report_type": "field"},
+        )
+        assert le.validate_control({"type": "report", "summary": 42}) == ("unknown", {})
+        assert le.validate_control({"type": "report", "report_type": ""}) == ("unknown", {})
+
+
+class TestWorkerTunables:
+    """Live-tunable worker state — set_* mutators clamp and take effect."""
+
+    @staticmethod
+    def _worker():
+        import asyncio
+        import threading
+
+        import visionbrain.live_engine as le
+
+        # A RUNNING loop: push() delivers via call_soon_threadsafe, which
+        # needs the loop alive for the sentinel to reach the queue.
+        loop = asyncio.new_event_loop()
+        threading.Thread(target=loop.run_forever, daemon=True).start()
+        sink = le._ClientSink(loop)
+        worker = le._EngineWorker(
+            {"source": "webcam", "camera": 0, "prompts": ["person"]},
+            {sink},
+        )
+        return worker, sink
+
+    def test_stream_tuning_clamped(self):
+        worker, _sink = self._worker()
+        worker.set_stream(jpeg_quality=1000, send_width=1)
+        assert worker._jpeg_quality == 95
+        assert worker._send_width == 256
+        worker.set_stream(jpeg_quality=50, send_width=1920)
+        assert worker._jpeg_quality == 50
+        assert worker._send_width == 1920
+
+    def test_threshold_and_task(self):
+        worker, _sink = self._worker()
+        worker.set_threshold(0.6)
+        worker.set_task("detect")
+        assert worker._threshold == 0.6
+        assert worker._task == "detect"
+
+    def test_push_frame_coalesces_to_one_slot(self):
+        import time
+
+        import visionbrain.live_engine as le
+
+        worker, sink = self._worker()
+        worker.push_frame(b"f1")
+        worker.push_frame(b"f2")
+        worker.push_frame(b"f3")
+        time.sleep(0.1)  # let the loop thread run put_nowait
+        # The sink keeps just the newest frame; the queue holds exactly one
+        # sentinel for the whole burst — a stalled sender can never grow a
+        # stale-JPEG backlog.
+        assert sink.pending_frame == b"f3"
+        assert sink.queue.qsize() == 1
+        assert sink.queue.get_nowait() is le._FRAME_SENTINEL
+        # Sender drains the slot; the next push re-arms the sentinel.
+        sink.pending_frame = None
+        worker.push_frame(b"f4")
+        time.sleep(0.1)
+        assert sink.pending_frame == b"f4"
+        assert sink.queue.qsize() == 1
+
+    def test_push_fans_out_to_all_viewers(self):
+        import asyncio
+        import threading
+        import time
+
+        import visionbrain.live_engine as le
+
+        # Two attached viewers both receive JSON broadcasts and frames; the
+        # latest-frame-wins coalescing stays per viewer.
+        loops, sinks = [], []
+        for _ in range(2):
+            loop = asyncio.new_event_loop()
+            threading.Thread(target=loop.run_forever, daemon=True).start()
+            loops.append(loop)
+            sinks.append(le._ClientSink(loop))
+        worker = le._EngineWorker(
+            {"source": "webcam", "camera": 0, "prompts": ["person"]},
+            set(sinks),
+        )
+        worker.push({"type": "status", "note": "hi"})
+        worker.push_frame(b"f1")
+        worker.push_frame(b"f2")
+        time.sleep(0.1)
+        for sink in sinks:
+            assert sink.queue.get_nowait() == {"type": "status", "note": "hi"}
+            assert sink.queue.get_nowait() is le._FRAME_SENTINEL
+            assert sink.pending_frame == b"f2"
+            assert sink.queue.qsize() == 0
+
+    def test_last_detection_records_shape(self):
+        worker, _sink = self._worker()
+        with worker._frame_lock:
+            worker._last_frame_items = [{
+                "label": "person", "score": 0.9,
+                "box": [0.1, 0.2, 0.3, 0.4], "track_id": 1,
+            }]
+        records = worker.last_detection_records()
+        assert records == [{
+            "label": "person", "score": 0.9,
+            "centroid_norm": {"x": pytest.approx(0.2), "y": pytest.approx(0.3)},
+            "source": "sam",
+        }]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SIMPLIFICATION_SPEC regressions (sections 3-6, server side) — shared helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _make_loop_sink(le):
+    """A worker sink wired to a RUNNING event loop on its own daemon thread.
+
+    Returns ``(loop, sink, stop)`` — the caller MUST invoke ``stop()`` so no
+    loop thread outlives the test.
+    """
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+
+    def stop() -> None:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(2.0)
+
+    return loop, le._ClientSink(loop), stop
+
+
+def _writer_thread_count() -> int:
+    """Number of live ``live-capture-writer`` threads right now."""
+    return len([t for t in threading.enumerate() if t.name == "live-capture-writer"])
+
+
+def _recv_until(ws, predicate, limit: int = 8) -> dict:
+    """Read JSON control responses until ``predicate`` matches (bounded)."""
+    for _ in range(limit):
+        msg = json.loads(ws.receive_text())
+        if predicate(msg):
+            return msg
+    pytest.fail("expected websocket message not received")
+
+
+def _wait_worker(le, timeout: float = 5.0):
+    """Block until the WS handler has installed a live worker; return it."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        worker = le._worker
+        if worker is not None and worker.thread is not None and worker.thread.is_alive():
+            return worker
+        time.sleep(0.01)
+    pytest.fail("engine worker did not start")
+
+
+def _fake_run_patch(monkeypatch) -> None:
+    """Replace ``_EngineWorker.run`` so a WS start needs no cv2/MLX.
+
+    The fake idles until ``stop_event`` (keeping the worker ``_alive``) and
+    mimics the real exit contract: ``engine_stopped`` then writer shutdown.
+    """
+    import visionbrain.live_engine as le
+
+    def fake_run(self) -> None:
+        self.stop_event.wait(5.0)
+        self.push({"type": "engine_stopped"})
+        self._shutdown_capture_writer()
+
+    monkeypatch.setattr(le._EngineWorker, "run", fake_run)
+
+
+@pytest.fixture
+def ws_clean(monkeypatch):
+    """Isolate the live-engine module globals for one WS-level test."""
+    import visionbrain.live_engine as le
+
+    monkeypatch.setattr(le, "_worker", None)
+    monkeypatch.setattr(le, "_sinks", set())
+    monkeypatch.setattr(le, "_pending_zones", None)
+    monkeypatch.setattr(le, "_pending_triggers", None)
+    monkeypatch.setattr(le, "_pending_targets", None)
+    monkeypatch.setattr(le, "_ask_busy", False)
+    return le
+
+
+def _patch_vlm(monkeypatch, *, ask_result="ok", ask_error=None,
+               report_result="report ok", report_error=None) -> dict:
+    """Mock ``vlm_registry`` ask/report; return the recorded call args."""
+    import visionbrain.vlm_registry as vlmr
+
+    calls: dict = {"ask": [], "generate_report": []}
+
+    def fake_ask(question, detections=None, prompts=None, image=None):
+        calls["ask"].append({
+            "question": question, "detections": detections,
+            "prompts": prompts, "image": image,
+        })
+        if ask_error is not None:
+            raise ask_error
+        return ask_result
+
+    def fake_generate_report(summary, report_type="field", image=None):
+        calls["generate_report"].append({
+            "summary": summary, "report_type": report_type, "image": image,
+        })
+        if report_error is not None:
+            raise report_error
+        return report_result
+
+    monkeypatch.setattr(vlmr, "ask", fake_ask)
+    monkeypatch.setattr(vlmr, "generate_report", fake_generate_report)
+    monkeypatch.setattr(vlmr, "current_key", lambda: "gemma")
+    return calls
+
+
+def _set_evidence(worker, items=None, frame_id: int = 42):
+    """Simulate one completed detect pass; returns the frame sentinel."""
+    frame = object()
+    with worker._frame_lock:
+        worker._latest_frame = (frame_id, frame)
+        worker._last_frame_items = list(items if items is not None else [])
+    return frame
+
+
+def _ws_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import visionbrain.live_engine as le
+
+    app = FastAPI()
+    app.include_router(le.router)
+    return TestClient(app)
+
+
+class TestBackboneDeprecation:
+    """Spec section 3: features are recomputed every detection pass; the
+    legacy ``backbone_every`` start key is accepted, stripped from the
+    worker payload, and earns a deprecation status note."""
+
+    def test_worker_stores_no_backbone_state(self):
+        import visionbrain.live_engine as le
+
+        worker = le._EngineWorker(
+            {"source": "webcam", "camera": 0, "prompts": ["person"],
+             "backbone_every": 2},
+            set(),
+        )
+        # The legacy knob is inert: validated upstream, never stored.
+        assert not hasattr(worker, "_backbone_every")
+        assert worker.cfg["backbone_every"] == 2  # carried but unread
+
+    def test_start_with_backbone_every_sends_deprecation_note(self, ws_clean, monkeypatch):
+        le = ws_clean
+        _fake_run_patch(monkeypatch)
+        client = _ws_client()
+        with client.websocket_connect("/api/live/ws") as ws:
+            assert json.loads(ws.receive_text()) == {
+                "type": "status", "note": "local engine ready",
+            }
+            ws.send_text(json.dumps({
+                "type": "start", "source": "webcam", "camera": 0,
+                "prompts": ["person"], "backbone_every": 2,
+            }))
+            note = _recv_until(
+                ws, lambda m: "backbone_every" in str(m.get("note", "")),
+            )
+            assert note["type"] == "status"
+            assert "deprecated" in note["note"]
+            assert "every detection pass" in note["note"]
+            worker = _wait_worker(le)
+            # The worker payload never sees the key.
+            assert "backbone_every" not in worker.cfg
+            worker.stop_event.set()
+
+    def test_start_without_backbone_every_sends_no_note(self, ws_clean, monkeypatch):
+        le = ws_clean
+        _fake_run_patch(monkeypatch)
+        client = _ws_client()
+        with client.websocket_connect("/api/live/ws") as ws:
+            assert json.loads(ws.receive_text())["type"] == "status"
+            ws.send_text(json.dumps({
+                "type": "start", "source": "webcam", "camera": 0,
+                "prompts": ["person"],
+            }))
+            worker = _wait_worker(le)
+            ws.send_text(json.dumps({"type": "stop"}))
+            msgs = [_recv_until(ws, lambda m: m.get("type") == "engine_stopped")]
+            notes = [m.get("note", "") for m in msgs if m.get("type") == "status"]
+            assert all("deprecated" not in n for n in notes)
+            assert "backbone_every" not in worker.cfg
+
+
+class TestEvidenceSnapshot:
+    """Spec section 6 (server): one consistent evidence snapshot, pause
+    clears it, and report counts are derived server-side."""
+
+    @staticmethod
+    def _worker():
+        import visionbrain.live_engine as le
+
+        return le._EngineWorker(
+            {"source": "webcam", "camera": 0, "prompts": ["car"]}, set()
+        )
+
+    @staticmethod
+    def _items() -> list[dict]:
+        return [
+            {"label": "car", "score": 0.9, "box": [0.0, 0.0, 0.2, 0.2], "track_id": 1},
+            {"label": "car", "score": 0.8, "box": [0.2, 0.2, 0.4, 0.4], "track_id": 2},
+            {"label": "car", "score": 0.7, "box": [0.4, 0.4, 0.6, 0.6], "track_id": 3},
+            {"label": "person", "score": 0.6, "box": [0.6, 0.6, 0.8, 0.8], "track_id": 4},
+        ]
+
+    def test_snapshot_none_without_observation(self):
+        worker = self._worker()
+        assert worker.evidence_snapshot() is None
+
+    def test_snapshot_one_consistent_triple(self):
+        worker = self._worker()
+        frame = object()
+        with worker._frame_lock:
+            worker._latest_frame = (7, frame)
+            worker._last_frame_items = self._items()
+        snap = worker.evidence_snapshot()
+        assert snap is not None
+        assert snap["frame_id"] == 7
+        assert snap["frame"] is frame
+        assert snap["prompts"] == ["car"]
+        assert snap["records"][0] == {
+            "label": "car", "score": 0.9,
+            "centroid_norm": {"x": pytest.approx(0.1), "y": pytest.approx(0.1)},
+            "source": "sam",
+        }
+        assert len(snap["records"]) == 4
+
+    def test_observed_empty_set_is_valid_evidence(self):
+        worker = self._worker()
+        # The engine ran a real pass and saw NOTHING — valid observation,
+        # distinct from having no observation at all.
+        with worker._frame_lock:
+            worker._latest_frame = (3, object())
+            worker._last_frame_items = []
+        snap = worker.evidence_snapshot()
+        assert snap is not None
+        assert snap["records"] == []
+
+    def test_pause_clears_evidence_and_does_not_resurrect(self):
+        worker = self._worker()
+        with worker._frame_lock:
+            worker._latest_frame = (1, object())
+            worker._last_frame_items = self._items()
+        worker.set_prompts([])  # pause — old counts must not survive
+        assert worker.get_latest_frame() is None
+        assert worker.evidence_snapshot() is None
+        worker.set_prompts(["car"])  # resume — still no NEW observation
+        assert worker.evidence_snapshot() is None
+        # A non-empty set_prompts on live evidence keeps it.
+        with worker._frame_lock:
+            worker._latest_frame = (2, object())
+        worker.set_prompts(["truck"])
+        assert worker.evidence_snapshot() is not None
+
+    def test_counts_summary_server_side(self):
+        import visionbrain.live_engine as le
+
+        assert le._counts_summary([]) == "no objects observed"
+        records = le._records_from_items(self._items())
+        assert le._counts_summary(records) == "3x car, 1x person"
+
+
+class TestClipWriter:
+    """Spec section 4: lazy writer start, ONE capture slot across
+    collect + queue + encode, sentinel shutdown on every exit path."""
+
+    @staticmethod
+    def _writer_threads() -> list:
+        return [t for t in threading.enumerate() if t.name == "live-capture-writer"]
+
+    @staticmethod
+    def _backdate_due(worker) -> None:
+        """Make the pending capture's post-roll deadline already passed."""
+        with worker._state_lock:
+            worker._capture["deadline"] = 0.0
+
+    @staticmethod
+    def _await_slot_release(worker, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout
+        while worker._capture is not None and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert worker._capture is None
+
+    @pytest.fixture
+    def clip_env(self, tmp_path, monkeypatch):
+        import visionbrain.live_engine as le
+
+        monkeypatch.setattr(le, "_clips_dir", tmp_path / "clips")
+        _loop, sink, stop = _make_loop_sink(le)
+        worker = le._EngineWorker(
+            {"source": "webcam", "camera": 0, "prompts": ["person"]}, {sink}
+        )
+        yield worker, sink
+        # Cleanup: sentinel-stop any writer the test started, then the loop.
+        worker._shutdown_capture_writer()
+        stop()
+
+    def test_constructor_starts_no_writer_thread(self, clip_env):
+        worker, _sink = clip_env
+        assert worker._capture_thread is None
+        assert self._writer_threads() == []
+
+    def test_writer_starts_lazily_and_slot_spans_encode(self, clip_env):
+        worker, _sink = clip_env
+        baseline = len(self._writer_threads())
+        seen_threads: list[str] = []
+        encode_started = threading.Event()
+        release_encode = threading.Event()
+
+        def controlled_encode(capture: dict) -> None:
+            seen_threads.append(threading.current_thread().name)
+            encode_started.set()
+            release_encode.wait(5.0)
+
+        worker._write_capture_file = controlled_encode
+
+        assert worker.request_capture("line_cross", 100.0) is True
+        assert worker._capture_thread is None  # still lazy while collecting
+        self._backdate_due(worker)
+        worker._dispatch_due_capture()
+        assert encode_started.wait(5.0)  # writer picked it up
+        # ...the slot stays claimed across queued work AND encoding...
+        assert worker._capture is not None
+        assert worker._capture["state"] == "encoding"
+        assert worker.request_capture("dwell", 101.0) is False
+        # ...and the writer releases it after a successful encode.
+        release_encode.set()
+        self._await_slot_release(worker)
+        worker._shutdown_capture_writer()
+        assert not worker._capture_thread.is_alive()
+        assert len(self._writer_threads()) == baseline
+        # Encoding never executed on the frame-processing thread.
+        assert seen_threads == ["live-capture-writer"]
+
+    def test_repeated_cycles_return_writer_count_to_baseline(self, clip_env):
+        worker, _sink = clip_env
+        baseline = len(self._writer_threads())
+        worker._write_capture_file = lambda capture: None
+        for _ in range(2):
+            def fake__run() -> None:
+                assert worker.request_capture("dwell", 100.0) is True
+                self._backdate_due(worker)
+                worker._dispatch_due_capture()
+
+            worker._run = fake__run
+            thread = threading.Thread(target=worker.run, daemon=True)
+            thread.start()
+            thread.join(5.0)
+            assert not thread.is_alive()
+            # run()'s finally: slot released after encode + sentinel shutdown.
+            assert worker._capture is None
+            assert not worker._capture_thread.is_alive()
+            assert len(self._writer_threads()) == baseline
+
+    def test_burst_triggers_bounded_to_one_capture(self, clip_env):
+        worker, _sink = clip_env
+        release = threading.Event()
+        encoded: list[str] = []
+
+        def blocked_encode(capture: dict) -> None:
+            encoded.append(capture["kind"])
+            release.wait(5.0)
+
+        worker._write_capture_file = blocked_encode
+
+        assert worker.request_capture("line_cross", 100.0) is True
+        # Burst while COLLECTING: later triggers lose the slot.
+        assert worker.request_capture("direction", 100.5) is False
+        assert worker.request_capture("dwell", 101.0) is False
+        self._backdate_due(worker)
+        worker._dispatch_due_capture()
+        # Burst while QUEUED/ENCODING: still occupied.
+        assert worker.request_capture("watch", 102.0) is False
+        # Handoff is idempotent — no duplicate queue entry, single encode.
+        worker._dispatch_due_capture()
+        deadline = time.monotonic() + 5.0
+        while not encoded and time.monotonic() < deadline:
+            time.sleep(0.005)
+        release.set()
+        worker._shutdown_capture_writer()
+        assert encoded == ["line_cross"]
+        assert worker._capture is None
+
+    def test_encode_failure_releases_slot(self, clip_env):
+        worker, sink = clip_env
+
+        def exploding_encode(capture: dict) -> None:
+            raise RuntimeError("codec gone")
+
+        worker._write_capture_file = exploding_encode
+        assert worker.request_capture("dwell", 100.0) is True
+        self._backdate_due(worker)
+        worker._dispatch_due_capture()
+        self._await_slot_release(worker)
+        # The slot is genuinely reusable after the failure.
+        assert worker.request_capture("dwell", 200.0) is True
+        worker._shutdown_capture_writer()
+        # And the failure surfaced as a status note, not a dead writer.
+        time.sleep(0.1)
+        notes = []
+        while not sink.queue.empty():
+            msg = sink.queue.get_nowait()
+            if isinstance(msg, dict):
+                notes.append(msg.get("note", ""))
+        assert any("clip capture failed" in n and "codec gone" in n for n in notes)
+
+    def test_shutdown_discards_incomplete_capture(self, clip_env):
+        worker, _sink = clip_env
+        encoded: list[dict] = []
+        worker._write_capture_file = encoded.append
+        worker._ensure_capture_writer()
+        # post_s in the future → still collecting when the worker exits.
+        assert worker.request_capture("dwell", time.time() + 60.0) is True
+        worker._shutdown_capture_writer()
+        assert worker._capture is None  # incomplete post-roll discarded
+        assert encoded == []
+        assert not worker._capture_thread.is_alive()
+        assert worker.request_capture("dwell", time.time()) is True  # freed
+
+    def test_shutdown_lets_completed_capture_finish_first(self, clip_env):
+        worker, _sink = clip_env
+        release = threading.Event()
+        encoded: list[str] = []
+
+        def blocked_encode(capture: dict) -> None:
+            encoded.append(capture["kind"])
+            release.wait(5.0)
+
+        worker._write_capture_file = blocked_encode
+        assert worker.request_capture("line_cross", 100.0) is True
+        self._backdate_due(worker)
+        worker._dispatch_due_capture()  # completed capture accepted
+        done = threading.Event()
+
+        def do_shutdown() -> None:
+            worker._shutdown_capture_writer()  # sentinel AFTER the capture
+            done.set()
+
+        stopper = threading.Thread(target=do_shutdown, daemon=True)
+        stopper.start()
+        time.sleep(0.05)  # let the shutdown queue its sentinel
+        release.set()     # the accepted capture finishes encoding
+        assert done.wait(10.0)
+        stopper.join(2.0)
+        assert encoded == ["line_cross"]
+        assert worker._capture is None  # slot released afterwards
+        assert not worker._capture_thread.is_alive()
+
+    def test_worker_exit_discards_incomplete_capture(self, clip_env):
+        worker, _sink = clip_env
+
+        def must_not_encode(capture: dict) -> None:
+            pytest.fail("incomplete capture reached the encoder")
+
+        worker._write_capture_file = must_not_encode
+        worker._ensure_capture_writer()
+
+        def fake__run() -> None:
+            # Capture armed, post-roll never completes, loop ends.
+            assert worker.request_capture("dwell", time.time() + 60.0) is True
+
+        worker._run = fake__run
+        thread = threading.Thread(target=worker.run, daemon=True)
+        thread.start()
+        thread.join(5.0)
+        assert not thread.is_alive()
+        assert worker._capture is None
+        assert not worker._capture_thread.is_alive()
+
+
+class TestDetectionsCoalescing:
+    """Spec section 5: ``detections`` join frames in the per-viewer
+    latest-wins slot (empty sets included); in-order messages are never
+    dropped and one slow viewer never delays another."""
+
+    @pytest.fixture
+    def co_env(self):
+        import visionbrain.live_engine as le
+
+        _loop, sink, stop = _make_loop_sink(le)
+        worker = le._EngineWorker(
+            {"source": "webcam", "camera": 0, "prompts": ["person"]}, {sink}
+        )
+        yield worker, sink
+        stop()
+
+    def test_burst_keeps_only_latest(self, co_env):
+        import visionbrain.live_engine as le
+
+        worker, sink = co_env
+        worker.push_detections([{"label": "a"}])
+        worker.push_detections([{"label": "b"}])
+        worker.push_detections([{"label": "c"}])
+        time.sleep(0.05)
+        assert sink.pending_detections == [{"label": "c"}]
+        assert sink.queue.qsize() == 1
+        assert sink.queue.get_nowait() is le._DETECTIONS_SENTINEL
+
+    def test_empty_supersedes_nonempty(self, co_env):
+        worker, sink = co_env
+        worker.push_detections([{"label": "car"}])
+        worker.push_detections([])  # "drop stale boxes" is a real value
+        time.sleep(0.05)
+        assert sink.pending_detections == []
+        assert sink.queue.qsize() == 1  # one sentinel for the whole burst
+
+    def test_nonempty_after_empty_replaces(self, co_env):
+        worker, sink = co_env
+        worker.push_detections([])
+        worker.push_detections([{"label": "car", "score": 0.9}])
+        time.sleep(0.05)
+        assert sink.pending_detections == [{"label": "car", "score": 0.9}]
+
+    def test_events_and_status_preserved_in_order(self, co_env):
+        import visionbrain.live_engine as le
+
+        worker, sink = co_env
+        worker.push({"type": "status", "note": "s1"})
+        worker.push_detections([{"label": "a"}])
+        worker.push({"type": "event", "event": {"kind": "dwell"}})
+        worker.push_detections([])  # supersedes "a", no new sentinel
+        worker.push({"type": "capture", "clip": {"name": "x.mp4"}})
+        time.sleep(0.05)
+        drained = []
+        while not sink.queue.empty():
+            drained.append(sink.queue.get_nowait())
+        # Every in-order message survived; exactly one detections sentinel.
+        assert drained == [
+            {"type": "status", "note": "s1"},
+            le._DETECTIONS_SENTINEL,
+            {"type": "event", "event": {"kind": "dwell"}},
+            {"type": "capture", "clip": {"name": "x.mp4"}},
+        ]
+        assert sink.pending_detections == []
+
+    def test_slow_viewer_does_not_delay_another(self):
+        import visionbrain.live_engine as le
+
+        loops, sinks, stops = [], [], []
+        try:
+            for _ in range(2):
+                loop, sink, stop = _make_loop_sink(le)
+                loops.append(loop)
+                sinks.append(sink)
+                stops.append(stop)
+            worker = le._EngineWorker(
+                {"source": "webcam", "camera": 0, "prompts": ["person"]},
+                set(sinks),
+            )
+            # Neither viewer drains — fan-out must not block or backlog.
+            worker.push({"type": "status", "note": "hi"})
+            worker.push_detections([{"label": "x"}])
+            worker.push_frame(b"f1")
+            time.sleep(0.05)
+            for sink in sinks:
+                assert sink.pending_detections == [{"label": "x"}]
+                assert sink.pending_frame == b"f1"
+                # One sentinel per replaceable stream — bounded per viewer.
+                assert sink.queue.qsize() == 3
+        finally:
+            for stop in stops:
+                stop()
+
+    def test_sender_ships_latest_wire_messages(self):
+        import asyncio
+
+        import visionbrain.live_engine as le
+
+        class FakeWS:
+            def __init__(self) -> None:
+                self.sent: list[tuple[str, object]] = []
+
+            async def send_bytes(self, data) -> None:
+                self.sent.append(("bin", bytes(data)))
+
+            async def send_text(self, text: str) -> None:
+                self.sent.append(("txt", json.loads(text)))
+
+        async def main() -> list:
+            loop = asyncio.get_running_loop()
+            sink = le._ClientSink(loop)
+            sink.push({"type": "event", "event": {"kind": "dwell"}})
+            sink.push_detections([{"label": "car"}])
+            sink.push_detections([])  # empty supersedes the car
+            sink.push_frame(b"f1")
+            sink.push_frame(b"f2")
+            ws = FakeWS()
+            task = asyncio.create_task(le._sender(ws, sink))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            return ws.sent
+
+        sent = asyncio.run(main())
+        assert sent == [
+            ("txt", {"type": "event", "event": {"kind": "dwell"}}),
+            ("txt", {"type": "detections", "items": []}),  # empty set shipped
+            ("bin", b"f2"),  # latest frame wins
+        ]
+
+
+class TestAskReportWire:
+    """Spec section 6 (server side): pinned ``error`` shape on the ask/report
+    path, evidence snapshot + grounding rule, server-derived report counts.
+    Uses a fake engine run and mocked ``vlm_registry`` — no MLX anywhere."""
+
+    def test_ask_report_no_engine_error_shape(self, ws_clean, monkeypatch):
+        le = ws_clean
+        calls = _patch_vlm(monkeypatch)
+        client = _ws_client()
+        with client.websocket_connect("/api/live/ws") as ws:
+            assert json.loads(ws.receive_text()) == {
+                "type": "status", "note": "local engine ready",
+            }
+            ws.send_text(json.dumps({"type": "ask", "question": "what?"}))
+            msg = json.loads(ws.receive_text())
+            assert msg["type"] == "error"
+            assert "no engine running" in msg["error"]
+        # Same pinned shape for report.
+        with client.websocket_connect("/api/live/ws") as ws:
+            assert json.loads(ws.receive_text())["type"] == "status"
+            ws.send_text(json.dumps({"type": "report", "summary": "x"}))
+            msg = json.loads(ws.receive_text())
+            assert msg["type"] == "error"
+            assert "no engine running" in msg["error"]
+        assert calls["ask"] == []
+        assert calls["generate_report"] == []
+
+    def test_ask_rejects_without_observation_or_inference(self, ws_clean, monkeypatch):
+        le = ws_clean
+        calls = _patch_vlm(monkeypatch)
+        _fake_run_patch(monkeypatch)
+        client = _ws_client()
+        with client.websocket_connect("/api/live/ws") as ws:
+            assert json.loads(ws.receive_text())["type"] == "status"
+            ws.send_text(json.dumps({
+                "type": "start", "source": "webcam", "camera": 0,
+                "prompts": ["car"],
+            }))
+            _wait_worker(le)
+            # No detect pass has run: grounded rejection BEFORE the slot.
+            ws.send_text(json.dumps({"type": "ask", "question": "what?"}))
+            msg = json.loads(ws.receive_text())
+            assert msg["type"] == "error"
+            assert "no current observation" in msg["error"]
+            assert calls["ask"] == []
+            # The shared inference slot was never claimed.
+            assert le._claim_ask_slot() is True
+            le._release_ask_slot()
+
+    def test_pause_clears_evidence_and_ask_refuses(self, ws_clean, monkeypatch):
+        le = ws_clean
+        calls = _patch_vlm(monkeypatch)
+        _fake_run_patch(monkeypatch)
+        client = _ws_client()
+        with client.websocket_connect("/api/live/ws") as ws:
+            assert json.loads(ws.receive_text())["type"] == "status"
+            ws.send_text(json.dumps({
+                "type": "start", "source": "webcam", "camera": 0,
+                "prompts": ["car"],
+            }))
+            worker = _wait_worker(le)
+            _set_evidence(worker, items=[{"label": "car", "score": 0.9,
+                                          "box": [0, 0, 0.2, 0.2]}])
+            assert worker.evidence_snapshot() is not None
+            ws.send_text(json.dumps({"type": "set_prompts", "prompts": []}))
+            note = json.loads(ws.receive_text())
+            assert note == {"type": "status", "note": "detection paused (no prompts)"}
+            # Pause cleared the stored evidence entirely.
+            assert worker.get_latest_frame() is None
+            assert worker.evidence_snapshot() is None
+            ws.send_text(json.dumps({"type": "ask", "question": "how many?"}))
+            msg = json.loads(ws.receive_text())
+            assert msg["type"] == "error"
+            assert "no current observation" in msg["error"]
+            assert calls["ask"] == []
+            # Re-arming prompts does not resurrect the cleared evidence.
+            ws.send_text(json.dumps({"type": "set_prompts", "prompts": ["car"]}))
+            note = json.loads(ws.receive_text())
+            assert note == {"type": "status", "note": "prompts updated"}
+            assert worker.evidence_snapshot() is None
+
+    def test_busy_slot_error_shape(self, ws_clean, monkeypatch):
+        le = ws_clean
+        calls = _patch_vlm(monkeypatch)
+        _fake_run_patch(monkeypatch)
+        client = _ws_client()
+        with client.websocket_connect("/api/live/ws") as ws:
+            assert json.loads(ws.receive_text())["type"] == "status"
+            ws.send_text(json.dumps({
+                "type": "start", "source": "webcam", "camera": 0,
+                "prompts": ["car"],
+            }))
+            worker = _wait_worker(le)
+            _set_evidence(worker)
+            assert le._claim_ask_slot() is True  # someone else is inferring
+            try:
+                ws.send_text(json.dumps({"type": "ask", "question": "hello?"}))
+                msg = json.loads(ws.receive_text())
+                assert msg == {"type": "error", "error": "ask/report already running"}
+                ws.send_text(json.dumps({"type": "report"}))
+                msg = json.loads(ws.receive_text())
+                assert msg == {"type": "error", "error": "ask/report already running"}
+            finally:
+                le._release_ask_slot()
+            assert calls["ask"] == []
+            assert calls["generate_report"] == []
+
+    def test_ask_success_uses_dispatch_snapshot(self, ws_clean, monkeypatch):
+        le = ws_clean
+        calls = _patch_vlm(monkeypatch, ask_result="a car")
+        _fake_run_patch(monkeypatch)
+        client = _ws_client()
+        with client.websocket_connect("/api/live/ws") as ws:
+            assert json.loads(ws.receive_text())["type"] == "status"
+            ws.send_text(json.dumps({
+                "type": "start", "source": "webcam", "camera": 0,
+                "prompts": ["car"],
+            }))
+            worker = _wait_worker(le)
+            frame = _set_evidence(
+                worker,
+                items=[{"label": "car", "score": 0.9, "box": [0, 0, 0.2, 0.2]}],
+                frame_id=42,
+            )
+            ws.send_text(json.dumps(
+                {"type": "ask", "question": "  what do you see? "}
+            ))
+            ack = json.loads(ws.receive_text())
+            assert ack == {"type": "ask_ack", "model": "gemma"}
+            answer = json.loads(ws.receive_text())
+            assert answer == {"type": "answer", "answer": "a car"}
+            # The background thread answered from the SNAPSHOT, not live state.
+            assert calls["ask"][0]["question"] == "what do you see?"
+            assert calls["ask"][0]["image"] is frame
+            assert calls["ask"][0]["prompts"] == ["car"]
+            assert calls["ask"][0]["detections"] == worker.evidence_snapshot()["records"]
+
+    def test_ask_failure_pushes_pinned_error_and_releases_slot(self, ws_clean, monkeypatch):
+        le = ws_clean
+        calls = _patch_vlm(monkeypatch, ask_error=RuntimeError("boom"))
+        _fake_run_patch(monkeypatch)
+        client = _ws_client()
+        with client.websocket_connect("/api/live/ws") as ws:
+            assert json.loads(ws.receive_text())["type"] == "status"
+            ws.send_text(json.dumps({
+                "type": "start", "source": "webcam", "camera": 0,
+                "prompts": ["car"],
+            }))
+            worker = _wait_worker(le)
+            _set_evidence(worker)
+            ws.send_text(json.dumps({"type": "ask", "question": "hello?"}))
+            assert json.loads(ws.receive_text())["type"] == "ask_ack"
+            msg = json.loads(ws.receive_text())
+            assert msg["type"] == "error"
+            assert msg["error"] == "ask failed: boom"
+            # The failure released the shared slot.
+            assert le._claim_ask_slot() is True
+            le._release_ask_slot()
+        assert calls["ask"]
+
+    def test_report_counts_derived_server_side(self, ws_clean, monkeypatch):
+        le = ws_clean
+        calls = _patch_vlm(monkeypatch, report_result="all quiet")
+        _fake_run_patch(monkeypatch)
+        client = _ws_client()
+        with client.websocket_connect("/api/live/ws") as ws:
+            assert json.loads(ws.receive_text())["type"] == "status"
+            ws.send_text(json.dumps({
+                "type": "start", "source": "webcam", "camera": 0,
+                "prompts": ["car", "person"],
+            }))
+            worker = _wait_worker(le)
+            items = (
+                [{"label": "car", "score": 0.9, "box": [0, 0, 0.1, 0.1]}] * 3
+                + [{"label": "person", "score": 0.8, "box": [0.2, 0.2, 0.3, 0.3]}]
+            )
+            frame = _set_evidence(worker, items=items)
+            # Forged browser summary must not reach the model.
+            ws.send_text(json.dumps({
+                "type": "report", "summary": "999x bird", "report_type": "field",
+            }))
+            msg = json.loads(ws.receive_text())
+            assert msg == {"type": "report_result", "text": "all quiet"}
+            sent = calls["generate_report"][0]
+            assert sent["summary"] == "3x car, 1x person"
+            assert "bird" not in sent["summary"]
+            assert sent["report_type"] == "field"
+            assert sent["image"] is frame
+
+    def test_report_empty_observation_says_so(self, ws_clean, monkeypatch):
+        le = ws_clean
+        calls = _patch_vlm(monkeypatch, report_result="quiet scene")
+        _fake_run_patch(monkeypatch)
+        client = _ws_client()
+        with client.websocket_connect("/api/live/ws") as ws:
+            assert json.loads(ws.receive_text())["type"] == "status"
+            ws.send_text(json.dumps({
+                "type": "start", "source": "webcam", "camera": 0,
+                "prompts": ["car"],
+            }))
+            worker = _wait_worker(le)
+            # Engine ran a real pass and saw nothing — a valid observation.
+            _set_evidence(worker, items=[])
+            ws.send_text(json.dumps({"type": "report"}))
+            msg = json.loads(ws.receive_text())
+            assert msg == {"type": "report_result", "text": "quiet scene"}
+            assert calls["generate_report"][0]["summary"] == "no objects observed"
+
+    def test_report_failure_pushes_pinned_error(self, ws_clean, monkeypatch):
+        le = ws_clean
+        calls = _patch_vlm(monkeypatch, report_error=RuntimeError("vlm down"))
+        _fake_run_patch(monkeypatch)
+        client = _ws_client()
+        with client.websocket_connect("/api/live/ws") as ws:
+            assert json.loads(ws.receive_text())["type"] == "status"
+            ws.send_text(json.dumps({
+                "type": "start", "source": "webcam", "camera": 0,
+                "prompts": ["car"],
+            }))
+            worker = _wait_worker(le)
+            _set_evidence(worker)
+            ws.send_text(json.dumps({"type": "report"}))
+            msg = json.loads(ws.receive_text())
+            assert msg == {"type": "error", "error": "report failed: vlm down"}
+            # Slot released after the failure.
+            assert le._claim_ask_slot() is True
+            le._release_ask_slot()

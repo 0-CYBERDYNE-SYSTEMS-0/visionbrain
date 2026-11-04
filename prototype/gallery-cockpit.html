@@ -1,0 +1,1027 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VisionBrain — ten cockpits</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Oxanium:wght@400;600&family=Archivo+Narrow:wght@500;700&family=Share+Tech+Mono&family=Cinzel:wght@500;700&family=Lora:ital,wght@0,400;0,600;1,400&family=Oswald:wght@500;600&family=Courier+Prime:wght@400;700&family=Red+Hat+Text:wght@400;600&family=Red+Hat+Mono:wght@500&family=Chivo:wght@400;700&family=Inconsolata:wght@500;700&family=Saira+Extra+Condensed:wght@500;700&family=Rajdhani:wght@500;600;700&family=EB+Garamond:ital,wght@0,500;0,700;1,500&family=Syncopate:wght@400;700&family=Teko:wght@500;600&family=Titillium+Web:wght@400;600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=M+PLUS+1+Code:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --sw-bg:#111; --sw-fg:#f4f1ea; }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body { background: #111; }
+  button, input { font: inherit; }
+  button { cursor: pointer; }
+  img { max-width: 100%; }
+  .variant { display: none; min-height: 100vh; }
+  .variant.is-on { display: block; }
+  :focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+
+  #proto-switch {
+    position: fixed; z-index: 9999; left: 50%; bottom: 14px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px;
+    background: var(--sw-bg); color: var(--sw-fg);
+    border: 2px solid #fff; border-radius: 999px; padding: 7px 12px;
+    font: 700 12px/1 ui-sans-serif, "Helvetica Neue", sans-serif;
+    box-shadow: 0 10px 30px rgba(0,0,0,.5);
+  }
+  #proto-switch button {
+    background: #fff; color: #000; border: 0; width: 28px; height: 28px; border-radius: 50%; font-weight: 800;
+  }
+  #proto-label { min-width: 210px; text-align: center; white-space: nowrap; }
+
+  .marks { position: absolute; inset: 0; }
+  .box {
+    position: absolute; border: 1.5px solid currentColor; background: transparent; padding: 0; color: inherit;
+  }
+  .box span {
+    position: absolute; left: -1px; top: -16px; font-size: 10px; letter-spacing: .04em;
+    white-space: nowrap; pointer-events: none; padding: 1px 5px; background: #111; color: #fff;
+  }
+
+  /* ========== 1 WINDSHIELD ========== */
+  #v1 { background: #07090c; color: #e8eef2; font-family: "Barlow Condensed", sans-serif; padding-bottom: 72px; }
+  #v1 .glass { position: relative; height: calc(100vh - 168px); overflow: hidden; }
+  #v1 .glass img { width: 100%; height: 100%; object-fit: cover; display: block; filter: saturate(.85) contrast(1.08); }
+  #v1 .glass .box { color: #e8eef2; border-width: 1px; }
+  #v1 .glass .box span { background: rgba(8,12,16,.7); color: #e8eef2; font-family: Oxanium, sans-serif; letter-spacing: .12em; }
+  #v1 .hud {
+    position: absolute; inset: 0; pointer-events: none;
+    font-family: Oxanium, sans-serif; letter-spacing: .18em; text-transform: uppercase;
+    text-shadow: 0 0 12px rgba(232,238,242,.35);
+  }
+  #v1 .hud b { font-weight: 600; }
+  #v1 .h-tl { position: absolute; top: 22px; left: 28px; font-size: 13px; opacity: .85; }
+  #v1 .h-tr { position: absolute; top: 22px; right: 28px; font-size: 13px; text-align: right; pointer-events: auto; }
+  #v1 .h-tr button {
+    background: none; border: 0; color: #e8eef2; opacity: .35; margin-left: 16px;
+    font-family: Oxanium, sans-serif; letter-spacing: .16em; text-transform: uppercase; pointer-events: auto;
+  }
+  #v1 .h-tr button[aria-pressed="true"] { opacity: 1; }
+  #v1 .reticle {
+    position: absolute; left: 50%; top: 50%; width: 88px; height: 88px; margin: -44px 0 0 -44px;
+    border: 1px solid rgba(232,238,242,.45); border-radius: 50%;
+  }
+  #v1 .reticle::before, #v1 .reticle::after {
+    content: ""; position: absolute; background: rgba(232,238,242,.7);
+  }
+  #v1 .reticle::before { left: 50%; top: 10px; bottom: 10px; width: 1px; margin-left: -.5px; }
+  #v1 .reticle::after { top: 50%; left: 10px; right: 10px; height: 1px; margin-top: -.5px; }
+  #v1 .brow {
+    height: 96px; background: linear-gradient(#1a1e24, #0e1116);
+    display: grid; grid-template-columns: repeat(3, 90px) 1fr; gap: 18px; align-items: center;
+    padding: 8px 28px; border-top: 1px solid #2a313a;
+  }
+  #v1 .gauge { text-align: center; }
+  #v1 .gauge svg { width: 74px; height: 54px; display: block; margin: 0 auto; }
+  #v1 .gauge .g-lab { display: block; font-size: 10px; letter-spacing: .2em; opacity: .55; margin-top: 2px; }
+  #v1 .radio {
+    display: flex; align-items: center; gap: 12px; background: #0a0d11; border: 1px solid #2a313a; padding: 8px 12px;
+  }
+  #v1 .radio span { font-family: Oxanium, sans-serif; font-size: 11px; letter-spacing: .2em; opacity: .5; }
+  #v1 .radio input {
+    flex: 1; background: transparent; border: 0; color: #e8eef2; font-family: Oxanium, sans-serif; font-size: 16px;
+  }
+
+  /* ========== 2 SWITCHER ========== */
+  #v2 { background: #141516; color: #d8d4cc; font-family: "Archivo Narrow", sans-serif; padding: 16px 18px 88px; }
+  #v2 .tallybar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-family: "Share Tech Mono", monospace; font-size: 12px; letter-spacing: .14em; }
+  #v2 .tally { background: #7a0b0b; color: #fff; padding: 4px 10px; letter-spacing: .3em; }
+  #v2 .tally.on { background: #e10600; }
+  #v2 .monitors { display: grid; grid-template-columns: 280px 1fr; gap: 10px; min-height: 58vh; }
+  #v2 .mon { background: #000; border: 2px solid #3a3d40; position: relative; }
+  #v2 .mon.program { border-color: #e10600; }
+  #v2 .mon img { width: 100%; height: 100%; object-fit: cover; display: block; min-height: 180px; }
+  #v2 .mon .tag {
+    position: absolute; top: 8px; left: 8px; background: #e10600; color: #fff; font-size: 11px;
+    letter-spacing: .2em; padding: 2px 7px; font-family: "Share Tech Mono", monospace;
+  }
+  #v2 .mon.prev .tag { background: #c9a227; color: #111; }
+  #v2 .mon .box { color: #fff; }
+  #v2 .bus {
+    margin-top: 12px; display: flex; gap: 6px;
+  }
+  #v2 .bus button {
+    background: #2a2c2e; border: 0; color: #d8d4cc; padding: 10px 16px; letter-spacing: .16em; text-transform: uppercase;
+  }
+  #v2 .bus button[aria-pressed="true"] { background: #e10600; color: #fff; }
+  #v2 .deck { display: grid; grid-template-columns: repeat(4, 70px) 1fr; gap: 16px; align-items: end; margin-top: 16px; }
+  #v2 .fader { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  #v2 .fader input[type="range"] {
+    writing-mode: vertical-lr; direction: rtl; width: 18px; height: 110px; accent-color: #c9a227;
+  }
+  #v2 .fader span { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; opacity: .6; }
+  #v2 .cg { display: flex; border: 1px solid #3a3d40; background: #0e0f10; }
+  #v2 .cg em { font-style: normal; font-family: "Share Tech Mono", monospace; font-size: 11px; padding: 10px; opacity: .5; }
+  #v2 .cg input {
+    flex: 1; background: transparent; border: 0; color: #d8d4cc; padding: 10px;
+    font-family: "Share Tech Mono", monospace; font-size: 16px;
+  }
+
+  /* ========== 3 BINNACLE ========== */
+  #v3 {
+    background: #2a1a10;
+    background-image: repeating-linear-gradient(90deg, rgba(255,255,255,.03) 0 2px, transparent 2px 28px);
+    color: #f0e6d2; font-family: Lora, serif; padding: 24px 24px 92px;
+    min-height: 100vh;
+  }
+  #v3 .helm { display: grid; grid-template-columns: 1fr 220px; gap: 24px; align-items: center; max-width: 1100px; margin: 0 auto; }
+  #v3 .bowl {
+    position: relative; width: min(72vh, 72vw); aspect-ratio: 1; margin: 0 auto;
+    border-radius: 50%; overflow: hidden;
+    border: 16px solid #c4a574; box-shadow: inset 0 0 0 6px #7a5a2e, 0 20px 40px rgba(0,0,0,.45);
+  }
+  #v3 .bowl img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #v3 .bowl .box { color: #f0e6d2; }
+  #v3 .rose {
+    position: absolute; inset: 8px; pointer-events: none;
+    border: 1px solid rgba(196,165,116,.55); border-radius: 50%;
+  }
+  #v3 .tick {
+    position: absolute; left: 50%; top: 10px; width: 1px; height: 12px; background: #c4a574;
+    transform-origin: 50% calc(min(36vh, 36vw) - 10px);
+  }
+  #v3 .n { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); font-family: Cinzel, serif; letter-spacing: .3em; font-size: 13px; }
+  #v3 .plate {
+    margin: 18px auto 0; width: min(72vh, 72vw); background: #c4a574; color: #2a1a10;
+    padding: 10px 16px; display: flex; gap: 10px; align-items: center;
+  }
+  #v3 .plate span { font-family: Cinzel, serif; letter-spacing: .2em; font-size: 11px; }
+  #v3 .plate input { flex: 1; border: 0; background: transparent; font-family: Lora, serif; font-size: 16px; color: #2a1a10; }
+  #v3 .log { font-size: 13px; line-height: 1.7; }
+  #v3 .log h2 { font-family: Cinzel, serif; font-size: 14px; letter-spacing: .2em; margin: 0 0 10px; }
+  #v3 .log button {
+    display: block; width: 100%; text-align: left; background: none; border: 0; color: #f0e6d2;
+    padding: 6px 0; opacity: .45; font-family: Cinzel, serif; letter-spacing: .14em;
+  }
+  #v3 .log button[aria-pressed="true"] { opacity: 1; }
+
+  /* ========== 4 SOLARI ========== */
+  #v4 { background: #141210; color: #efe6d0; font-family: Oswald, sans-serif; padding: 22px 28px 92px; }
+  #v4 .board-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    border-bottom: 4px solid #efe6d0; padding-bottom: 8px; margin-bottom: 14px;
+    letter-spacing: .18em; font-size: 22px;
+  }
+  #v4 .now { display: grid; grid-template-columns: 280px 1fr; gap: 16px; margin-bottom: 16px; }
+  #v4 .now .shot { position: relative; background: #000; height: 160px; overflow: hidden; }
+  #v4 .now img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #v4 .now .box { color: #efe6d0; }
+  #v4 .now p { margin: 0; font-family: "Courier Prime", monospace; font-size: 14px; line-height: 1.5; opacity: .8; }
+  #v4 table { width: 100%; border-collapse: separate; border-spacing: 3px 4px; }
+  #v4 td {
+    background: #efe6d0; color: #141210; padding: 8px 10px; font-family: "Courier Prime", monospace;
+    font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  }
+  #v4 td.dim { opacity: .55; }
+  #v4 .jobs { display: flex; gap: 8px; margin-top: 14px; }
+  #v4 .jobs button {
+    background: #efe6d0; color: #141210; border: 0; padding: 8px 14px; letter-spacing: .16em;
+  }
+  #v4 .jobs button[aria-pressed="true"] { background: #c45c26; color: #fff; }
+  #v4 .ask { margin-top: 12px; display: flex; background: #efe6d0; }
+  #v4 .ask input {
+    flex: 1; border: 0; background: transparent; padding: 10px 12px; color: #141210;
+    font-family: "Courier Prime", monospace; font-size: 16px; text-transform: uppercase;
+  }
+
+  /* ========== 5 RACK ========== */
+  #v5 { background: #c8c4bc; color: #1b1d20; font-family: "Red Hat Text", sans-serif; padding: 20px 32px 92px; }
+  #v5 .cab { max-width: 980px; margin: 0 auto; background: #9e9a92; padding: 12px 18px 18px; box-shadow: inset 0 0 0 8px #7a766e; }
+  #v5 .mod {
+    background: #1f2226; color: #d7ddd4; margin: 8px 0; display: grid; grid-template-columns: 28px 1fr 22px;
+    min-height: 72px; box-shadow: 0 2px 0 #000;
+  }
+  #v5 .ear, #v5 .handle { background: #2c3036; }
+  #v5 .handle { box-shadow: inset 4px 0 0 #0b0d10; }
+  #v5 .ear { display: flex; align-items: center; justify-content: center; font-size: 9px; letter-spacing: .2em; writing-mode: vertical-rl; transform: rotate(180deg); color: #8a9098; }
+  #v5 .face { padding: 10px 14px; }
+  #v5 .face h2 { margin: 0 0 6px; font-family: "Red Hat Mono", monospace; font-size: 11px; letter-spacing: .22em; color: #6aa4d8; }
+  #v5 .video { position: relative; height: 38vh; background: #000; }
+  #v5 .video img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #v5 .video .box { color: #6aa4d8; }
+  #v5 .leds { display: flex; gap: 8px; flex-wrap: wrap; }
+  #v5 .led { background: #0c0e11; border: 1px solid #3a4048; padding: 4px 8px; font-family: "Red Hat Mono", monospace; font-size: 12px; }
+  #v5 .led.on { color: #6aa4d8; border-color: #6aa4d8; }
+  #v5 .seg { font-family: "Red Hat Mono", monospace; font-size: 28px; letter-spacing: .12em; color: #6aa4d8; }
+  #v5 .ask5 { display: flex; gap: 8px; }
+  #v5 .ask5 input {
+    flex: 1; background: #0c0e11; border: 1px solid #3a4048; color: #d7ddd4; padding: 8px 10px;
+    font-family: "Red Hat Mono", monospace;
+  }
+  #v5 .jobs5 button {
+    background: #0c0e11; border: 1px solid #3a4048; color: #8a9098; padding: 6px 10px; margin-right: 6px;
+    font-family: "Red Hat Mono", monospace; font-size: 11px; letter-spacing: .14em;
+  }
+  #v5 .jobs5 button[aria-pressed="true"] { color: #6aa4d8; border-color: #6aa4d8; }
+
+  /* ========== 6 STRIPS ========== */
+  #v6 { background: #c5cfc4; color: #1a221c; font-family: Chivo, sans-serif; padding: 18px 20px 92px; }
+  #v6 .atc { display: grid; grid-template-columns: 280px 1fr 220px; gap: 16px; min-height: calc(100vh - 120px); }
+  #v6 .bay { display: flex; flex-direction: column; gap: 8px; }
+  #v6 .strip {
+    background: #f7f1d8; border: 1px solid #1a221c; padding: 8px 10px;
+    display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; font-family: Inconsolata, monospace;
+    box-shadow: 2px 2px 0 rgba(26,34,28,.15); cursor: pointer;
+  }
+  #v6 .strip.is-on { outline: 2px solid #1a221c; }
+  #v6 .call { font-weight: 700; letter-spacing: .06em; }
+  #v6 .scope-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  #v6 .scope {
+    width: min(64vh, 100%); aspect-ratio: 1; border-radius: 50%; overflow: hidden;
+    border: 18px solid #2c3830; box-shadow: inset 0 0 0 4px #0a120e, 0 10px 24px rgba(0,0,0,.2);
+    position: relative; background: #0a120e;
+  }
+  #v6 .scope img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: .92; }
+  #v6 .scope .box { color: #f7f1d8; }
+  #v6 .rings {
+    position: absolute; inset: 12px; border: 1px dashed rgba(247,241,216,.35); border-radius: 50%; pointer-events: none;
+  }
+  #v6 .side h2 { font-size: 12px; letter-spacing: .2em; text-transform: uppercase; margin: 0 0 10px; }
+  #v6 .side button {
+    display: block; width: 100%; text-align: left; background: #dfe6de; border: 1px solid #1a221c;
+    padding: 8px 10px; margin-bottom: 6px; color: #1a221c;
+  }
+  #v6 .side button[aria-pressed="true"] { background: #1a221c; color: #f7f1d8; }
+  #v6 .side input {
+    width: 100%; margin-top: 12px; border: 0; border-bottom: 2px solid #1a221c; background: transparent; padding: 8px 0;
+    font-family: Inconsolata, monospace; font-size: 15px;
+  }
+
+  /* ========== 7 VIEWFINDER ========== */
+  #v7 { background: #0e0d0c; color: #e4dcd0; font-family: Rajdhani, sans-serif; padding: 18px 18px 88px; }
+  #v7 .cam { max-width: 1180px; margin: 0 auto; background: #1a1816; border: 10px solid #2a2622; padding: 10px; }
+  #v7 .vf { position: relative; background: #000; }
+  #v7 .vf img { width: 100%; height: 62vh; object-fit: cover; display: block; }
+  #v7 .vf .box { color: #ffb000; }
+  #v7 .vf .box span { background: #ffb000; color: #111; }
+  #v7 .guides {
+    position: absolute; inset: 12% 4%; border: 1px dashed rgba(255,176,0,.45); pointer-events: none;
+  }
+  #v7 .wave {
+    position: absolute; left: 8px; right: 8px; bottom: 8px; height: 46px; pointer-events: none; opacity: .85;
+  }
+  #v7 .top7 {
+    display: flex; justify-content: space-between; align-items: center; padding: 6px 4px 10px;
+    font-family: "Saira Extra Condensed", sans-serif; letter-spacing: .18em; font-size: 18px;
+  }
+  #v7 .rec7 { color: #e10600; letter-spacing: .4em; }
+  #v7 .side7 { display: flex; gap: 16px; align-items: center; padding: 12px 4px 4px; }
+  #v7 .iris { display: flex; flex-direction: column; width: 140px; }
+  #v7 .iris input { accent-color: #ffb000; }
+  #v7 .jobs7 button {
+    background: none; border: 1px solid #4a443c; color: #e4dcd0; padding: 6px 12px; margin-right: 6px;
+    font-family: "Saira Extra Condensed", sans-serif; letter-spacing: .16em; font-size: 16px;
+  }
+  #v7 .jobs7 button[aria-pressed="true"] { border-color: #ffb000; color: #ffb000; }
+  #v7 .q7 {
+    flex: 1; background: #0e0d0c; border: 1px solid #4a443c; color: #e4dcd0; padding: 8px 10px;
+    font-family: Rajdhani, sans-serif; font-size: 16px;
+  }
+
+  /* ========== 8 CHRONOGRAPH ========== */
+  #v8 { background: #0b1020; color: #e8dcc4; font-family: "EB Garamond", serif; padding: 20px 20px 92px; }
+  #v8 .watch-wrap { display: flex; flex-direction: column; align-items: center; }
+  #v8 .jobs8 { margin-bottom: 10px; }
+  #v8 .jobs8 button {
+    background: none; border: 0; color: #d4af6a; opacity: .4; margin: 0 12px;
+    font-family: Syncopate, sans-serif; font-size: 11px; letter-spacing: .18em;
+  }
+  #v8 .jobs8 button[aria-pressed="true"] { opacity: 1; }
+  #v8 .watch {
+    position: relative; width: min(74vh, 92vw); aspect-ratio: 1; border-radius: 50%;
+    background: #0f1628;
+    border: 22px solid #d4af6a;
+    box-shadow: inset 0 0 0 8px #0b1020, 0 20px 50px rgba(0,0,0,.5);
+    overflow: hidden;
+  }
+  #v8 .watch img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: .88; }
+  #v8 .watch .box { color: #d4af6a; }
+  #v8 .chapter {
+    position: absolute; inset: 0; pointer-events: none;
+    background: repeating-conic-gradient(from 0deg, transparent 0 5.8deg, rgba(212,175,106,.7) 5.8deg 6deg);
+    mask: radial-gradient(circle, transparent 44%, #000 45% 49%, transparent 50%);
+  }
+  #v8 .sub {
+    position: absolute; width: 88px; height: 88px; border-radius: 50%;
+    background: rgba(11,16,32,.72); border: 1px solid #d4af6a; text-align: center; padding-top: 18px;
+    font-family: Syncopate, sans-serif; font-size: 18px; color: #d4af6a;
+  }
+  #v8 .sub small { display: block; font-size: 8px; letter-spacing: .16em; margin-top: 4px; }
+  #v8 .s1 { left: 18%; bottom: 16%; }
+  #v8 .s2 { right: 18%; bottom: 16%; }
+  #v8 .s3 { left: 50%; top: 10%; transform: translateX(-50%); }
+  #v8 .crown-row { margin-top: 16px; display: flex; gap: 10px; align-items: center; width: min(74vh, 92vw); }
+  #v8 .crown {
+    width: 28px; height: 46px; border: 0; background: linear-gradient(#e4c98a, #d4af6a 40%, #8a6a32);
+    border-radius: 4px;
+  }
+  #v8 .crown-row input {
+    flex: 1; background: transparent; border: 0; border-bottom: 1px solid #d4af6a; color: #e8dcc4;
+    font-family: "EB Garamond", serif; font-size: 20px; font-style: italic; padding: 8px 4px;
+  }
+
+  /* ========== 9 OVERHEAD ========== */
+  #v9 { background: #3d4650; color: #dfe4ea; font-family: "Titillium Web", sans-serif; padding: 16px 18px 92px; }
+  #v9 .panel {
+    display: grid; grid-template-columns: 1fr 520px 1fr; gap: 10px; min-height: calc(100vh - 120px);
+  }
+  #v9 .bank { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-content: start; }
+  #v9 .korry {
+    background: #1b2026; border: 2px solid #0d1014; color: #5a6570; min-height: 64px;
+    font-family: Teko, sans-serif; font-size: 16px; letter-spacing: .12em; text-transform: uppercase;
+    box-shadow: inset 0 1px 0 #4a5560;
+  }
+  #v9 .korry[aria-pressed="true"], #v9 .korry.on {
+    color: #f0c14a; text-shadow: 0 0 8px rgba(240,193,74,.6); background: #12151a;
+  }
+  #v9 .screen {
+    background: #0b0e12; border: 12px solid #2a323c; position: relative; min-height: 58vh;
+  }
+  #v9 .screen img { width: 100%; height: 100%; object-fit: cover; display: block; min-height: 58vh; }
+  #v9 .screen .box { color: #f0c14a; }
+  #v9 .scratch {
+    grid-column: 1 / -1; display: flex; gap: 10px; background: #2a323c; padding: 8px 10px;
+  }
+  #v9 .scratch input {
+    flex: 1; background: #0b0e12; border: 0; color: #dfe4ea; padding: 8px 10px;
+    font-family: Teko, sans-serif; font-size: 20px; letter-spacing: .08em;
+  }
+
+  /* ========== 10 MASCON ========== */
+  #v10 { background: #e8edf2; color: #102038; font-family: "Zen Kaku Gothic New", sans-serif; padding: 16px 20px 92px; }
+  #v10 .cab10 { display: grid; grid-template-columns: 180px 1fr 150px; grid-template-rows: auto 1fr auto; gap: 12px; min-height: calc(100vh - 120px); }
+  #v10 .dest {
+    grid-column: 1 / -1; background: #111; color: #ff8a1a;
+    font-family: "M PLUS 1 Code", monospace; font-size: 22px; letter-spacing: .12em;
+    padding: 10px 14px; display: flex; gap: 12px; align-items: center;
+  }
+  #v10 .dest input {
+    flex: 1; background: transparent; border: 0; color: #ff8a1a; font-family: "M PLUS 1 Code", monospace; font-size: 22px;
+  }
+  #v10 .speedo { background: #f4f7fa; border: 2px solid #102038; padding: 12px; text-align: center; }
+  #v10 .speedo svg { width: 100%; }
+  #v10 .speedo b { display: block; font-size: 32px; font-family: "M PLUS 1 Code", monospace; }
+  #v10 .speedo span { font-size: 11px; letter-spacing: .16em; }
+  #v10 .windscreen { position: relative; background: #000; border: 8px solid #102038; }
+  #v10 .windscreen img { width: 100%; height: 52vh; object-fit: cover; display: block; }
+  #v10 .windscreen .box { color: #003087; }
+  #v10 .windscreen .box span { background: #003087; color: #fff; }
+  #v10 .notch { display: flex; flex-direction: column; gap: 8px; }
+  #v10 .notch button {
+    flex: 1; background: #d5dde6; border: 2px solid #102038; color: #102038;
+    font-family: "M PLUS 1 Code", monospace; letter-spacing: .1em;
+  }
+  #v10 .notch button[aria-pressed="true"] { background: #003087; color: #fff; }
+  #v10 .map {
+    grid-column: 1 / -1; background: #fff; border: 2px solid #102038; height: 84px; position: relative;
+    overflow: hidden;
+  }
+  #v10 .rail { position: absolute; left: 24px; right: 24px; top: 50%; height: 3px; background: #003087; }
+  #v10 .stop {
+    position: absolute; top: 18px; width: 12px; height: 12px; margin-left: -6px; background: #003087; border-radius: 50%;
+    border: 0;
+  }
+  #v10 .stop span {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; white-space: nowrap; font-family: "M PLUS 1 Code", monospace;
+  }
+</style>
+</head>
+<body>
+
+<div id="v1" class="variant" data-name="Windshield">
+  <div class="glass">
+    <img id="w-img" alt="Forward view" src="plaza.jpg">
+    <div class="marks" id="w-marks"></div>
+    <div class="hud">
+      <div class="h-tl" id="w-tl">HDG 094 &nbsp; ALT 42m</div>
+      <div class="h-tr">
+        <button type="button" data-job="film" aria-pressed="true">Film</button>
+        <button type="button" data-job="still" aria-pressed="false">Still</button>
+        <button type="button" data-job="live" aria-pressed="false">Live</button>
+      </div>
+      <div class="reticle" aria-hidden="true"></div>
+    </div>
+  </div>
+  <div class="brow">
+    <div class="gauge">
+      <svg viewBox="0 0 100 70" aria-hidden="true"><path d="M10 60 A40 40 0 0 1 90 60" fill="none" stroke="#3a4450" stroke-width="6"/><path id="w-n1" d="M10 60 A40 40 0 0 1 90 60" fill="none" stroke="#e8eef2" stroke-width="6" stroke-dasharray="126" stroke-dashoffset="40"/><line x1="50" y1="60" x2="22" y2="24" stroke="#c45c4a" stroke-width="2"/></svg>
+      <span class="g-lab">People</span>
+    </div>
+    <div class="gauge">
+      <svg viewBox="0 0 100 70" aria-hidden="true"><path d="M10 60 A40 40 0 0 1 90 60" fill="none" stroke="#3a4450" stroke-width="6"/><path d="M10 60 A40 40 0 0 1 90 60" fill="none" stroke="#e8eef2" stroke-width="6" stroke-dasharray="126" stroke-dashoffset="90"/><line x1="50" y1="60" x2="70" y2="28" stroke="#c45c4a" stroke-width="2"/></svg>
+      <span class="g-lab">Vehicles</span>
+    </div>
+    <div class="gauge">
+      <svg viewBox="0 0 100 70" aria-hidden="true"><path d="M10 60 A40 40 0 0 1 90 60" fill="none" stroke="#3a4450" stroke-width="6"/><path d="M10 60 A40 40 0 0 1 90 60" fill="none" stroke="#e8eef2" stroke-width="6" stroke-dasharray="126" stroke-dashoffset="30"/><line x1="50" y1="60" x2="18" y2="32" stroke="#c45c4a" stroke-width="2"/></svg>
+      <span class="g-lab">Hold</span>
+    </div>
+    <form class="radio" id="w-form">
+      <span>COM 1</span>
+      <input id="w-q" type="text" value="people and vehicles in the square" aria-label="Radio query">
+    </form>
+  </div>
+</div>
+
+<div id="v2" class="variant" data-name="Switcher">
+  <div class="tallybar">
+    <span class="tally on" id="sw-tally">PGM</span>
+    <span>VISIONBRAIN TRUCK</span>
+    <span id="sw-clock">00:01:14:08</span>
+  </div>
+  <div class="monitors">
+    <div class="mon prev">
+      <span class="tag">PVW</span>
+      <img id="sw-prev" alt="Preview" src="group.jpg">
+    </div>
+    <div class="mon program">
+      <span class="tag">PGM</span>
+      <img id="sw-img" alt="Program" src="plaza.jpg">
+      <div class="marks" id="sw-marks"></div>
+    </div>
+  </div>
+  <div class="bus" aria-label="Bus">
+    <button type="button" data-job="film" aria-pressed="true">Film</button>
+    <button type="button" data-job="still" aria-pressed="false">Still</button>
+    <button type="button" data-job="live" aria-pressed="false">Live</button>
+  </div>
+  <div class="deck">
+    <div class="fader"><input type="range" min="0" max="100" value="72" aria-label="Find"><span>Find</span></div>
+    <div class="fader"><input type="range" min="0" max="100" value="40" aria-label="Mask"><span>Mask</span></div>
+    <div class="fader"><input type="range" min="0" max="100" value="18" aria-label="Read"><span>Read</span></div>
+    <div class="fader"><input type="range" min="0" max="100" value="55" aria-label="Track"><span>Track</span></div>
+    <form class="cg" id="sw-form">
+      <em>CG</em>
+      <input id="sw-q" type="text" value="people and vehicles in the square" aria-label="Character generator">
+    </form>
+  </div>
+</div>
+
+<div id="v3" class="variant" data-name="Binnacle">
+  <div class="helm">
+    <div>
+      <div class="bowl">
+        <img id="b-img" alt="Compass bowl" src="plaza.jpg">
+        <div class="marks" id="b-marks"></div>
+        <div class="rose" aria-hidden="true"></div>
+        <div class="n">N</div>
+      </div>
+      <form class="plate" id="b-form">
+        <span>QUERY</span>
+        <input id="b-q" type="text" value="people and vehicles in the square" aria-label="Brass plate query">
+      </form>
+    </div>
+    <aside class="log">
+      <h2>Contacts</h2>
+      <div id="b-list"></div>
+      <p id="b-note" style="margin-top:16px">People occupy the square. Two vehicles at the south curb.</p>
+      <div style="margin-top:18px">
+        <button type="button" data-job="film" aria-pressed="true">Film</button>
+        <button type="button" data-job="still" aria-pressed="false">Still</button>
+        <button type="button" data-job="live" aria-pressed="false">Live</button>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div id="v4" class="variant" data-name="Solari">
+  <div class="board-head">
+    <span>VISIONBRAIN</span>
+    <span id="so-clock">14:02</span>
+    <span id="so-count">18 PEOPLE</span>
+  </div>
+  <div class="now">
+    <div class="shot">
+      <img id="so-img" alt="Now showing" src="plaza.jpg">
+      <div class="marks" id="so-marks"></div>
+    </div>
+    <p id="so-note">People occupy the square in small groups. Two vehicles remain at the south curb.</p>
+  </div>
+  <table><tbody id="so-rows"></tbody></table>
+  <div class="jobs">
+    <button type="button" data-job="film" aria-pressed="true">Film</button>
+    <button type="button" data-job="still" aria-pressed="false">Still</button>
+    <button type="button" data-job="live" aria-pressed="false">Live</button>
+  </div>
+  <form class="ask" id="so-form">
+    <input id="so-q" type="text" value="people and vehicles in the square" aria-label="Board query">
+  </form>
+</div>
+
+<div id="v5" class="variant" data-name="Rack">
+  <div class="cab">
+    <div class="mod">
+      <div class="ear">01</div>
+      <div class="face">
+        <h2>VIDEO</h2>
+        <div class="jobs5">
+          <button type="button" data-job="film" aria-pressed="true">FILM</button>
+          <button type="button" data-job="still" aria-pressed="false">STILL</button>
+          <button type="button" data-job="live" aria-pressed="false">LIVE</button>
+        </div>
+        <div class="video">
+          <img id="r-img" alt="Video module" src="plaza.jpg">
+          <div class="marks" id="r-marks"></div>
+        </div>
+      </div>
+      <div class="handle"></div>
+    </div>
+    <div class="mod">
+      <div class="ear">02</div>
+      <div class="face">
+        <h2>TRACK</h2>
+        <div class="leds" id="r-leds"></div>
+      </div>
+      <div class="handle"></div>
+    </div>
+    <div class="mod">
+      <div class="ear">03</div>
+      <div class="face">
+        <h2>COUNT</h2>
+        <div class="seg" id="r-seg">18  PPL  /  02  VEH</div>
+      </div>
+      <div class="handle"></div>
+    </div>
+    <div class="mod">
+      <div class="ear">04</div>
+      <div class="face">
+        <h2>ASK</h2>
+        <form class="ask5" id="r-form">
+          <input id="r-q" type="text" value="people and vehicles in the square" aria-label="Ask module">
+        </form>
+      </div>
+      <div class="handle"></div>
+    </div>
+  </div>
+</div>
+
+<div id="v6" class="variant" data-name="Strips">
+  <div class="atc">
+    <div class="bay" id="st-bay"></div>
+    <div class="scope-wrap">
+      <div class="scope">
+        <img id="st-img" alt="Scope" src="plaza.jpg">
+        <div class="marks" id="st-marks"></div>
+        <div class="rings" aria-hidden="true"></div>
+      </div>
+    </div>
+    <aside class="side">
+      <h2>Sector</h2>
+      <button type="button" data-job="film" aria-pressed="true">Film</button>
+      <button type="button" data-job="still" aria-pressed="false">Still</button>
+      <button type="button" data-job="live" aria-pressed="false">Live</button>
+      <form id="st-form">
+        <input id="st-q" type="text" value="people and vehicles in the square" aria-label="Sector query">
+      </form>
+      <p id="st-note" style="margin-top:16px;font-size:13px;line-height:1.5">People occupy the square. Two vehicles at the south curb.</p>
+    </aside>
+  </div>
+</div>
+
+<div id="v7" class="variant" data-name="Viewfinder">
+  <div class="cam">
+    <div class="top7">
+      <span>ISO 800 &nbsp; 1/50 &nbsp; 1008</span>
+      <span class="rec7" id="vf-rec">● REC</span>
+      <span id="vf-count">18 PPL</span>
+    </div>
+    <div class="vf">
+      <img id="vf-img" alt="Viewfinder" src="plaza.jpg">
+      <div class="marks" id="vf-marks"></div>
+      <div class="guides" aria-hidden="true"></div>
+      <svg class="wave" viewBox="0 0 400 46" preserveAspectRatio="none" aria-hidden="true">
+        <polyline fill="none" stroke="#ffb000" stroke-width="1.5" points="0,30 20,28 40,22 60,32 80,18 100,26 120,14 140,24 160,20 180,28 200,16 220,22 240,30 260,18 280,26 300,20 320,28 340,22 360,30 380,24 400,28"/>
+      </svg>
+    </div>
+    <div class="side7">
+      <div class="jobs7">
+        <button type="button" data-job="film" aria-pressed="true">Film</button>
+        <button type="button" data-job="still" aria-pressed="false">Still</button>
+        <button type="button" data-job="live" aria-pressed="false">Live</button>
+      </div>
+      <div class="iris">
+        <label for="vf-iris" style="font-size:12px;letter-spacing:.16em">IRIS / THRESH</label>
+        <input id="vf-iris" type="range" min="1" max="50" value="15">
+      </div>
+      <form id="vf-form" style="flex:1;display:flex">
+        <input class="q7" id="vf-q" type="text" value="people and vehicles in the square" aria-label="Viewfinder query">
+      </form>
+    </div>
+  </div>
+</div>
+
+<div id="v8" class="variant" data-name="Chronograph">
+  <div class="watch-wrap">
+    <div class="jobs8">
+      <button type="button" data-job="film" aria-pressed="true">Film</button>
+      <button type="button" data-job="still" aria-pressed="false">Still</button>
+      <button type="button" data-job="live" aria-pressed="false">Live</button>
+    </div>
+    <div class="watch">
+      <img id="ch-img" alt="Dial" src="plaza.jpg">
+      <div class="marks" id="ch-marks"></div>
+      <div class="chapter" aria-hidden="true"></div>
+      <div class="sub s1" id="ch-p">18<small>people</small></div>
+      <div class="sub s2" id="ch-v">2<small>vehicles</small></div>
+      <div class="sub s3">2.39<small>frame</small></div>
+    </div>
+    <form class="crown-row" id="ch-form">
+      <button class="crown" type="submit" aria-label="Wind query"></button>
+      <input id="ch-q" type="text" value="people and vehicles in the square" aria-label="Chapter ring query">
+    </form>
+  </div>
+</div>
+
+<div id="v9" class="variant" data-name="Overhead">
+  <div class="panel">
+    <div class="bank" id="oh-left">
+      <button type="button" class="korry" data-job="film" aria-pressed="true">Film<br>On</button>
+      <button type="button" class="korry" data-job="still" aria-pressed="false">Still<br>Off</button>
+      <button type="button" class="korry" data-job="live" aria-pressed="false">Live<br>Off</button>
+      <button type="button" class="korry on">Find</button>
+      <button type="button" class="korry">Mask</button>
+      <button type="button" class="korry">Read</button>
+      <button type="button" class="korry">Track</button>
+      <button type="button" class="korry on">Report</button>
+    </div>
+    <div class="screen">
+      <img id="oh-img" alt="Center screen" src="plaza.jpg">
+      <div class="marks" id="oh-marks"></div>
+    </div>
+    <div class="bank" id="oh-right"></div>
+  </div>
+  <form class="scratch" id="oh-form">
+    <input id="oh-q" type="text" value="people and vehicles in the square" aria-label="Scratchpad">
+  </form>
+</div>
+
+<div id="v10" class="variant" data-name="Mascon">
+  <div class="cab10">
+    <form class="dest" id="m-form">
+      <span>DEST</span>
+      <input id="m-q" type="text" value="people and vehicles in the square" aria-label="Destination query">
+    </form>
+    <div class="speedo">
+      <b id="m-spd">18</b>
+      <span>PEOPLE</span>
+      <p id="m-veh" style="margin:12px 0 0;font-size:13px">2 vehicles</p>
+    </div>
+    <div class="windscreen">
+      <img id="m-img" alt="Forward cab view" src="plaza.jpg">
+      <div class="marks" id="m-marks"></div>
+    </div>
+    <div class="notch" aria-label="Mascon">
+      <button type="button" data-job="film" aria-pressed="true">P<br>Film</button>
+      <button type="button" data-job="still" aria-pressed="false">N<br>Still</button>
+      <button type="button" data-job="live" aria-pressed="false">B<br>Live</button>
+    </div>
+    <div class="map" id="m-map" aria-label="Strip map">
+      <div class="rail"></div>
+    </div>
+  </div>
+</div>
+
+<div id="proto-switch" role="navigation" aria-label="Prototype variants">
+  <button type="button" id="prev" aria-label="Previous variant">‹</button>
+  <span id="proto-label">1 — Windshield</span>
+  <button type="button" id="next" aria-label="Next variant">›</button>
+</div>
+
+<script>
+(function () {
+  const NAMES = ["Windshield","Switcher","Binnacle","Solari","Rack","Strips","Viewfinder","Chronograph","Overhead","Mascon"];
+  const JOBS = {
+    film: {
+      img: "plaza.jpg",
+      count: "18 people · 2 vehicles",
+      people: 18, vehicles: 2,
+      note: "People occupy the square in small groups. Two vehicles remain at the south curb.",
+      boxes: [
+        { l: 16.5, t: 74, w: 6, h: 12, label: "2 people" },
+        { l: 31, t: 78, w: 4, h: 10, label: "person" },
+        { l: 40, t: 76, w: 5, h: 11, label: "stroller" },
+        { l: 25, t: 48, w: 5, h: 10, label: "2 people" },
+        { l: 46, t: 49, w: 8, h: 12, label: "group" },
+        { l: 58, t: 36, w: 10, h: 14, label: "walkers" },
+        { l: 57, t: 77, w: 16, h: 11, label: "sedan" },
+        { l: 75, t: 73, w: 12, h: 12, label: "hatchback" }
+      ]
+    },
+    still: {
+      img: "group.jpg",
+      count: "5 people",
+      people: 5, vehicles: 0,
+      note: "Five figures on the road. Conversation, not crossing. Trees hold the west edge.",
+      boxes: [
+        { l: 37, t: 38, w: 11, h: 54, label: "person" },
+        { l: 48, t: 28, w: 11, h: 62, label: "person" },
+        { l: 58, t: 38, w: 10, h: 54, label: "person" },
+        { l: 69, t: 36, w: 11, h: 56, label: "person" },
+        { l: 82, t: 42, w: 10, h: 50, label: "person" }
+      ]
+    },
+    live: {
+      img: "overhead.jpg",
+      count: "3 people · 1 van",
+      people: 3, vehicles: 1,
+      note: "Three people on the crosswalk, one with a stroller. A white van waits at the stop line.",
+      boxes: [
+        { l: 44, t: 33, w: 5, h: 14, label: "person", hot: true },
+        { l: 54, t: 36, w: 8, h: 14, label: "stroller" },
+        { l: 65, t: 35, w: 5, h: 14, label: "person" },
+        { l: 45, t: 54, w: 14, h: 28, label: "van" }
+      ]
+    }
+  };
+  const PREV = { film: "group.jpg", still: "plaza.jpg", live: "group.jpg" };
+
+  function setJob(root, job) {
+    root.querySelectorAll("[data-job]").forEach(function (b) {
+      const on = b.getAttribute("data-job") === job;
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+      if (b.classList.contains("korry") && b.getAttribute("data-job")) {
+        const name = b.getAttribute("data-job");
+        b.innerHTML = name.charAt(0).toUpperCase() + name.slice(1) + "<br>" + (on ? "On" : "Off");
+      }
+    });
+  }
+  function paintMarks(el, boxes) {
+    if (!el) return;
+    el.innerHTML = "";
+    (boxes || []).forEach(function (b) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "box";
+      btn.style.left = b.l + "%";
+      btn.style.top = b.t + "%";
+      btn.style.width = b.w + "%";
+      btn.style.height = b.h + "%";
+      btn.innerHTML = "<span>" + b.label + "</span>";
+      btn.setAttribute("aria-label", b.label);
+      el.appendChild(btn);
+    });
+  }
+  function pad(n) { return String(n).padStart(2, "0"); }
+
+  let v = 1;
+  const qv = parseInt(new URLSearchParams(location.search).get("v"), 10);
+  if (qv >= 1 && qv <= 10) v = qv;
+
+  function show(n) {
+    v = ((n - 1 + 10) % 10) + 1;
+    document.querySelectorAll(".variant").forEach(function (el, i) {
+      el.classList.toggle("is-on", i === v - 1);
+    });
+    document.getElementById("proto-label").textContent = v + " — " + NAMES[v - 1];
+    const url = new URL(location.href);
+    url.searchParams.set("v", String(v));
+    history.replaceState(null, "", url);
+  }
+  document.getElementById("prev").onclick = function () { show(v - 1); };
+  document.getElementById("next").onclick = function () { show(v + 1); };
+  document.addEventListener("keydown", function (e) {
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+    if (e.key === "ArrowLeft") show(v - 1);
+    if (e.key === "ArrowRight") show(v + 1);
+    if (e.key >= "1" && e.key <= "9") show(parseInt(e.key, 10));
+    if (e.key === "0") show(10);
+  });
+
+  function bindJobs(root, apply) {
+    root.querySelectorAll("[data-job]").forEach(function (b) {
+      b.onclick = function () {
+        const job = b.getAttribute("data-job");
+        setJob(root, job);
+        apply(job);
+      };
+    });
+  }
+  function hold(form) {
+    form.addEventListener("submit", function (e) { e.preventDefault(); });
+  }
+
+  /* 1 Windshield */
+  (function () {
+    const root = document.getElementById("v1");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("w-img").src = d.img;
+      document.getElementById("w-tl").textContent = (job === "live" ? "LIVE  " : "HDG 094  ") + d.count.toUpperCase();
+      paintMarks(document.getElementById("w-marks"), d.boxes);
+    }
+    bindJobs(root, apply);
+    hold(document.getElementById("w-form"));
+    apply("film");
+  })();
+
+  /* 2 Switcher */
+  (function () {
+    const root = document.getElementById("v2");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("sw-img").src = d.img;
+      document.getElementById("sw-prev").src = PREV[job];
+      document.getElementById("sw-tally").classList.toggle("on", job === "live" || job === "film");
+      document.getElementById("sw-clock").textContent = job === "live" ? "LIVE" : "00:01:14:08";
+      paintMarks(document.getElementById("sw-marks"), d.boxes);
+    }
+    bindJobs(root, apply);
+    hold(document.getElementById("sw-form"));
+    apply("film");
+  })();
+
+  /* 3 Binnacle */
+  (function () {
+    const root = document.getElementById("v3");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("b-img").src = d.img;
+      document.getElementById("b-note").textContent = d.note + " " + d.count + ".";
+      paintMarks(document.getElementById("b-marks"), d.boxes);
+      const list = document.getElementById("b-list");
+      list.innerHTML = "";
+      d.boxes.forEach(function (b, i) {
+        const row = document.createElement("div");
+        row.textContent = pad(i + 1) + "  " + b.label + "  brg " + Math.round(b.l * 3.6);
+        row.style.fontFamily = "Cinzel, serif";
+        row.style.fontSize = "12px";
+        row.style.letterSpacing = ".08em";
+        row.style.padding = "4px 0";
+        row.style.borderBottom = "1px solid rgba(196,165,116,.3)";
+        list.appendChild(row);
+      });
+    }
+    bindJobs(root, apply);
+    hold(document.getElementById("b-form"));
+    apply("film");
+  })();
+
+  /* 4 Solari */
+  (function () {
+    const root = document.getElementById("v4");
+    function flap(s, n) {
+      s = (s || "").toUpperCase();
+      while (s.length < n) s += " ";
+      return s.slice(0, n);
+    }
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("so-img").src = d.img;
+      document.getElementById("so-note").textContent = d.note;
+      document.getElementById("so-count").textContent = d.people + " PEOPLE";
+      document.getElementById("so-clock").textContent = job === "live" ? "LIVE" : "14:02";
+      paintMarks(document.getElementById("so-marks"), d.boxes);
+      const tb = document.getElementById("so-rows");
+      tb.innerHTML = "";
+      d.boxes.forEach(function (b, i) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + flap("ID " + (12 + i), 8) + "</td><td>" + flap(b.label, 16) + "</td><td>" + flap(job.toUpperCase(), 8) + "</td><td>" + flap(i === 0 ? "HELD" : "MARK", 6) + "</td>";
+        tb.appendChild(tr);
+      });
+    }
+    bindJobs(root, apply);
+    hold(document.getElementById("so-form"));
+    apply("film");
+  })();
+
+  /* 5 Rack */
+  (function () {
+    const root = document.getElementById("v5");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("r-img").src = d.img;
+      document.getElementById("r-seg").textContent = pad(d.people) + "  PPL  /  " + pad(d.vehicles) + "  VEH";
+      paintMarks(document.getElementById("r-marks"), d.boxes);
+      const leds = document.getElementById("r-leds");
+      leds.innerHTML = "";
+      d.boxes.forEach(function (b, i) {
+        const s = document.createElement("span");
+        s.className = "led on";
+        s.textContent = "ID" + (12 + i) + " " + b.label;
+        leds.appendChild(s);
+      });
+    }
+    bindJobs(root, apply);
+    hold(document.getElementById("r-form"));
+    apply("film");
+  })();
+
+  /* 6 Strips */
+  (function () {
+    const root = document.getElementById("v6");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("st-img").src = d.img;
+      document.getElementById("st-note").textContent = d.note + " " + d.count + ".";
+      paintMarks(document.getElementById("st-marks"), d.boxes);
+      const bay = document.getElementById("st-bay");
+      bay.innerHTML = "";
+      d.boxes.forEach(function (b, i) {
+        const s = document.createElement("button");
+        s.type = "button";
+        s.className = "strip" + (i === 0 ? " is-on" : "");
+        s.innerHTML = "<span class=\"call\">V" + (12 + i) + "</span><span>" + b.label + "</span><span>" + pad(Math.round(b.l)) + "</span>";
+        s.onclick = function () {
+          bay.querySelectorAll(".strip").forEach(function (x) { x.classList.remove("is-on"); });
+          s.classList.add("is-on");
+        };
+        bay.appendChild(s);
+      });
+    }
+    bindJobs(root, apply);
+    hold(document.getElementById("st-form"));
+    apply("film");
+  })();
+
+  /* 7 Viewfinder */
+  (function () {
+    const root = document.getElementById("v7");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("vf-img").src = d.img;
+      document.getElementById("vf-count").textContent = d.people + " PPL";
+      document.getElementById("vf-rec").style.opacity = job === "still" ? ".25" : "1";
+      paintMarks(document.getElementById("vf-marks"), d.boxes);
+    }
+    bindJobs(root, apply);
+    hold(document.getElementById("vf-form"));
+    apply("film");
+  })();
+
+  /* 8 Chronograph */
+  (function () {
+    const root = document.getElementById("v8");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("ch-img").src = d.img;
+      document.getElementById("ch-p").innerHTML = d.people + "<small>people</small>";
+      document.getElementById("ch-v").innerHTML = d.vehicles + "<small>vehicles</small>";
+      paintMarks(document.getElementById("ch-marks"), d.boxes);
+    }
+    bindJobs(root, apply);
+    hold(document.getElementById("ch-form"));
+    apply("film");
+  })();
+
+  /* 9 Overhead */
+  (function () {
+    const root = document.getElementById("v9");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("oh-img").src = d.img;
+      paintMarks(document.getElementById("oh-marks"), d.boxes);
+      const bank = document.getElementById("oh-right");
+      bank.innerHTML = "";
+      d.boxes.forEach(function (b, i) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "korry on";
+        btn.textContent = b.label;
+        bank.appendChild(btn);
+      });
+    }
+    bindJobs(root, apply);
+    root.querySelectorAll(".korry:not([data-job])").forEach(function (b) {
+      b.onclick = function () { b.classList.toggle("on"); };
+    });
+    hold(document.getElementById("oh-form"));
+    apply("film");
+  })();
+
+  /* 10 Mascon */
+  (function () {
+    const root = document.getElementById("v10");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("m-img").src = d.img;
+      document.getElementById("m-spd").textContent = String(d.people);
+      document.getElementById("m-veh").textContent = d.vehicles + " vehicles";
+      paintMarks(document.getElementById("m-marks"), d.boxes);
+      const map = document.getElementById("m-map");
+      map.querySelectorAll(".stop").forEach(function (n) { n.remove(); });
+      d.boxes.forEach(function (b, i) {
+        const s = document.createElement("button");
+        s.type = "button";
+        s.className = "stop";
+        s.style.left = (8 + (i / Math.max(d.boxes.length - 1, 1)) * 84) + "%";
+        s.innerHTML = "<span>" + b.label + "</span>";
+        map.appendChild(s);
+      });
+    }
+    bindJobs(root, apply);
+    hold(document.getElementById("m-form"));
+    apply("film");
+  })();
+
+  show(v);
+})();
+</script>
+</body>
+</html>

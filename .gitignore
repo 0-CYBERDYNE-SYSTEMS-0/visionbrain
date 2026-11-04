@@ -24,3 +24,6 @@ venv/
 assets/samples/*_annotated.mp4
 assets/samples/*.mp4
 .gstack/
+
+# Local agent session artifacts
+.zcode/

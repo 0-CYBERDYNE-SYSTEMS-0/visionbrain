@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VisionBrain versus supervision — recon comparison</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,700;1,400&family=Spectral:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
+<style>
+/* design study — prototype, not a product surface. tokens per design-system/README.md */
+:root{
+  --canvas:#0e100d; --rule:#292d25; --rule-strong:#3a3e34;
+  --ink-1:#ebe5d2; --ink-2:#b8b29f; --ink-3:#807a68; --ink-4:#555044;
+  --amber:#d5bd87;           /* visionbrain accent — warm wheat   */
+  --violet:#a89ad4;          /* supervision accent — muted violet */
+  --panel-l:#151812; --panel-r:#14161d;
+  --surface-2:#181b16;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--canvas); color:var(--ink-1);
+  font-family:"JetBrains Mono",Menlo,Consolas,monospace; font-weight:400;
+  font-feature-settings:"ss01" on,"zero" on; font-size:13px; line-height:1.65;
+  background-image:radial-gradient(rgba(235,229,210,.04) 1px,transparent 1px);
+  background-size:26px 26px;
+}
+a{color:inherit}
+.wrap{max-width:1520px;margin:0 auto;padding:0 4vw}
+
+/* ── header ─────────────────────────────────────────────── */
+header{padding:52px 0 34px;border-bottom:1px solid var(--rule)}
+.eyebrow{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-3)}
+h1{font-family:Spectral,Georgia,serif;font-weight:400;font-size:clamp(34px,4.4vw,60px);
+   line-height:1.06;letter-spacing:-.02em;margin:18px 0 14px;max-width:22ch}
+h1 em{font-style:italic}
+.intro{color:var(--ink-2);max-width:74ch;margin:0}
+.intro b{color:var(--ink-1);font-weight:500}
+
+/* ── versus grid ────────────────────────────────────────── */
+.vs{display:grid;grid-template-columns:1fr 168px 1fr;gap:0}
+.spine{display:flex;flex-direction:column;align-items:center;gap:10px;
+       padding:22px 8px;border-left:1px solid var(--rule);border-right:1px solid var(--rule)}
+.spine .g{color:var(--ink-4);font-size:11px}
+.spine .d{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);
+          text-align:center;writing-mode:initial;position:sticky;top:18px}
+.cell{padding:22px 26px;min-width:0}
+.cell.l{border-left:1px solid var(--rule)}
+.cell.r{border-right:1px solid var(--rule)}
+.row{border-bottom:1px solid var(--rule)}
+.row:last-child{border-bottom:0}
+
+/* side tinting — hairlines only, no shadows */
+.l .who{color:var(--amber)}
+.r .who{color:var(--violet)}
+.cell.l{background:rgba(213,189,135,.025)}
+.cell.r{background:rgba(168,154,212,.03)}
+
+.cell h3{font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;
+         margin:0 0 10px;color:var(--ink-3)}
+.cell p{margin:0;color:var(--ink-2)}
+.cell p b{color:var(--ink-1);font-weight:500}
+.cell .who{font-size:10px;letter-spacing:.18em;text-transform:uppercase}
+
+/* ── identity halves ────────────────────────────────────── */
+.id{padding-top:38px;padding-bottom:34px}
+.id .mark{font-size:22px;margin-bottom:12px}
+.l .mark{color:var(--amber)} .r .mark{color:var(--violet)}
+.id h2{font-family:Spectral,Georgia,serif;font-weight:400;font-size:clamp(24px,2.4vw,34px);
+       line-height:1.12;letter-spacing:-.01em;margin:0 0 6px}
+.id .sub{color:var(--ink-3);font-size:11px;letter-spacing:.14em;text-transform:uppercase;margin:0 0 18px}
+.id .body{max-width:60ch}
+.stats{display:flex;flex-wrap:wrap;margin:22px 0 0;border-top:1px solid var(--rule)}
+.stats div{padding:10px 18px 2px 0;margin-right:18px}
+.stats b{display:block;font-size:19px;font-weight:500;color:var(--ink-1)}
+.l .stats b{color:var(--amber)} .r .stats b{color:var(--violet)}
+.stats span{font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3)}
+.cando{margin:18px 0 0;padding:0;list-style:none}
+.cando li{padding:7px 0 7px 18px;border-top:1px solid var(--rule);color:var(--ink-2);position:relative}
+.cando li::before{content:"▷";position:absolute;left:0;color:var(--ink-4);font-size:10px;top:10px}
+.l .cando li::before{color:var(--amber)} .r .cando li::before{color:var(--violet)}
+.cando li b{color:var(--ink-1);font-weight:500}
+
+/* ── code / simplicity strip ────────────────────────────── */
+pre{margin:14px 0 0;padding:16px 18px;background:var(--surface-2);
+    border:1px solid var(--rule);border-radius:0;overflow-x:auto;
+    font-size:11.5px;line-height:1.75;color:var(--ink-2)}
+pre .c{color:var(--ink-4)} pre .k{color:var(--ink-1)}
+.l pre .k{color:var(--amber)} .r pre .k{color:var(--violet)}
+pre .cm{color:var(--ink-3)}
+.vs-tag{display:inline-block;font-size:9px;letter-spacing:.16em;text-transform:uppercase;
+        color:var(--ink-3);border:1px solid var(--rule-strong);padding:3px 8px;margin-top:16px}
+
+/* ── shared dna + verdict ───────────────────────────────── */
+.dna{border-top:1px solid var(--rule);margin-top:0;padding:34px 0 8px}
+.chips{display:flex;flex-wrap:wrap;gap:0;margin-top:18px}
+.chips span{border:1px solid var(--rule);padding:8px 14px;margin:0 -1px -1px 0;
+            color:var(--ink-2);font-size:11px}
+.chips span i{font-style:normal;color:var(--ink-4);margin-right:8px}
+.verdict{padding:30px 0 10px;display:grid;grid-template-columns:1fr;gap:8px}
+.verdict p{font-family:Spectral,Georgia,serif;font-style:italic;
+           font-size:clamp(20px,2.2vw,30px);line-height:1.3;max-width:46ch;margin:0}
+.verdict small{color:var(--ink-3);font-size:11px;max-width:86ch;line-height:1.8}
+
+/* ── footer ─────────────────────────────────────────────── */
+footer{border-top:1px solid var(--rule);padding:20px 0 46px;margin-top:36px;
+       display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
+       color:var(--ink-3);font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+
+@media(max-width:960px){
+  .vs{grid-template-columns:1fr}
+  .spine{border:0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+         flex-direction:row;justify-content:flex-start;padding:10px 4px}
+  .spine .d{position:static}
+  .cell.l,.cell.r{border:0;border-bottom:1px solid var(--rule)}
+  h1{max-width:none}
+}
+</style>
+</head>
+<body>
+<header class="wrap">
+  <div class="eyebrow">VisionBrain · design study 004 · recon comparison · 2026-09-08</div>
+  <h1>The instrument and <em>the toolbox.</em></h1>
+  <p class="intro">Left: <b>VisionBrain</b> — what we built. A vertical vision instrument for Apple
+  Silicon: models, pipeline, live dashboard, one machine. Right: <b>roboflow/supervision</b> — what
+  the other platform represents. A horizontal, model-agnostic toolkit the wider computer-vision
+  ecosystem builds on. Every figure below comes from the 2026-09-08 recon
+  (<b>SUPERVISION_RECON.md</b>); nothing is invented.</p>
+</header>
+
+<main class="wrap">
+
+<!-- ═══ identity halves ═══ -->
+<section class="vs">
+  <div class="cell l id">
+    <div class="mark">⬡</div>
+    <h2>VisionBrain</h2>
+    <p class="sub who">the instrument · local-first product</p>
+    <p class="body">Aerial &amp; camera vision AI running entirely on one Mac. Three MLX models
+    stitched into a single pipeline — <b>Falcon Perception</b> grounds plain language,
+    <b>SAM 3.1</b> tracks with pixel masks, <b>Gemma 4 26B</b> reasons about what it sees. A Ground
+    Control web UI, a live field hub, and a CLI wrap all of it into something an operator runs
+    offline. Weights live in your Hugging Face cache; results live on your disk.</p>
+    <div class="stats">
+      <div><b>3</b><span>models · mlx</span></div>
+      <div><b>10</b><span>cli verbs</span></div>
+      <div><b>~5 fps</b><span>live relay</span></div>
+      <div><b>0</b><span>cloud calls</span></div>
+    </div>
+    <ul class="cando">
+      <li><b>grounded detection</b> — detect · segment · ocr from a text query; keyword-routed auto mode</li>
+      <li><b>video tracking</b> — persistent ids across occlusion, mask polygons on the wire</li>
+      <li><b>fastscan</b> — motion-scored pass over hours of footage, answer in seconds</li>
+      <li><b>live ground control</b> — ws field hub at ~5 fps, boxes → mask painting, mp4/webm record</li>
+      <li><b>zone analytics</b> — line-cross, polygon zones, dwell, 8-way direction as live events</li>
+      <li><b>reasoning</b> — ask the observation, or generate a gemma field report</li>
+    </ul>
+  </div>
+  <div class="spine"><span class="g">◇</span><span class="d">what it is</span><span class="g">◇</span></div>
+  <div class="cell r id">
+    <div class="mark">◆</div>
+    <h2>supervision</h2>
+    <p class="sub who">the toolbox · open-source library by roboflow</p>
+    <p class="body">"We write your reusable computer vision tools." The model-agnostic plumbing
+    behind modern cv apps: one detections container — <b>sv.Detections</b> — that ~17 model
+    converters feed into, with tracking, annotators, zones, small-object slicing, dataset i/o, and
+    benchmark metrics on the other side. MIT-licensed, ~50k stars, and the hub of an ecosystem:
+    RF-DETR, the trackers package, and roboflow inference all speak its container natively.</p>
+    <div class="stats">
+      <div><b>~50k</b><span>stars</span></div>
+      <div><b>1m+</b><span>downloads / mo</span></div>
+      <div><b>24</b><span>annotators</span></div>
+      <div><b>17</b><span>model converters</span></div>
+    </div>
+    <ul class="cando">
+      <li><b>unify any model</b> — ultralytics · transformers · sam3 · detectron2 · vlm text parsers (9 formats)</li>
+      <li><b>track</b> — byte track (deprecated) → trackers pkg: sort · oc-sort · bot-sort · c-biou · mcbyte</li>
+      <li><b>annotate</b> — 24 annotators from boxes and masks to heatmaps, traces and blur</li>
+      <li><b>count</b> — line-zone and polygon-zone primitives you wire into your own loop</li>
+      <li><b>slice</b> — inference slicer for small objects in 4k+ frames (sahi)</li>
+      <li><b>measure</b> — map · f1 · confusion matrix with size buckets; datasets in 5 formats</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═══ versus rows ═══ -->
+<section class="vs row"><div class="cell l">
+  <h3>nature</h3>
+  <p>An end-to-end <b>product</b>: opinionated pipeline, ui, and storage decisions already made.
+  You operate it.</p></div>
+  <div class="spine"><span class="d">posture</span></div>
+  <div class="cell r"><p>A <b>library</b>: reusable parts with almost no opinions. You assemble it —
+  model, ui, and deployment are yours to bring.</p></div>
+</section>
+
+<section class="vs row"><div class="cell l">
+  <h3>models</h3>
+  <p>Ships three: falcon perception, sam 3.1 (<span class="who">mlx-community/sam3.1-bf16</span>),
+  gemma 4 26b — plus lfm variants. All MLX-optimized, resolved from the local cache.</p></div>
+  <div class="spine"><span class="d">ai brains</span></div>
+  <div class="cell r"><p>Ships none. Model-agnostic by design — bring any detector; rf-detr returns
+  sv.Detections natively. It parses vlm <i>text</i>, it doesn't run models.</p></div>
+</section>
+
+<section class="vs row"><div class="cell l">
+  <h3>tracking</h3>
+  <p>A dependency-free <b>canonical tracker</b> (persistent ids, occlusion states, stale-frame
+  prediction) built for the live hub — with the supervision byte-track available on the video path
+  behind a version-proof wrapper.</p></div>
+  <div class="spine"><span class="d">identity</span></div>
+  <div class="cell r"><p>Built-in <span class="who">sv.ByteTrack</span> is deprecated (removed in
+  0.31.0). The successor is the <b>trackers</b> package: six algorithms, hota 58→64, one
+  <span class="who">update(detections)</span> api.</p></div>
+</section>
+
+<section class="vs row"><div class="cell l">
+  <h3>masks</h3>
+  <p>Sam 3.1 dense masks, converted to <b>normalized polygons</b> and painted live in the
+  dashboard — boxes as fallback, all inside the jpeg wire frame.</p></div>
+  <div class="spine">◆</div>
+  <div class="cell r"><p><b>CompactMask</b> — rle-cropped masks, 10–240× less memory, coco rle in
+  with zero dense allocation. Built for scale, not for a live feed.</p></div>
+</section>
+
+<section class="vs row"><div class="cell l">
+  <h3>zones &amp; events</h3>
+  <p>Line-cross, zone-enter/exit, dwell, and 8-way compass direction — computed per frame and
+  <b>emitted as wire events</b> the dashboard and reports consume.</p></div>
+  <div class="spine"><span class="d">geofencing</span></div>
+  <div class="cell r"><p><span class="who">LineZone</span> /
+  <span class="who">PolygonZone</span> primitives with in/out counts — capable, but you write the
+  loop that turns them into events.</p></div>
+</section>
+
+<section class="vs row"><div class="cell l">
+  <h3>reasoning</h3>
+  <p><b>Gemma 4 asks and answers.</b> "What changed since last pass?" — grounded in the
+  observation, resolved over ollama / remote gpu / local mlx, delivered as field reports.</p></div>
+  <div class="spine"><span class="d">thinking</span></div>
+  <div class="cell r"><p>None. It moves detection data; it never interprets it. The closest move is
+  parsing nine vlm text formats into boxes.</p></div>
+</section>
+
+<section class="vs row"><div class="cell l">
+  <h3>interface</h3>
+  <p>Three surfaces, included: <b>ground control web ui</b>, <b>cli</b> (10 verbs), and the
+  <b>ws field hub</b> — record mp4/webm client-side with overlays baked in.</p></div>
+  <div class="spine"><span class="d">surface</span></div>
+  <div class="cell r"><p>One surface: the Python api. Docs, cookbooks, and an annotator playground —
+  but every ui is yours to build.</p></div>
+</section>
+
+<section class="vs row"><div class="cell l">
+  <h3>validation</h3>
+  <p>Cross-engine validation and a counts line you can read over the radio. Honest status verbs:
+  <span class="who">ready · cached · missing</span>.</p></div>
+  <div class="spine"><span class="d">qa</span></div>
+  <div class="cell r"><p>The full bench: <span class="who">mAP · mar · f1 · confusion matrix</span>
+  with small/medium/large buckets, plus per-image error mosaics. Rigor we don't ship.</p></div>
+</section>
+
+<section class="vs row"><div class="cell l">
+  <h3>where it runs</h3>
+  <p>One Mac mini m4, offline. No subscription, no sync, no telemetry. Field-bridge modules
+  import with zero mlx installed.</p></div>
+  <div class="spine"><span class="d">hardware</span></div>
+  <div class="cell r"><p>Anywhere python ≥3.10 runs; opencv optional since 0.30. Hardware-agnostic —
+  and ui-less until you add a screen.</p></div>
+</section>
+
+<section class="vs row"><div class="cell l">
+  <h3>community</h3>
+  <p>One operator-engineer. The docs are the spec; the spec is the memory. Changes land when the
+  field needs them.</p></div>
+  <div class="spine"><span class="d">scale</span></div>
+  <div class="cell r"><p>Thousands of contributors, 1m+ downloads a month, 2026 release cadence
+  re-accelerated (0.28 → 0.30.2 in four months), docs published as <span class="who">llms.txt</span>
+  for machine readers.</p></div>
+</section>
+
+<!-- ═══ simplicity strip ═══ -->
+<section class="vs row"><div class="cell l">
+  <h3>simple to operate</h3>
+  <p>Install once, check the cache, launch. Three commands from nothing to a live dashboard — the
+  opinions <i>are</i> the simplicity.</p>
+<pre><span class="cm">$ pip install -e .</span>
+<span class="k">$ python -m visionbrain status</span>   <span class="cm"># what's cached?</span>
+<span class="k">$ python -m visionbrain track drone.mp4 \</span>
+    <span class="k">--query "person, vehicle" --persistent-ids</span>
+<span class="k">$ python -m visionbrain ui</span>        <span class="cm"># ground control</span></pre>
+  <span class="vs-tag">opinions included · 3 commands</span></div>
+  <div class="spine"><span class="d">ease</span></div>
+  <div class="cell r">
+  <h3>simple to build with</h3>
+  <p>Six lines from any model to an annotated, tracked frame. Nothing decided for you — nothing in
+  your way either.</p>
+<pre><span class="k">import supervision as sv</span>
+
+dets = model.predict(frame)          <span class="cm"># any model</span>
+dets = dets[dets.confidence > 0.5]
+dets = tracker.update(dets)          <span class="cm"># trackers pkg</span>
+<span class="k">sv.BoxAnnotator().annotate</span>(frame, dets)
+<span class="k">sv.LabelAnnotator().annotate</span>(frame, dets, labels)</pre>
+  <span class="vs-tag">no opinions · 6 lines</span></div>
+</section>
+
+<!-- ═══ shared dna ═══ -->
+<section class="dna">
+  <div class="eyebrow">shared dna — why this is a comparison, not a fight</div>
+  <div class="chips">
+    <span><i>◇</i>sv.Detections contract</span>
+    <span><i>◇</i>byte-track lineage</span>
+    <span><i>◇</i>line + polygon zones</span>
+    <span><i>◇</i>annotators</span>
+    <span><i>◇</i>compact masks</span>
+    <span><i>◇</i>visionbrain pins supervision ≥0.28,&lt;0.30</span>
+    <span><i>◇</i>bridge: visionbrain → sv.detections</span>
+  </div>
+  <div class="verdict">
+    <p>Supervision is the wrench set. VisionBrain is the machine that arrives in the field with the
+    wrenches already mounted.</p>
+    <small>They are not competitors — one imports the other. VisionBrain converts its model outputs
+    to sv.Detections and reuses supervision's tracker, zones, and annotators where they fit, while
+    the canonical tracker, wire protocol, and reasoning chain stay in-house. When supervision 0.31
+    removes its byte track, the swap to the trackers package is one wrapper away.</small>
+  </div>
+</section>
+
+</main>
+
+<footer class="wrap">
+  <span>⬡ VisionBrain · prototype — design study, not a product surface</span>
+  <span>recon 2026-09-08 · primary source: SUPERVISION_RECON.md · upstream: github.com/roboflow/supervision</span>
+</footer>
+</body>
+</html>

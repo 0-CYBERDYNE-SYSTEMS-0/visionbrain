@@ -24,6 +24,8 @@ GEMMA4_HF_ID = "mlx-community--gemma-4-26b-a4b-it-4bit"
 GEMMA4_HF_REPO = "mlx-community/gemma-4-26b-a4b-it-4bit"
 FALCON_OCR_HF_ID = "tiiuae--Falcon-OCR"
 FALCON_OCR_HF_REPO = "tiiuae/Falcon-OCR"
+FALCON_PERCEPTION_300M_HF_ID = "tiiuae--Falcon-Perception-300M"
+FALCON_PERCEPTION_300M_REPO = "tiiuae/Falcon-Perception-300M"
 OLLAMA_GEMMA_MODEL = "gemma4:e2b"
 OLLAMA_BASE_URL = "http://localhost:11434"
 
@@ -103,6 +105,31 @@ def falcon_perception_record() -> ModelRecord:
         can_load=can_load,
         note="3B params, MLX, float16. Ready to use." if can_load
              else ("Weights not cached" if not has_weights else
+                   (f"Falcon-Perception repo not found at {FALCON_REPO}" if not has_repo else
+                    _mlx_note())),
+    )
+
+
+def falcon_perception_300m_record() -> ModelRecord:
+    """Status of Falcon Perception 300M weights (detection-only variant)."""
+    cached = HF_CACHE / f"models--{FALCON_PERCEPTION_300M_HF_ID.replace('/', '--')}"
+    size = _cache_size(cached)
+    mlx_ok = _check_mlx()
+    # Same runtime shape as the full model: weights + MLX + the local
+    # Falcon-Perception checkout (its MLX engine runs both checkpoints).
+    has_weights = cached.exists() and size > 0.1
+    has_repo = FALCON_REPO.exists()
+    can_load = has_weights and mlx_ok and has_repo
+    return ModelRecord(
+        hf_id=FALCON_PERCEPTION_300M_REPO,
+        cache_dir=cached,
+        disk_gb=round(size, 2),
+        is_cached=has_weights,
+        can_load=can_load,
+        note="0.3B detection-only variant (boxes, no masks); select at runtime "
+             "via VB_FALCON_MODEL." if can_load
+             else ("Weights not cached — run: huggingface-cli download "
+                   "tiiuae/Falcon-Perception-300M" if not has_weights else
                    (f"Falcon-Perception repo not found at {FALCON_REPO}" if not has_repo else
                     _mlx_note())),
     )
@@ -202,6 +229,7 @@ def ollama_gemma_record() -> ModelRecord:
 def all_records() -> list[ModelRecord]:
     return [
         falcon_perception_record(),
+        falcon_perception_300m_record(),
         sam31_record(),
         ollama_gemma_record(),
         falcon_ocr_record(),

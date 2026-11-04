@@ -1,0 +1,86 @@
+<svg viewBox="0 0 1120 360" role="img" aria-label="Elevation of an industrial site at one scale: a main building 12.5 m high, a lower annex, and a 3 m perimeter wall with a gate. Four detections are marked in red — a person on the roof, a person on the wall top, a person on the building face, and a person inside the line at the gate after hours. A 10 m scale bar with a 1.75 m figure fixes the vertical scale.">
+
+        <!-- ============ datum: one ground line, one plinth course ============ -->
+        <line x1="40" y1="284" x2="1080" y2="284" stroke="#101820" stroke-width="2"/>
+        <line x1="300" y1="276" x2="840" y2="276" stroke="#5b6570" stroke-width="1"/>
+        <line x1="880" y1="276" x2="1060" y2="276" stroke="#5b6570" stroke-width="1"/>
+
+        <!-- ============ main building: 300–660, 12.5 m ============ -->
+        <rect x="300" y="84" width="360" height="200" fill="#e4e9ec" stroke="#101820" stroke-width="1.5"/>
+        <line x1="300" y1="74" x2="660" y2="74" stroke="#101820" stroke-width="1.5"/>
+        <g stroke="#5b6570" stroke-width="1" fill="none">
+          <rect x="330" y="118" width="42" height="34"/>
+          <rect x="404" y="118" width="42" height="34"/>
+          <rect x="478" y="118" width="42" height="34"/>
+          <rect x="552" y="118" width="42" height="34"/>
+          <rect x="330" y="188" width="42" height="34"/>
+          <rect x="404" y="188" width="42" height="34"/>
+          <rect x="478" y="188" width="42" height="34"/>
+          <rect x="552" y="188" width="42" height="34"/>
+        </g>
+
+        <!-- ============ annex: same module, same plinth, lower mass ============ -->
+        <rect x="660" y="188" width="180" height="96" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <line x1="660" y1="178" x2="840" y2="178" stroke="#101820" stroke-width="1.5"/>
+        <g stroke="#5b6570" stroke-width="1" fill="none">
+          <rect x="684" y="222" width="42" height="34"/>
+          <rect x="758" y="222" width="42" height="34"/>
+        </g>
+
+        <!-- ============ perimeter wall: 3.0 m, gate between two piers ============ -->
+        <rect x="880" y="236" width="180" height="48" fill="none" stroke="#101820" stroke-width="1.5"/>
+        <line x1="876" y1="226" x2="1064" y2="226" stroke="#101820" stroke-width="1.5"/>
+        <g stroke="#5b6570" stroke-width="1">
+          <line x1="940" y1="236" x2="940" y2="284"/>
+          <line x1="1000" y1="236" x2="1000" y2="284"/>
+          <line x1="960" y1="236" x2="960" y2="284"/>
+        </g>
+
+        <!-- ============ scale reference: 10 m bar, 1.75 m figure, wall dimension ============ -->
+        <g stroke="#5b6570" stroke-width="1.5">
+          <line x1="40" y1="326" x2="200" y2="326"/>
+          <line x1="40" y1="326" x2="40" y2="318"/>
+          <line x1="200" y1="326" x2="200" y2="318"/>
+        </g>
+        <line x1="120" y1="326" x2="120" y2="322" stroke="#5b6570" stroke-width="1"/>
+        <g stroke="#101820" stroke-width="1.5" fill="none">
+          <circle cx="64" cy="302" r="3.5"/>
+          <line x1="64" y1="306" x2="64" y2="316"/>
+          <line x1="58" y1="310" x2="70" y2="310"/>
+          <line x1="64" y1="316" x2="59" y2="326"/>
+          <line x1="64" y1="316" x2="69" y2="326"/>
+        </g>
+        <text x="216" y="330" class="svg-mono">1.75 m figure &#183; this bar spans 10 m</text>
+        <g stroke="#5b6570" stroke-width="1">
+          <line x1="1046" y1="236" x2="1046" y2="284"/>
+          <line x1="1040" y1="236" x2="1052" y2="236"/>
+          <line x1="1040" y1="284" x2="1052" y2="284"/>
+        </g>
+        <text x="1058" y="306" class="svg-mono" text-anchor="end">wall &#183; 3.0 m</text>
+
+        <!-- ============ detection 1: on the roof ============ -->
+        <path d="M408 48 H432 V72 H408 Z M411 51 V69 H429 V51 Z M416 60 a4 4 0 1 0 8 0 a4 4 0 1 0 -8 0 Z" fill="#c8361a" fill-rule="evenodd" class="pulse"/>
+        <line x1="432" y1="48" x2="488" y2="48" stroke="#5b6570" stroke-width="1"/>
+        <text x="500" y="40" class="svg-label" fill="#9c2a13">on the roof</text>
+        <text x="500" y="58" class="svg-mono">the first surface &#8212; nobody watches it</text>
+
+        <!-- ============ detection 2: on the wall top ============ -->
+        <path d="M988 200 H1012 V224 H988 Z M991 203 V221 H1009 V203 Z M996 212 a4 4 0 1 0 8 0 a4 4 0 1 0 -8 0 Z" fill="#c8361a" fill-rule="evenodd" class="pulse"/>
+        <polyline points="988,200 988,168 724,168" fill="none" stroke="#5b6570" stroke-width="1"/>
+        <text x="700" y="128" class="svg-label" fill="#9c2a13">on the wall</text>
+        <text x="700" y="146" class="svg-mono">over the fence, at the top of it</text>
+
+        <!-- ============ detection 3: on the building face ============ -->
+        <path d="M276 188 H300 V212 H276 Z M279 191 V209 H297 V191 Z M284 200 a4 4 0 1 0 8 0 a4 4 0 1 0 -8 0 Z" fill="#c8361a" fill-rule="evenodd" class="pulse"/>
+        <line x1="276" y1="196" x2="148" y2="196" stroke="#5b6570" stroke-width="1"/>
+        <text x="44" y="228" class="svg-label" fill="#9c2a13">on the face</text>
+        <text x="44" y="246" class="svg-mono">climbing, or at a ledge</text>
+
+        <!-- ============ detection 4: inside the line, at the gate ============ -->
+        <path d="M948 260 H972 V284 H948 Z M951 263 V281 H969 V263 Z M956 272 a4 4 0 1 0 8 0 a4 4 0 1 0 -8 0 Z" fill="#c8361a" fill-rule="evenodd" class="pulse"/>
+        <line x1="948" y1="284" x2="948" y2="300" stroke="#5b6570" stroke-width="1"/>
+        <text x="932" y="300" class="svg-label" text-anchor="end" fill="#9c2a13">inside the line, after hours</text>
+        <text x="932" y="318" class="svg-mono" text-anchor="end">a person where no person belongs</text>
+
+        <text x="44" y="42" class="svg-mono">the question is narrow &#183; the surfaces are not</text>
+      </svg>

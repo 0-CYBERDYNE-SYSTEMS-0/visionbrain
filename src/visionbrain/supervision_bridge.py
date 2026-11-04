@@ -8,6 +8,7 @@ ecosystem (ByteTrack, annotators, zone analytics, CompactMask).
 from __future__ import annotations
 
 import warnings
+import weakref
 from typing import Optional
 
 import numpy as np
@@ -255,11 +256,21 @@ def to_compact(detections: sv.Detections, image_shape: tuple[int, int] | None = 
         data=new_data,
     )
 
-    # Store compact mask keyed by the result object's id (so from_compact can find it)
+    # Store compact mask keyed by the result object's id (so from_compact can
+    # find it); a finalizer evicts the entry when the result is collected —
+    # without it the cache grows forever and a recycled id() would hand an
+    # unrelated object's masks to from_compact.
     _compact_mask_cache[id(result)] = compact
     _compact_shape_cache[id(result)] = (h, w)
+    weakref.finalize(result, _evict_compact_cache, id(result))
 
     return result
+
+
+def _evict_compact_cache(key: int) -> None:
+    """Drop both cache entries for one collected Detections object."""
+    _compact_mask_cache.pop(key, None)
+    _compact_shape_cache.pop(key, None)
 
 
 # Module-level caches for compact masks and shapes (since they can't live in Detections.data)

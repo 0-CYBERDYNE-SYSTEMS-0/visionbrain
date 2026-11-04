@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Architecture Review — VisionBrain ⇄ visionbrain-bridge</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+    primaryColor: '#1e293b', primaryTextColor: '#e2e8f0', primaryBorderColor: '#475569',
+    lineColor: '#64748b', secondaryColor: '#0f172a', tertiaryColor: '#0f172a',
+    fontSize: '13px'
+  }});
+</script>
+<style>
+  body { background:#0b1120; color:#cbd5e1; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .card { background:linear-gradient(180deg,#0f172a 0%,#111c33 100%); border:1px solid #1e293b; border-radius:1rem; }
+  .badge { font-size:0.68rem; letter-spacing:0.08em; text-transform:uppercase; font-weight:700; padding:0.25rem 0.7rem; border-radius:9999px; }
+  .badge-strong { background:#064e3b; color:#6ee7b7; border:1px solid #10b981; }
+  .badge-explore { background:#3b2f0b; color:#fcd34d; border:1px solid #d97706; }
+  .badge-spec { background:#312e81; color:#a5b4fc; border:1px solid #6366f1; }
+  .rank-chip { background:#1e293b; color:#94a3b8; border:1px solid #334155; font-weight:700; }
+  code { background:#1e293b; color:#93c5fd; padding:0.1rem 0.35rem; border-radius:0.3rem; font-size:0.82em; font-family:ui-monospace,monospace; }
+  .mono { font-family:ui-monospace,monospace; }
+  .massbar { display:flex; height:2.4rem; border-radius:0.5rem; overflow:hidden; border:1px solid #334155; }
+  .massseg { display:flex; align-items:center; justify-content:center; font-size:0.62rem; color:#e2e8f0; overflow:hidden; white-space:nowrap; }
+  .verdict-row:hover { background:#16213a; }
+  .divider { border-top:1px dashed #334155; }
+  .mermaid { display:flex; justify-content:center; }
+  .adr-callout { background:#2a1a0a; border:1px solid #b45309; border-radius:0.5rem; }
+  .timeline-item { border-left:2px solid #334155; padding-left:1.25rem; position:relative; }
+  .timeline-item::before { content:''; position:absolute; left:-6px; top:0.35rem; width:10px; height:10px; border-radius:50%; background:#38bdf8; }
+</style>
+</head>
+<body class="antialiased">
+
+<div class="max-w-5xl mx-auto px-6 py-12">
+
+  <!-- ══════════════ HEADER ══════════════ -->
+  <header class="mb-10">
+    <div class="flex items-center gap-3 mb-2">
+      <span class="badge badge-spec">Architecture Review</span>
+      <span class="text-xs text-slate-500 mono">2026-09-12</span>
+    </div>
+    <h1 class="text-3xl font-bold text-slate-100">VisionBrain ⇄ visionbrain-bridge</h1>
+    <p class="mt-3 text-slate-400 leading-relaxed max-w-3xl">
+      Deepening-opportunity scan across both repos, run as a <strong class="text-slate-200">jury of three independent
+      sub-agents</strong> (core seams · the two-repo seam · design-it-twice target architectures) followed by a
+      <strong class="text-slate-200">judge pass</strong> that spot-checked every load-bearing claim against the code.
+      All nine candidates' claims were <strong class="text-emerald-400">verified</strong> — none refuted, two conditioned.
+      Vocabulary: <em>module · interface · seam · adapter · depth · locality · leverage</em>.
+    </p>
+    <div class="adr-callout mt-5 p-4 text-sm">
+      <span class="font-bold text-amber-400">Binding decisions respected (ADR-equivalents).</span
+      ><span class="text-amber-100/80">
+      <code>SIMPLIFICATION_SPEC.md</code>: don't refactor <code>model_host.py</code>/<code>live_tracking.py</code> in current work; no new deps.
+      <code>NEXT_DEVELOPMENT_SPEC.md</code> (CM-00): the bridge hosts a <code>visionbrain</code> mission runtime, importable without MLX, injected adapters; Python contract definitions belong in VisionBrain; wire serialization in the bridge + <code>android/bridge-core</code>; golden fixtures; two repos kept for now.</span>
+    </div>
+  </header>
+
+  <!-- ══════════════ VERDICT TABLE ══════════════ -->
+  <section class="mb-12">
+    <h2 class="text-lg font-bold text-slate-200 mb-3">Verdicts at a glance</h2>
+    <div class="card overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="text-xs text-slate-500 uppercase tracking-wider border-b border-slate-800">
+          <tr><th class="text-left px-4 py-2.5">#</th><th class="text-left px-4 py-2.5">Candidate</th><th class="text-left px-4 py-2.5">Verdict</th><th class="text-left px-4 py-2.5 hidden md:table-cell">Judge's evidence</th></tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800/60">
+          <tr class="verdict-row"><td class="px-4 py-2.5 rank-chip rounded m-1 text-center">1</td><td class="px-4 py-2.5 font-semibold text-slate-200">Wire contract becomes a real module + golden fixtures</td><td class="px-4 py-2.5"><span class="badge badge-strong">Strong</span></td><td class="px-4 py-2.5 text-slate-400 hidden md:table-cell">5 codec implementations in 3 languages; dead capability; fossil fallback — all verified</td></tr>
+          <tr class="verdict-row"><td class="px-4 py-2.5 rank-chip rounded m-1 text-center">2</td><td class="px-4 py-2.5 font-semibold text-slate-200">One live-loop brain behind <code>brain.py</code> + <code>live_engine.py</code></td><td class="px-4 py-2.5"><span class="badge badge-strong">Strong</span></td><td class="px-4 py-2.5 text-slate-400 hidden md:table-cell">verbatim formatter dup, twin GPU/slot machinery, 3 error dialects glued client-side</td></tr>
+          <tr class="verdict-row"><td class="px-4 py-2.5 rank-chip rounded m-1 text-center">3</td><td class="px-4 py-2.5 font-semibold text-slate-200">One reasoner seam (gemma_inference ⇄ vlm_registry)</td><td class="px-4 py-2.5"><span class="badge badge-strong">Strong</span></td><td class="px-4 py-2.5 text-slate-400 hidden md:table-cell">8 copy-paste backends; rogue <code>_gemma_cache</code> bypasses <code>model_host.HOST</code></td></tr>
+          <tr class="verdict-row"><td class="px-4 py-2.5"></td><td class="px-4 py-2.5 font-semibold text-slate-200">Deepen <code>live_engine</code> (engine object, testable frame pipeline)</td><td class="px-4 py-2.5"><span class="badge badge-strong">Strong</span></td><td class="px-4 py-2.5 text-slate-400 hidden md:table-cell">6 module globals; <code>_run</code> has zero coverage; tracker-consumption step made conditional</td></tr>
+          <tr class="verdict-row"><td class="px-4 py-2.5"></td><td class="px-4 py-2.5 font-semibold text-slate-200">Pipeline options/result seam (web ⇆ CLI)</td><td class="px-4 py-2.5"><span class="badge badge-strong">Strong</span></td><td class="px-4 py-2.5 text-slate-400 hidden md:table-cell">9 endpoints build CLI argv; 462-line <code>cmd_analyze</code> tested only via <code>--help</code></td></tr>
+          <tr class="verdict-row"><td class="px-4 py-2.5"></td><td class="px-4 py-2.5 font-semibold text-slate-200">Declare bridge→visionbrain dependency + version handshake</td><td class="px-4 py-2.5"><span class="badge badge-explore">Worth exploring</span></td><td class="px-4 py-2.5 text-slate-400 hidden md:table-cell">declaration half promoted to do-now: two install sources, different org slugs</td></tr>
+          <tr class="verdict-row"><td class="px-4 py-2.5"></td><td class="px-4 py-2.5 font-semibold text-slate-200">Delete <code>zones.py</code> dead weight; home the real triggers</td><td class="px-4 py-2.5"><span class="badge badge-explore">Worth exploring</span></td><td class="px-4 py-2.5 text-slate-400 hidden md:table-cell">every claim verified verbatim, incl. the embarrassed NotImplementedError</td></tr>
+          <tr class="verdict-row"><td class="px-4 py-2.5"></td><td class="px-4 py-2.5 font-semibold text-slate-200">Stop string-slicing JS in tests; wire round-trip contract test</td><td class="px-4 py-2.5"><span class="badge badge-explore">Worth exploring</span></td><td class="px-4 py-2.5 text-slate-400 hidden md:table-cell">caveat: the slicing pins are currently the only guard on SIMPLIFICATION_SPEC client behavior</td></tr>
+          <tr class="verdict-row"><td class="px-4 py-2.5"></td><td class="px-4 py-2.5 font-semibold text-slate-200">Ask/report submit module (fold into #2 and engine work)</td><td class="px-4 py-2.5"><span class="badge badge-explore">Fold in</span></td><td class="px-4 py-2.5 text-slate-400 hidden md:table-cell">25-line twin rejection ladders — real, but a slice of the live-loop campaign</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ══════════════ CANDIDATE 1 ══════════════ -->
+  <section class="card p-7 mb-10">
+    <div class="flex flex-wrap items-center gap-3 mb-1">
+      <span class="rank-chip badge">Rank #1 · Top recommendation</span>
+      <span class="badge badge-strong">Strong</span>
+    </div>
+    <h2 class="text-xl font-bold text-slate-100 mt-2">The wire contract is folklore, not a module</h2>
+    <p class="text-sm text-slate-500 mono mt-1">C7 · VisionBrain: live_engine.py:255-320, static/index.html:2239-2249, 1935, 1914 · Bridge: protocol.py:18-381, dashboard/index.html:245-248 · Android: BinaryFrameCodec.kt:8-26, BridgeWebSocketClient.kt:100-126</p>
+
+    <div class="grid md:grid-cols-2 gap-6 mt-5 text-sm leading-relaxed">
+      <div>
+        <h3 class="text-rose-400 font-bold text-xs uppercase tracking-wider mb-1.5">Problem</h3>
+        <p class="text-slate-300">The <code>&gt;III</code> binary frame codec is independently implemented <strong class="text-rose-300">5 times in 3 languages</strong>. The detections JSON has <strong class="text-rose-300">two dialects</strong> (score rounded to 3 vs 4 decimals; <code>direction</code>/<code>color_id</code> vs <code>source</code>/<code>track_state</code>/<code>stale_ms</code>), and the Ground Control dashboard carries the fossil fallback <code>msg.detections || msg.items</code> to bridge the split. Capability <code>geometry.polygon_q16.v1</code> is advertised by Kotlin, parsed by Kotlin, sanitized by the bridge — but <strong class="text-rose-300">emitted by nothing</strong> and absent from <code>SERVER_CAPABILITIES</code>, so negotiation can never accept it. The local engine ignores <code>hello</code> entirely. One recent wire change ("emit mask polygons") touched 6 files in one repo while parallel machinery already existed in the other.</p>
+      </div>
+      <div>
+        <h3 class="text-emerald-400 font-bold text-xs uppercase tracking-wider mb-1.5">Solution</h3>
+        <p class="text-slate-300">Move the codec, detections envelope, limits, and negotiation into an <strong>MLX-free module in the visionbrain package</strong> (exactly CM-02's "Python definitions belong in VisionBrain"). <code>vb_bridge/protocol.py</code> becomes a thin re-export — the pattern already proven by the bridge's <code>sam_tracking.py</code>/<code>tracking.py</code> shims. Freeze <strong>one golden fixture corpus</strong> (timestamp-wrap, polygon bounds, dialect cases) consumed by pytest, the Kotlin tests, and a tiny JS harness. Fold in: emit or delete <code>polygon_q16.v1</code>; pin one detections dialect and retire the fossil fallback.</p>
+      </div>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-4 mt-6">
+      <div class="rounded-lg border border-rose-900/50 bg-rose-950/20 p-3">
+        <div class="text-xs text-rose-400 font-bold uppercase tracking-wider mb-2">Before — the seam lives in prose</div>
+        <pre class="mermaid">
+flowchart TB
+    PROSE["docs/protocol.md + AGENTS.md prose<br/>(the only single home)"]
+    P1["vb_bridge/protocol.py<br/>encode+decode"]
+    P2["live_engine.pack_frame<br/>encode"]
+    P3["GC index.html<br/>DataView decode"]
+    P4["bridge dashboard<br/>DataView decode"]
+    P5["BinaryFrameCodec.kt<br/>hand-rolled"]
+    PROSE --- P1 & P2 & P3 & P4 & P5
+        </pre>
+      </div>
+      <div class="rounded-lg border border-emerald-900/50 bg-emerald-950/20 p-3">
+        <div class="text-xs text-emerald-400 font-bold uppercase tracking-wider mb-2">After — the seam lives in code</div>
+        <pre class="mermaid">
+flowchart TB
+    M["visionbrain wire module<br/>(MLX-free, versioned)<br/>codec · envelope · negotiation"]
+    F["golden fixtures<br/>(one corpus)"]
+    C1["vb_bridge/protocol.py<br/>thin re-export"]
+    C2["live_engine<br/>imports"]
+    C3["Kotlin bridge-core<br/>conformance test"]
+    C4["dashboard JS<br/>conformance test"]
+    M --> C1 & C2 & C3 & C4
+    F -.proved by.-> M & C3 & C4
+        </pre>
+      </div>
+    </div>
+
+    <div class="mt-5 text-sm text-slate-400 space-y-1.5">
+      <p><span class="text-slate-200 font-semibold">Benefits:</span> a wire change becomes one commit + re-exports; a stale field checkout fails a fixture test instead of failing mid-flight on the drone; the interface becomes the test surface — literally.</p>
+      <p><span class="text-slate-200 font-semibold">Deletion test:</span> delete the five hand-rolled codecs — behavior survives only if the shared module exists. Passes decisively.</p>
+      <p><span class="text-slate-200 font-semibold">Adapter count:</span> five concrete implementations of one interface — far past the two-adapter threshold. The seam is overdue, not speculative.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════ CANDIDATE 2 ══════════════ -->
+  <section class="card p-7 mb-10">
+    <div class="flex flex-wrap items-center gap-3 mb-1">
+      <span class="rank-chip badge">Rank #2</span>
+      <span class="badge badge-strong">Strong</span>
+    </div>
+    <h2 class="text-xl font-bold text-slate-100 mt-2">One live-loop brain, not two</h2>
+    <p class="text-sm text-slate-500 mono mt-1">C8+C5 · Bridge: brain.py:76-79, 137-160, 860-957 · evidence.py:21-52 · VisionBrain: live_engine.py:1110-1126, 2569-2631 · vlm_registry.py:165-188</p>
+
+    <div class="grid md:grid-cols-2 gap-6 mt-5 text-sm leading-relaxed">
+      <div>
+        <h3 class="text-rose-400 font-bold text-xs uppercase tracking-wider mb-1.5">Problem</h3>
+        <p class="text-slate-300"><code>brain.py</code> (996 lines) and <code>live_engine.py</code> (2,727) implement the <em>same</em> loop interface — arm-state machine, one-in-flight ask/report slot, GPU admission, detections publication — with already-diverged error modes for identical controls: the bridge answers a second <code>ask</code> with <code>ask_ack</code> + <code>ok:false</code>; the engine pushes <code>{"type":"error"}</code> in some paths and <code>ask_ack</code> in others. The dashboard carries polyglot glue handling all three shapes. Meanwhile the unification pass left stragglers: <code>evidence.py</code>'s detection-line formatter duplicated verbatim in <code>vlm_registry.py</code>, and <code>brain.py</code> re-implements <code>mask_to_polygon</code> (with its own <code>MAX_POLYGON_POINTS = 64</code>) even though it already imports from <code>visionbrain</code>, where the canonical version lives.</p>
+      </div>
+      <div>
+        <h3 class="text-emerald-400 font-bold text-xs uppercase tracking-wider mb-1.5">Solution</h3>
+        <p class="text-slate-300"><strong>Phase 1 (mechanical, now):</strong> one formatter, one polygon tracer, one ask/report rejection ladder, one error dialect on the wire. <strong>Phase 2 (after <code>mission_runtime</code> lands, so the core isn't built twice):</strong> an MLX-free live-loop module — arm state + ask slot + publication hooks with injected perception/clock/publish adapters — of which <code>brain.py</code> and <code>live_engine</code>'s worker become the field and desktop adapters. This is the same deepening <code>detection_core.py</code> and <code>live_tracking.py</code> already demonstrated.</p>
+      </div>
+    </div>
+
+    <div class="mt-6 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+      <div class="text-xs text-slate-400 font-bold uppercase tracking-wider mb-2">Before / after — where the seam cuts</div>
+      <pre class="mermaid">
+flowchart LR
+    subgraph BEFORE["Before: the seam cuts through the loop"]
+        direction TB
+        A1["brain.py · arm · GPU_LOCK · ask slot · formatter · mask_to_polygon"]
+        A2["live_engine · arm · _claim_ask_slot · formatter · polygon"]
+        A3["dashboard: polyglot glue for 3 error shapes"]
+        A1 <-.diverged dialects.-> A2
+        A3 --> A1 & A2
+    end
+    subgraph AFTER["After: the seam wraps the loop"]
+        direction TB
+        CORE["live-loop core (MLX-free)<br/>arm state · ask/report slot · publication"]
+        B1["brain.py → field adapter"]
+        B2["live_engine worker → desktop adapter"]
+        B3["clients: one dialect"]
+        B1 & B2 --> CORE
+        CORE --> B3
+    end
+BEFORE ~~~ AFTER
+      </pre>
+    </div>
+
+    <div class="mt-5 text-sm text-slate-400 space-y-1.5">
+      <p><span class="text-slate-200 font-semibold">Benefits:</span> users see one "busy" behavior; ask/report honesty rules ("empty set is a valid observation") get one home and one test suite; CM-04's admission gate has a single choke point to wrap.</p>
+      <p><span class="text-slate-200 font-semibold">Deletion test:</span> delete <code>brain.py</code>'s ask-slot/summary/arm-state code — if the core exists, <code>brain.py</code> collapses to adapters and nothing observable changes. The surviving duplicate formatters prove the deletion is incomplete, not impossible.</p>
+      <p><span class="text-slate-200 font-semibold">Adapter count:</span> two full loop implementations plus a third prompt-scaffolding variant in <code>llm.py</code>, plus scaffolding written to <em>tolerate</em> arity drift. Exceeded with room to spare.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════ CANDIDATE 3 ══════════════ -->
+  <section class="card p-7 mb-10">
+    <div class="flex flex-wrap items-center gap-3 mb-1">
+      <span class="rank-chip badge">Rank #3</span>
+      <span class="badge badge-strong">Strong</span>
+    </div>
+    <h2 class="text-xl font-bold text-slate-100 mt-2">One reasoner seam — the seam is real, the code is copy-paste</h2>
+    <p class="text-sm text-slate-500 mono mt-1">C1 · gemma_inference.py:446-942, 339-364, 47 · vlm_registry.py:53-65, 130-137, 205-212 · live_engine.py:1136-1150 · loader.py:24</p>
+
+    <div class="grid md:grid-cols-2 gap-6 mt-5 text-sm leading-relaxed">
+      <div>
+        <h3 class="text-rose-400 font-bold text-xs uppercase tracking-wider mb-1.5">Problem</h3>
+        <p class="text-slate-300">Grounded VLM ask/report exists as <strong>8 near-identical functions</strong> (4 backends × ask/report in <code>gemma_inference.py</code>) plus <strong>two more chat transports</strong> (<code>vlm_registry._generate</code>, <code>agent_loop.VLMClient</code>). Two stacks do the same job with incompatible interfaces (<code>image_path: str → GemmaResponse</code> vs <code>image: PIL → str</code>), duplicated system prompts, and a byte-identical detection-counts loop in two files. Worst: <code>_gemma_cache</code> is a <strong>second model-residency authority</strong> bypassing <code>model_host.HOST</code> — the module that exists precisely to prevent two resident copies — and the Gemma repo id is defined twice.</p>
+      </div>
+      <div>
+        <h3 class="text-emerald-400 font-bold text-xs uppercase tracking-wider mb-1.5">Solution</h3>
+        <p class="text-slate-300">One reasoner seam: <code>ask(...)</code> / <code>report(...)</code> with adapters chosen by a registry (custom → ollama → remote → mlx-local). Prompts, style dict, counts rendering, and usage normalization hoist into the shared front; each adapter shrinks to "translate messages, parse response". <code>vlm_registry</code>'s keys become checkpoint selection inside the mlx adapter, and its <code>model_host.HOST</code> residency becomes the whole stack's residency — the <code>_gemma_cache</code> bypass disappears without editing <code>model_host.py</code> (judge ruling: compliant with the ADR).</p>
+      </div>
+    </div>
+
+    <div class="mt-6 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+      <div class="text-xs text-slate-400 font-bold uppercase tracking-wider mb-2">Before / after — 8 copies → 1 seam, 4 adapters</div>
+      <pre class="mermaid">
+flowchart TB
+    subgraph B["Before"]
+        direction LR
+        g1["_custom_ask / _custom_report"]
+        g2["_ollama_ask / _ollama_report"]
+        g3["_remote_ask / _remote_report"]
+        g4["_local_ask / _local_report"]
+        g5["vlm_registry.ask (own prompt + residency)"]
+    end
+    subgraph A["After"]
+        direction LR
+        s["reasoner.ask / reasoner.report<br/>one prompt + counts + usage front"]
+        a1["custom adapter"]
+        a2["ollama adapter"]
+        a3["remote adapter"]
+        a4["mlx adapter → model_host.HOST"]
+        s --> a1 & a2 & a3 & a4
+    end
+    B ~~~ A
+      </pre>
+    </div>
+
+    <div class="mt-5 text-sm text-slate-400 space-y-1.5">
+      <p><span class="text-slate-200 font-semibold">Benefits:</span> a prompt-format change lands in one place instead of ~9; live, CLI, grounding, and the future mission runtime call one thing; adapters become constructor-injectable so the counts/prompt logic is directly testable instead of reachable only through monkeypatched globals.</p>
+      <p><span class="text-slate-200 font-semibold">Adapter count:</span> 4–6 existing concrete transports — the strongest adapter-count evidence in either repo.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════ CANDIDATE 4 ══════════════ -->
+  <section class="card p-7 mb-10">
+    <div class="flex flex-wrap items-center gap-3 mb-1">
+      <span class="badge badge-strong">Strong</span>
+    </div>
+    <h2 class="text-xl font-bold text-slate-100 mt-2"><code class="text-base">live_engine.py</code> — the 2,727-line room where everything meets</h2>
+    <p class="text-sm text-slate-500 mono mt-1">C2 · live_engine.py:2282-2287 (globals), 1912-2273 (_run), 1942-1943+2480 (private reach-ins) · tests/test_live_engine.py</p>
+
+    <div class="mt-5 text-sm leading-relaxed text-slate-300 grid md:grid-cols-2 gap-6">
+      <div>
+        <h3 class="text-rose-400 font-bold text-xs uppercase tracking-wider mb-1.5">Problem</h3>
+        <p>Engine state lives in <strong>six module globals</strong> shared between the WS handler and the worker; ordering invariants are conventions enforced by comments, not by a module. The interface is not the test surface: the test fixture must monkeypatch all six globals, tests reach into <code>worker._jpeg_quality</code>, <code>worker._frame_lock</code>, and a private sentinel — and every test that could exercise the frame pipeline <em>replaces</em> it instead. The actual detect → triggers → events → capture → encode pipeline (<code>_run</code>) has <strong>zero coverage</strong> — exactly where SIMPLIFICATION_SPEC §3–§5 behavior lives. It also re-implements ~100 lines of <code>LiveSamTracker</code> semantics that have already drifted.</p>
+      </div>
+      <div>
+        <h3 class="text-emerald-400 font-bold text-xs uppercase tracking-wider mb-1.5">Solution</h3>
+        <p>A <code>LiveEngine</code> object: <code>start / apply(action, payload) / evidence_snapshot / subscribe / stop</code>. The three <code>_pending_*</code> globals become engine state; the WS handler shrinks to an adapter (validate → apply → render). An injectable source/sink makes the pipeline testable with fake frames. A dependency-free <code>TriggerEngine.update(items, ts) → events</code> folds the already-extracted zone/dwell/direction state machines.</p>
+      </div>
+    </div>
+
+    <div class="mt-6">
+      <div class="text-xs text-slate-400 font-bold uppercase tracking-wider mb-2">Mass diagram — what's fused inside 2,727 lines</div>
+      <div class="massbar">
+        <div class="massseg" style="width:16%;background:#7c2d12">WS handler ~450</div>
+        <div class="massseg" style="width:13%;background:#9a3412">worker pipeline ~350</div>
+        <div class="massseg" style="width:10%;background:#b45309">control validators ~260</div>
+        <div class="massseg" style="width:8%;background:#a16207">VLM watch ~220</div>
+        <div class="massseg" style="width:6%;background:#4d7c0f">clips ~160</div>
+        <div class="massseg" style="width:12%;background:#15803d">zones/trigger/capture ~330</div>
+        <div class="massseg" style="width:35%;background:#1e3a5f">ask/report · sinks · codec · uploads · config · status ~950</div>
+      </div>
+      <p class="text-xs text-slate-500 mt-1.5">Nine concepts, one module, six globals. The wire protocol is a fine interface — the missing module is the engine state machine behind it.</p>
+    </div>
+
+    <div class="adr-callout mt-5 p-4 text-sm">
+      <span class="font-bold text-amber-400">⚖ Judge conditioning (Ruling 1):</span>
+      <span class="text-amber-100/80">consuming <code>LiveSamTracker</code> from <code>live_engine</code> without editing it respects SIMPLIFICATION_SPEC's letter — but isn't free: the tracker still runs the cross-pass backbone cache the spec deliberately deleted from the engine, and the engine's thread-local SAM loads work around a real MLX GPU-Stream bug the tracker doesn't model. Consume <strong>only with injected thread-local <code>backbone_fn</code>/<code>detect_fn</code></strong>, or record a spec amendment first. Don't block the engine-object and testability work on this.</span>
+    </div>
+  </section>
+
+  <!-- ══════════════ CANDIDATE 5 ══════════════ -->
+  <section class="card p-7 mb-10">
+    <div class="flex flex-wrap items-center gap-3 mb-1">
+      <span class="badge badge-strong">Strong</span>
+    </div>
+    <h2 class="text-xl font-bold text-slate-100 mt-2">The web tier speaks to the pipeline in argv</h2>
+    <p class="text-sm text-slate-500 mono mt-1">C3 · web_app.py:334-597 (9 endpoints) · cli.py:275-737 (cmd_analyze), 882-1051 (argparse)</p>
+
+    <div class="grid md:grid-cols-2 gap-6 mt-5 text-sm leading-relaxed">
+      <div>
+        <h3 class="text-rose-400 font-bold text-xs uppercase tracking-wider mb-1.5">Problem</h3>
+        <p>Every job endpoint hand-builds <code>[python, "-u", "-m", "visionbrain", "analyze", …]</code>, mirroring argparse flag strings. The CLI's argparse block is a <strong>load-bearing wire protocol with no module behind it</strong>: renaming <code>--backbone-every</code> breaks the UI at runtime, not at import. Results come back as positional file paths and magic dict keys. <code>cmd_analyze</code> is a 462-line fused function whose only tests are <code>--help</code> smoke tests — the module is the wrong shape, so tests reach for argv.</p>
+      </div>
+      <div>
+        <h3 class="text-emerald-400 font-bold text-xs uppercase tracking-wider mb-1.5">Solution</h3>
+        <p>Typed options + structured results (<code>run_analyze(AnalyzeOptions) → AnalysisResult</code> — the shape <code>PilotReport</code> and <code>FrameScores.to_dict</code> already model successfully). CLI becomes an adapter (argparse → options → printer); web becomes a second adapter under the existing <code>JobQueue</code>. Phase 1 is the seam only — subprocess isolation stays (it's load-bearing for cancel/memory safety); in-process execution is a separately measured later step. This seam is also the natural home for CM-04's inference admission gate.</p>
+      </div>
+    </div>
+    <div class="mt-5 text-sm text-slate-400">
+      <p><span class="text-slate-200 font-semibold">Adapter count:</span> two real callers today (HTTP console, terminal CLI) — a real seam waiting to be named.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════ DO-NOW TRIO ══════════════ -->
+  <section class="card p-7 mb-10">
+    <div class="flex flex-wrap items-center gap-3 mb-1">
+      <span class="badge badge-explore">Worth exploring · cheap do-now batch</span>
+    </div>
+    <h2 class="text-xl font-bold text-slate-100 mt-2">Three small candidates the judge promoted to "do first"</h2>
+
+    <div class="mt-5 space-y-6 text-sm leading-relaxed">
+      <div class="grid md:grid-cols-2 gap-5">
+        <div>
+          <h3 class="text-slate-200 font-bold">Declare the dependency, reconcile the pins <span class="text-slate-500 font-normal mono text-xs">(C9)</span></h3>
+          <p class="text-slate-400 mt-1">The bridge boots only if <code>visionbrain</code> is importable, yet <code>bridge/pyproject.toml</code> doesn't declare it. CI installs <code>git main --no-deps</code> from <code>0-CYBERDYNE-SYSTEMS-0</code> while the field known-good file pins <code>farmfriend-labs/VisionBrain.git@75f34fe</code> — <strong class="text-rose-300">two different org slugs, two different provenances, no version handshake</strong> (<code>probe()</code> checks importability only). Do now: declare the floor, reconcile the sources. Next: carry <code>{contract_version, visionbrain_version, bridge_version}</code> in hello/status so a stale M2 checkout is a red test, not a field incident.</p>
+        </div>
+        <div class="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+          <div class="text-xs text-slate-500 font-bold uppercase tracking-wider mb-2">Three "pin stories" for one fact</div>
+          <pre class="mermaid">
+flowchart LR
+    CI["CI: git main<br/>--no-deps"] --> V["? what version<br/>of visionbrain?"]
+    KG["known-good file:<br/>farmfriend-labs@75f34fe"] --> V
+    M2["M2: editable checkout<br/>+ git banner script"] --> V
+          </pre>
+        </div>
+      </div>
+
+      <div class="divider pt-5 grid md:grid-cols-2 gap-5">
+        <div>
+          <h3 class="text-slate-200 font-bold">Delete <code>zones.py</code>'s ghost town; home the real triggers <span class="text-slate-500 font-normal mono text-xs">(C4)</span></h3>
+          <p class="text-slate-400 mt-1">Only <code>LineZoneCounter</code> has callers. <code>PolygonZoneCounter</code>, <code>ZoneManager</code>, <code>line_across_frame</code>, <code>rectangle_zone</code>: zero callers. <code>horizontal_line_zone</code> raises <code>NotImplementedError</code> under the comments <em>"Actually this should use height... let me fix"</em> / <em>"Wait, the function signature is wrong."</em> And line 17 imports supervision converters it never uses — silently dragging the MLX-side import graph into a module that should be dependency-free. Move the <em>actually-used</em> state machines (<code>RectZone</code>/<code>DwellTracker</code>/<code>DirectionTriggerState</code>) out of <code>live_engine</code> into that home. An afternoon; pure deletion plus immediate locality.</p>
+        </div>
+        <div>
+          <h3 class="text-slate-200 font-bold">Stop string-slicing the browser <span class="text-slate-500 font-normal mono text-xs">(C6)</span></h3>
+          <p class="text-slate-400 mt-1"><code>test_live_simplification_client_pins</code> tests the UI by <code>html.split("function liveMasksChange",1)</code>-style source slicing, and the 8-way direction vocabulary is declared twice (JS options at index.html:582, <code>_DIRECTION_VALUES</code> at live_engine.py:631). Replace with: single-sourced vocabulary, one WS round-trip contract test (client-equivalent JSON in, wire frames out), and real browser checks at the CM-08 gate. <span class="text-amber-300">Judge caveat:</span> the slicing pins are currently the <em>only</em> guard on SIMPLIFICATION_SPEC §1/2/6 client behavior — replace before deleting.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ TARGET ARCHITECTURE ══════════════ -->
+  <section class="card p-7 mb-10">
+    <div class="flex flex-wrap items-center gap-3 mb-1">
+      <span class="badge badge-spec">Design-it-twice ruling</span>
+    </div>
+    <h2 class="text-xl font-bold text-slate-100 mt-2">Target architecture: Runtime Host, delivered through a contract package</h2>
+    <p class="text-sm text-slate-500 mono mt-1">C10 · three genuinely different end-states evaluated</p>
+
+    <div class="mt-5 overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="text-xs text-slate-500 uppercase tracking-wider border-b border-slate-800">
+          <tr><th class="text-left px-3 py-2">Criterion (1–5)</th><th class="text-center px-3 py-2">A · Runtime Host<br><span class="normal-case font-normal text-slate-500">faithful CM-00</span></th><th class="text-center px-3 py-2">B · Monorepo<br><span class="normal-case font-normal text-slate-500">workspace packages</span></th><th class="text-center px-3 py-2">C · Contract-First SDK<br><span class="normal-case font-normal text-slate-500">versioned wire artifact</span></th></tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800/60 text-slate-300">
+          <tr><td class="px-3 py-2">Depth of shared seam</td><td class="text-center font-bold text-emerald-400">5</td><td class="text-center">4</td><td class="text-center">3</td></tr>
+          <tr><td class="px-3 py-2">Locality for cross-repo changes</td><td class="text-center text-rose-400">2</td><td class="text-center font-bold text-emerald-400">5</td><td class="text-center">3</td></tr>
+          <tr><td class="px-3 py-2">Migration cost (5 = cheapest)</td><td class="text-center font-bold text-emerald-400">5</td><td class="text-center text-rose-400">1</td><td class="text-center">4</td></tr>
+          <tr><td class="px-3 py-2">Alignment with existing specs</td><td class="text-center font-bold text-emerald-400">5 — it <em>is</em> CM-00</td><td class="text-center">3 — reopens pacing</td><td class="text-center">3 — reopens CM-00 #1</td></tr>
+          <tr><td class="px-3 py-2">Testability</td><td class="text-center">4</td><td class="text-center font-bold text-emerald-400">5</td><td class="text-center">4</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="mt-5 text-sm leading-relaxed text-slate-300 space-y-3">
+      <p><strong class="text-slate-100">Ruling (jury C proposed, judge upheld):</strong> target <strong>A — the mission runtime hosted inside the bridge process</strong>, exactly as NEXT_DEVELOPMENT_SPEC CM-00 already proposes — the bridge keeps capture/transport/archive and shrinks to adapters; the visionbrain runtime owns mission state and decisions. Execute CM-02 as <strong>C's first steps</strong>: a dependency-free contract module with golden fixtures consumed by pytest and Kotlin conformance tests (no codegen in v1 — hand-maintained Kotlin against shared fixtures; revisit codegen only after a second dialect-drift incident).</p>
+      <p><strong class="text-slate-100">B is not rejected — it's shelved with a written trigger.</strong> Revisit the monorepo when <em>any two</em> of: (i) a second cross-repo contract breakage despite fixtures, (ii) recurring same-commit cross-repo changes to <code>mission_runtime</code>/<code>mission_store</code>, (iii) packaging drift recurring after the dependency-declaration fix. Signal already visible: the repos cross-link each other via <code>../visionBrain-bridge/</code> — a path that doesn't match the actual directory case.</p>
+      <p><strong class="text-slate-100">The structural gap A leaves open:</strong> "importable without MLX" is currently a <em>convention</em> (lazy imports), not a <em>packaging fact</em> — <code>pip install visionbrain</code> drags fastapi/opencv/supervision, and one careless top-level <code>import mlx_vlm</code> breaks the field host boot (it already happened once; a CI commit patched around it). The contract package + a CI bare-venv import job turns the convention into a guarantee. This is the single most load-bearing fix for everything CM-00 promises.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════ SEQUENCING ══════════════ -->
+  <section class="card p-7 mb-10">
+    <h2 class="text-xl font-bold text-slate-100">Sequencing — every step shippable</h2>
+    <div class="mt-6 space-y-6 text-sm">
+      <div class="timeline-item">
+        <div class="font-bold text-slate-200">0 · Reconcile the uncommitted work <span class="text-xs text-slate-500 mono">hard spec mandate</span></div>
+        <p class="text-slate-400 mt-1">Both trees are dirty (VisionBrain: 12 modified files including live_engine/cli/web_app/index.html; bridge: 3 including protocol.py). Record paired baseline commits. This is CM-00's input.</p>
+      </div>
+      <div class="timeline-item">
+        <div class="font-bold text-slate-200">1 · Ratify CM-00 <span class="text-xs text-slate-500 mono">gates all parallel work</span></div>
+        <p class="text-slate-400 mt-1">Record the monorepo shelf-trigger and the conditional tracker-consumption ruling in the decision record.</p>
+      </div>
+      <div class="timeline-item">
+        <div class="font-bold text-slate-200">2 · Do-now batch <span class="text-xs text-slate-500 mono">under CM-01 review</span></div>
+        <p class="text-slate-400 mt-1">Declare the bridge→visionbrain dependency + reconcile install sources (C9a) · delete zones.py dead weight and home the triggers (C4) · single-source the direction vocabulary (C6a).</p>
+      </div>
+      <div class="timeline-item">
+        <div class="font-bold text-slate-200">3 · CM-02: the wire contract module + golden fixtures <span class="text-xs text-slate-500 mono">rank #1</span></div>
+        <p class="text-slate-400 mt-1">Python contract definitions + fixture corpus (Python/Kotlin), folding in the capability fix (emit or delete <code>polygon_q16.v1</code>), one detections dialect, aligned hello/negotiation.</p>
+      </div>
+      <div class="timeline-item">
+        <div class="font-bold text-slate-200">4 · After the CM-02 freeze, in parallel</div>
+        <p class="text-slate-400 mt-1">Live-loop ask/report consolidation + one error dialect (C8+C5) · pipeline options/result seam (C3) · reasoner seam behind <code>model_host.HOST</code> (C1).</p>
+      </div>
+      <div class="timeline-item">
+        <div class="font-bold text-slate-200">5 · Engine object + testable frame pipeline (C2)</div>
+        <p class="text-slate-400 mt-1">As the local-mode counterpart to CM-05/06; tracker consumption only per Ruling 1. The C6 browser harness replaces — not supplements — the string-slicing pins at the CM-08 UI gate.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ TOP RECOMMENDATION ══════════════ -->
+  <section class="rounded-2xl border border-sky-800/60 bg-gradient-to-br from-sky-950/60 to-slate-900 p-7 mb-6">
+    <h2 class="text-xl font-bold text-sky-300">Top recommendation</h2>
+    <p class="mt-3 text-sm leading-relaxed text-slate-300">
+      <strong class="text-slate-100">Make the wire contract a real module in the visionbrain package, proved by one golden fixture corpus (C7)</strong> — preceded by the do-now batch (C9's dependency declaration, C4's deletion, C6's vocabulary single-sourcing), which gates nothing and takes a day.
+    </p>
+    <p class="mt-3 text-sm leading-relaxed text-slate-300">
+      Why this first: it has the highest measured blast radius (five codec implementations in three languages; one wire change already cost six files in one repo while parallel machinery existed in the other), it is <strong>exactly CM-02's mandate stated as code</strong>, and everything later — the mission runtime, CM-05's clients, the versioned handshake — is built on top of it. It converts the partnership's riskiest knowledge from prose in AGENTS.md into a fixture-tested interface <em>before</em> CM-05/CM-08 build more clients on the wire. The friction is not hypothetical: a capability is advertised and parsed by three implementations and emitted by none; the dashboard carries a fossil fallback for a dialect split that should not exist; and the only version "handshake" today is a shell banner on the M2.
+    </p>
+    <p class="mt-3 text-sm leading-relaxed text-slate-300">
+      One sentence verdict on the partnership itself: <strong class="text-slate-100">the two-repo deployment split is earning its keep; the seam between them — currently maintained by prose — is not.</strong> Land the contract module and the monorepo question becomes a CI/HR decision, not an architectural one.
+    </p>
+  </section>
+
+  <footer class="text-xs text-slate-600 pb-8">
+    Method: 3 independent jury sub-agents (core seams · two-repo seam · design-it-twice) → 1 judge pass verifying claims against source. No files were modified. Per the improve-codebase-architecture skill, no interfaces are proposed yet — pick a candidate to explore.
+  </footer>
+</div>
+</body>
+</html>

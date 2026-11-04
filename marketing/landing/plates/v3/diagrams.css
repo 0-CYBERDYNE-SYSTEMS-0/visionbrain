@@ -1,0 +1,29 @@
+/* ============================================================================
+   v3 · plate legibility at phone widths
+   ----------------------------------------------------------------------------
+   Each plate is 1120 user units wide. At a 390px viewport the page measure is
+   342px, so a plate is drawn at ~0.305x — which renders 12.5px IBM Plex Mono as
+   ~3.8px. The text is present, uncollided and contrast-compliant, but it is
+   texture rather than readable text. That is a real defect on a page whose
+   diagram labels carry the argument.
+
+   The page already solves exactly this problem for its data table
+   (.measure { overflow-x: auto } inside the <=900px query). The plates get the
+   same treatment: below 760px the drawing keeps a legible size and the container
+   scrolls, instead of the whole plate shrinking into illegibility.
+
+   Chosen width 700px: 700/1120 = 0.625x, so 12.5px mono renders at ~7.8px and
+   15px labels at ~9.4px — the smallest sizes that still read as text.
+   The overflow is contained by .diagram, so page-level horizontal overflow
+   stays at 0 (verified at 390/768/1440).
+   ============================================================================ */
+@media (max-width: 760px) {
+  .diagram {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .diagram svg {
+    width: 700px;
+    min-width: 700px;
+  }
+}

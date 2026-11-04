@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VisionBrain — clay terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #121110;
+    --bg-2: #1a1816;
+    --bg-3: #221f1c;
+    --ink: #ece7df;
+    --ink-2: #9a9388;
+    --ink-3: #6a645c;
+    --line: #2c2926;
+    --fig: #e8b86a;
+    --clay: #c56a45;
+    --clay-2: #e08a62;
+    --clay-3: #8f472e;
+    --ok: #86a07a;
+    --sw-bg: #111;
+    --sw-fg: #f4f1ea;
+    --sans: "IBM Plex Sans", sans-serif;
+    --cond: "IBM Plex Sans Condensed", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+    --r: 10px;
+    --e: cubic-bezier(.2,0,0,1);
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body { background: #0c0b0a; color: var(--ink); font-family: var(--sans); font-size: 13px; }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  img { display: block; max-width: 100%; }
+  .variant { display: none; min-height: 100vh; padding-bottom: 72px; }
+  .variant.is-on { display: block; }
+  :focus-visible { outline: 2px solid var(--clay); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+
+  #proto-switch {
+    position: fixed; z-index: 9999; left: 50%; bottom: 14px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px;
+    background: var(--sw-bg); color: var(--sw-fg);
+    border: 2px solid #fff; border-radius: 999px; padding: 7px 12px;
+    font: 700 12px/1 ui-sans-serif, "Helvetica Neue", sans-serif;
+    box-shadow: 0 10px 30px rgba(0,0,0,.5);
+  }
+  #proto-switch button {
+    background: #fff; color: #000; border: 0; width: 28px; height: 28px; border-radius: 50%; font-weight: 800;
+  }
+  #proto-label { min-width: 200px; text-align: center; white-space: nowrap; }
+
+  .marks { position: absolute; inset: 0; }
+  .box {
+    position: absolute; border: 1px solid var(--fig); background: transparent; padding: 0; color: var(--fig);
+  }
+  .box span {
+    position: absolute; left: 0; top: -15px; font-family: var(--mono); font-size: 10px;
+    letter-spacing: .04em; padding: 1px 5px; background: rgba(18,17,16,.85); color: var(--fig); white-space: nowrap;
+  }
+
+  .kbar { display: flex; gap: 4px; }
+  .kbar button {
+    background: var(--bg-3); border: 0; color: var(--ink-2); padding: 6px 10px;
+    font-family: var(--cond); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    border-radius: 6px;
+    box-shadow: 3px 4px 0 rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.06);
+  }
+  .kbar button[aria-pressed="true"] {
+    color: var(--bg); background: var(--clay);
+    box-shadow: 1px 1px 0 rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.2);
+  }
+
+  .ck {
+    display: flex; flex-direction: column; align-items: center; gap: 6px; width: 72px;
+  }
+  .ck input { width: 72px; accent-color: var(--clay); height: 4px; }
+  .ck-dial {
+    width: 52px; height: 52px; border-radius: 50%;
+    background: linear-gradient(145deg, var(--clay-2), var(--clay) 42%, var(--clay-3));
+    box-shadow:
+      5px 8px 14px rgba(40,18,10,.4),
+      inset 0 1px 0 rgba(255,255,255,.28),
+      inset 0 -4px 8px rgba(0,0,0,.2);
+    position: relative;
+  }
+  .ck-dial i {
+    position: absolute; left: 50%; top: 7px; width: 2px; height: 14px; margin-left: -1px;
+    background: #f4ece4; border-radius: 1px;
+    transform-origin: 50% 19px; transform: rotate(var(--a, 40deg));
+  }
+  .ck-name, .cs-name {
+    font-family: var(--cond); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .ck-val, .cs-val { font-family: var(--mono); font-size: 11px; color: var(--fig); font-variant-numeric: tabular-nums; }
+
+  .cs { display: flex; flex-direction: column; gap: 6px; min-width: 120px; }
+  .cs input[type="range"] {
+    width: 100%; height: 8px; appearance: none; background: var(--bg);
+    border-radius: 99px; box-shadow: inset 0 2px 4px rgba(0,0,0,.45);
+  }
+  .cs input[type="range"]::-webkit-slider-thumb {
+    appearance: none; width: 18px; height: 18px; border-radius: 50%;
+    background: linear-gradient(145deg, var(--clay-2), var(--clay-3));
+    box-shadow: 2px 3px 6px rgba(40,18,10,.4), inset 0 1px 0 rgba(255,255,255,.3);
+    border: 0;
+  }
+
+  .cmd {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 0 12px;
+  }
+  .cmd em {
+    font-style: normal; font-family: var(--cond); font-size: 10px; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  .cmd input {
+    flex: 1; background: transparent; border: 0; padding: 10px 0;
+    font-family: var(--mono); font-size: 13px; color: var(--ink);
+  }
+
+  .fig { font-family: var(--mono); font-size: 22px; color: var(--fig); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .lbl { font-family: var(--cond); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); }
+  .spark { display: block; width: 100%; height: 28px; }
+
+  .sheet { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+  .sheet th {
+    text-align: left; font-family: var(--cond); font-weight: 600; font-size: 10px;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3);
+    padding: 6px 8px; border-bottom: 1px solid var(--line);
+  }
+  .sheet td { padding: 7px 8px; border-bottom: 1px solid var(--line); color: var(--ink-2); }
+  .sheet tr.is-on td { color: var(--ink); background: rgba(197,106,69,.08); }
+  .sheet .id { color: var(--fig); }
+  .sheet .ok { color: var(--ok); }
+
+  /* 1 LEDGER */
+  #v1 { background: var(--bg); }
+  #v1 .app { display: grid; grid-template-rows: 48px 1fr 108px; height: calc(100vh - 72px); }
+  #v1 .top {
+    display: flex; align-items: center; justify-content: space-between; padding: 0 20px;
+    border-bottom: 1px solid var(--line);
+  }
+  #v1 .brand { font-family: var(--cond); letter-spacing: .2em; font-size: 12px; text-transform: uppercase; }
+  #v1 .work { display: grid; grid-template-columns: 1fr 320px; min-height: 0; }
+  #v1 .well { position: relative; background: #000; }
+  #v1 .well img { width: 100%; height: 100%; object-fit: cover; }
+  #v1 .side { border-left: 1px solid var(--line); padding: 12px 0; overflow: auto; background: var(--bg-2); }
+  #v1 .side h2 { margin: 0; padding: 4px 16px 10px; font-size: 11px; font-weight: 500; }
+  #v1 .dock {
+    display: grid; grid-template-columns: repeat(3, 80px) 1fr; gap: 12px; align-items: center;
+    padding: 14px 20px; border-top: 1px solid var(--line); background: var(--bg-2);
+  }
+
+  /* 2 MIXER */
+  #v2 { background: var(--bg); }
+  #v2 .app { display: grid; grid-template-rows: 1fr 168px; height: calc(100vh - 72px); }
+  #v2 .well { position: relative; background: #000; }
+  #v2 .well img { width: 100%; height: 100%; object-fit: cover; }
+  #v2 .hud {
+    position: absolute; top: 14px; left: 16px; right: 16px;
+    display: flex; justify-content: space-between; align-items: flex-start; pointer-events: none;
+  }
+  #v2 .hud .kbar { pointer-events: auto; }
+  #v2 .strips {
+    display: grid; grid-template-columns: repeat(5, 1fr) 88px; gap: 1px; background: var(--line);
+    border-top: 1px solid var(--line);
+  }
+  #v2 .ch {
+    background: var(--bg-2); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
+  }
+  #v2 .ch .fig { font-size: 18px; }
+  #v2 .master { background: var(--bg-3); display: flex; align-items: center; justify-content: center; }
+
+  /* 3 PAPER */
+  #v3 {
+    --bg: #efe8de; --bg-2: #f6f1ea; --bg-3: #e6ddd2; --ink: #1c1916; --ink-2: #5a544c;
+    --ink-3: #8a8278; --line: #d8cfc4; --fig: #b5522c; --ok: #4f6d48;
+    background: var(--bg); color: var(--ink);
+  }
+  #v3 .app { max-width: 1180px; margin: 0 auto; padding: 28px 28px 0; display: grid; gap: 16px; }
+  #v3 .top { display: flex; justify-content: space-between; align-items: baseline; }
+  #v3 .brand { font-family: var(--cond); letter-spacing: .22em; text-transform: uppercase; font-size: 13px; }
+  #v3 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); }
+  #v3 .stat { background: var(--bg-2); padding: 12px 14px; }
+  #v3 .well { position: relative; background: #111; border-radius: 12px; overflow: hidden; height: 46vh;
+    box-shadow: 8px 14px 28px rgba(80,50,30,.12), inset 0 0 0 1px rgba(0,0,0,.2); }
+  #v3 .well img { width: 100%; height: 100%; object-fit: cover; }
+  #v3 .well .box { color: #e8b86a; }
+  #v3 .well .box span { background: rgba(18,17,16,.8); color: #e8b86a; }
+  #v3 .dock {
+    display: flex; gap: 18px; align-items: center; background: var(--bg-2); padding: 16px 18px;
+    border-radius: 14px; box-shadow: 6px 10px 20px rgba(80,50,30,.1), inset 0 1px 0 #fff;
+  }
+  #v3 .cmd { background: #fff; border-color: var(--line); flex: 1; }
+  #v3 .kbar button { background: #fff; color: var(--ink-2); box-shadow: 3px 4px 0 rgba(80,50,30,.12), inset 0 1px 0 #fff; }
+  #v3 .kbar button[aria-pressed="true"] { background: var(--clay); color: #fff; }
+
+  /* 4 LADDER */
+  #v4 { background: var(--bg); }
+  #v4 .app { display: grid; grid-template-columns: 220px 1fr 220px; grid-template-rows: 48px 1fr 100px; height: calc(100vh - 72px); }
+  #v4 .top { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--line); }
+  #v4 .lad { background: var(--bg-2); overflow: auto; }
+  #v4 .lad h2 { margin: 0; padding: 10px 12px; font-size: 11px; }
+  #v4 .rung {
+    display: grid; grid-template-columns: 1fr auto; padding: 6px 12px; font-family: var(--mono); font-size: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  #v4 .rung b { color: var(--fig); font-weight: 500; }
+  #v4 .well { position: relative; background: #000; }
+  #v4 .well img { width: 100%; height: 100%; object-fit: cover; }
+  #v4 .dock { grid-column: 1 / -1; display: flex; gap: 16px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--bg-2); }
+  #v4 .cmd { flex: 1; }
+
+  /* 5 KEYS */
+  #v5 { background: var(--bg); }
+  #v5 .app { display: grid; grid-template-rows: 1fr auto auto; height: calc(100vh - 72px); }
+  #v5 .well { position: relative; background: #000; }
+  #v5 .well img { width: 100%; height: 100%; object-fit: cover; }
+  #v5 .meta {
+    display: grid; grid-template-columns: repeat(4, 1fr) 1fr; gap: 0; border-top: 1px solid var(--line); background: var(--bg-2);
+  }
+  #v5 .meta > div { padding: 10px 16px; border-right: 1px solid var(--line); }
+  #v5 .fkeys {
+    display: grid; grid-template-columns: repeat(12, 1fr); gap: 6px; padding: 10px 12px; background: var(--bg-3);
+  }
+  #v5 .fkeys button {
+    background: var(--bg-2); border: 0; color: var(--ink-2); padding: 10px 0 8px; border-radius: 8px;
+    font-family: var(--cond); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+    box-shadow: 3px 4px 0 rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.06);
+  }
+  #v5 .fkeys button small { display: block; color: var(--ink-3); font-size: 9px; letter-spacing: .14em; margin-bottom: 4px; }
+  #v5 .fkeys button[aria-pressed="true"], #v5 .fkeys button.on {
+    background: var(--clay); color: var(--bg);
+    box-shadow: 1px 1px 0 rgba(0,0,0,.4);
+  }
+  #v5 .fkeys button[aria-pressed="true"] small, #v5 .fkeys button.on small { color: rgba(18,17,16,.7); }
+  #v5 .knobs { display: flex; gap: 10px; padding: 8px 16px 12px; background: var(--bg-2); align-items: center; }
+  #v5 .cmd { flex: 1; }
+
+  /* 6 OVERLAY */
+  #v6 { background: #000; }
+  #v6 .well { position: relative; height: calc(100vh - 72px); }
+  #v6 .well img { width: 100%; height: 100%; object-fit: cover; }
+  #v6 .float {
+    position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%);
+    width: min(920px, calc(100% - 40px));
+    background: rgba(18,17,16,.82); backdrop-filter: blur(10px);
+    border: 1px solid rgba(236,231,223,.12); border-radius: 16px;
+    padding: 14px 16px; display: grid; grid-template-columns: auto 1fr auto; gap: 16px; align-items: center;
+  }
+  #v6 .nums { display: flex; gap: 18px; }
+  #v6 .nums .fig { font-size: 20px; }
+  #v6 .slats { display: flex; gap: 14px; }
+  #v6 .top6 {
+    position: absolute; top: 16px; left: 18px; right: 18px; display: flex; justify-content: space-between;
+  }
+
+  /* 7 QUAD */
+  #v7 { background: var(--bg); }
+  #v7 .app { padding: 16px 16px 0; display: grid; grid-template-columns: 2fr 1fr 1fr; grid-template-rows: 1fr 1fr auto; gap: 8px; height: calc(100vh - 88px); }
+  #v7 .cell {
+    background: var(--bg-2); border-radius: 12px; overflow: hidden; min-height: 0;
+    box-shadow: 4px 6px 0 rgba(0,0,0,.25);
+  }
+  #v7 .cell h2 {
+    margin: 0; padding: 8px 12px; font-family: var(--cond); font-size: 10px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--line);
+  }
+  #v7 .hero { grid-row: 1 / 3; position: relative; background: #000; }
+  #v7 .hero img { width: 100%; height: 100%; object-fit: cover; }
+  #v7 .list { padding: 8px 0; overflow: auto; }
+  #v7 .pad { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  #v7 .dock { grid-column: 1 / -1; display: flex; gap: 14px; align-items: center; background: var(--bg-2); padding: 12px 14px; border-radius: 12px; }
+
+  /* 8 MONOLITH */
+  #v8 { background: var(--bg); }
+  #v8 .app {
+    height: calc(100vh - 72px); display: grid; grid-template-rows: auto 1fr auto;
+    max-width: 1080px; margin: 0 auto; padding: 24px 24px 0;
+  }
+  #v8 .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  #v8 .nums { display: flex; gap: 28px; }
+  #v8 .well {
+    position: relative; background: #000; border-radius: 16px; overflow: hidden; min-height: 0;
+    box-shadow: 0 20px 40px rgba(0,0,0,.35);
+  }
+  #v8 .well img { width: 100%; height: 100%; object-fit: cover; }
+  #v8 .dock { display: flex; gap: 20px; align-items: center; padding: 18px 0 8px; }
+  #v8 .cmd { flex: 1; background: var(--bg-2); }
+</style>
+</head>
+<body>
+
+<div id="v1" class="variant" data-name="Ledger">
+  <div class="app">
+    <div class="top">
+      <div class="brand">VisionBrain</div>
+      <div class="kbar">
+        <button type="button" data-job="film" aria-pressed="true">Film</button>
+        <button type="button" data-job="still" aria-pressed="false">Still</button>
+        <button type="button" data-job="live" aria-pressed="false">Live</button>
+      </div>
+      <div class="fig" id="l-fig">18</div>
+    </div>
+    <div class="work">
+      <div class="well">
+        <img id="l-img" alt="Video well" src="plaza.jpg">
+        <div class="marks" id="l-marks"></div>
+      </div>
+      <aside class="side">
+        <h2 class="lbl">Watchlist</h2>
+        <table class="sheet">
+          <thead><tr><th>Id</th><th>Name</th><th>Conf</th><th></th></tr></thead>
+          <tbody id="l-rows"></tbody>
+        </table>
+      </aside>
+    </div>
+    <div class="dock">
+      <label class="ck"><span class="ck-dial" style="--a:50deg"><i></i></span><span class="ck-name">Thresh</span><span class="ck-val">0.15</span><input type="range" min="1" max="50" value="15" data-knob></label>
+      <label class="ck"><span class="ck-dial" style="--a:90deg"><i></i></span><span class="ck-name">Every</span><span class="ck-val">2f</span><input type="range" min="1" max="10" value="2" data-knob></label>
+      <label class="ck"><span class="ck-dial" style="--a:130deg"><i></i></span><span class="ck-name">Res</span><span class="ck-val">1008</span><input type="range" min="0" max="2" value="2" data-knob></label>
+      <form class="cmd" data-hold><em>Query</em><input type="text" value="people and vehicles in the square" aria-label="Query"></form>
+    </div>
+  </div>
+</div>
+
+<div id="v2" class="variant" data-name="Mixer">
+  <div class="app">
+    <div class="well">
+      <img id="m-img" alt="Video" src="plaza.jpg">
+      <div class="marks" id="m-marks"></div>
+      <div class="hud">
+        <div class="kbar">
+          <button type="button" data-job="film" aria-pressed="true">Film</button>
+          <button type="button" data-job="still" aria-pressed="false">Still</button>
+          <button type="button" data-job="live" aria-pressed="false">Live</button>
+        </div>
+        <div>
+          <div class="lbl">In frame</div>
+          <div class="fig" id="m-fig">18</div>
+        </div>
+      </div>
+    </div>
+    <div class="strips">
+      <div class="ch"><span class="lbl">Find</span><span class="fig" id="m-p">18</span><label class="cs"><input type="range" value="78"><span class="cs-val">78</span></label></div>
+      <div class="ch"><span class="lbl">Mask</span><span class="fig">—</span><label class="cs"><input type="range" value="22"><span class="cs-val">22</span></label></div>
+      <div class="ch"><span class="lbl">Read</span><span class="fig">0</span><label class="cs"><input type="range" value="10"><span class="cs-val">10</span></label></div>
+      <div class="ch"><span class="lbl">Track</span><span class="fig" id="m-v">2</span><label class="cs"><input type="range" value="64"><span class="cs-val">64</span></label></div>
+      <div class="ch">
+        <span class="lbl">Query</span>
+        <form class="cmd" data-hold style="padding:0"><input type="text" value="people and vehicles" aria-label="Query"></form>
+        <svg class="spark" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="#e8b86a" stroke-width="1.5" points="0,20 10,18 20,14 30,16 40,10 50,12 60,8 70,14 80,9 90,11 100,7 110,12 120,10"/></svg>
+      </div>
+      <div class="master">
+        <label class="ck"><span class="ck-dial" style="--a:70deg"><i></i></span><span class="ck-name">Master</span><input type="range" min="1" max="100" value="70" data-knob></label>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="v3" class="variant" data-name="Paper">
+  <div class="app">
+    <div class="top">
+      <div class="brand">VisionBrain</div>
+      <div class="kbar">
+        <button type="button" data-job="film" aria-pressed="true">Film</button>
+        <button type="button" data-job="still" aria-pressed="false">Still</button>
+        <button type="button" data-job="live" aria-pressed="false">Live</button>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="lbl">People</div><div class="fig" id="p-p">18</div></div>
+      <div class="stat"><div class="lbl">Vehicles</div><div class="fig" id="p-v">2</div></div>
+      <div class="stat"><div class="lbl">Tracks</div><div class="fig" id="p-t">8</div></div>
+      <div class="stat"><div class="lbl">Hold</div><div class="fig">0.15</div></div>
+    </div>
+    <div class="well">
+      <img id="p-img" alt="Print well" src="plaza.jpg">
+      <div class="marks" id="p-marks"></div>
+    </div>
+    <div class="dock">
+      <label class="ck"><span class="ck-dial" style="--a:50deg"><i></i></span><span class="ck-name">Thresh</span><input type="range" min="1" max="50" value="15" data-knob></label>
+      <label class="ck"><span class="ck-dial" style="--a:100deg"><i></i></span><span class="ck-name">Every</span><input type="range" min="1" max="10" value="2" data-knob></label>
+      <label class="cs" style="width:160px"><span class="cs-name">Gain</span><input type="range" value="60"><span class="cs-val">60</span></label>
+      <form class="cmd" data-hold><em>Ask</em><input type="text" value="people and vehicles in the square" aria-label="Query"></form>
+    </div>
+  </div>
+</div>
+
+<div id="v4" class="variant" data-name="Ladder">
+  <div class="app">
+    <div class="top">
+      <div class="brand" style="font-family:var(--cond);letter-spacing:.18em;text-transform:uppercase;font-size:12px">VisionBrain</div>
+      <div class="kbar">
+        <button type="button" data-job="film" aria-pressed="true">Film</button>
+        <button type="button" data-job="still" aria-pressed="false">Still</button>
+        <button type="button" data-job="live" aria-pressed="false">Live</button>
+      </div>
+    </div>
+    <div class="lad" id="lad-l"><h2 class="lbl">People</h2></div>
+    <div class="well">
+      <img id="d-img" alt="Video" src="plaza.jpg">
+      <div class="marks" id="d-marks"></div>
+    </div>
+    <div class="lad" id="lad-r"><h2 class="lbl">Vehicles</h2></div>
+    <div class="dock">
+      <label class="ck"><span class="ck-dial" style="--a:40deg"><i></i></span><span class="ck-name">Size</span><input type="range" min="1" max="100" value="40" data-knob></label>
+      <label class="ck"><span class="ck-dial" style="--a:80deg"><i></i></span><span class="ck-name">Thresh</span><input type="range" min="1" max="50" value="15" data-knob></label>
+      <form class="cmd" data-hold><em>Instrument</em><input type="text" value="people and vehicles" aria-label="Query"></form>
+    </div>
+  </div>
+</div>
+
+<div id="v5" class="variant" data-name="Keys">
+  <div class="app">
+    <div class="well">
+      <img id="k-img" alt="Video" src="plaza.jpg">
+      <div class="marks" id="k-marks"></div>
+    </div>
+    <div class="meta">
+      <div><div class="lbl">People</div><div class="fig" id="k-p">18</div></div>
+      <div><div class="lbl">Vehicles</div><div class="fig" id="k-v">2</div></div>
+      <div><div class="lbl">Frame</div><div class="fig">01:14</div></div>
+      <div><div class="lbl">Conf</div><div class="fig">0.86</div></div>
+      <div style="display:flex;align-items:center">
+        <form class="cmd" data-hold style="width:100%;border:0;background:transparent"><em>Query</em><input type="text" value="people and vehicles in the square" aria-label="Query"></form>
+      </div>
+    </div>
+    <div>
+      <div class="fkeys">
+        <button type="button" data-job="film" aria-pressed="true"><small>F1</small>Film</button>
+        <button type="button" data-job="still" aria-pressed="false"><small>F2</small>Still</button>
+        <button type="button" data-job="live" aria-pressed="false"><small>F3</small>Live</button>
+        <button type="button" class="on"><small>F4</small>Find</button>
+        <button type="button"><small>F5</small>Mask</button>
+        <button type="button"><small>F6</small>Read</button>
+        <button type="button"><small>F7</small>Track</button>
+        <button type="button"><small>F8</small>Report</button>
+        <button type="button"><small>F9</small>Zones</button>
+        <button type="button"><small>F10</small>OCR</button>
+        <button type="button"><small>F11</small>Export</button>
+        <button type="button"><small>F12</small>Help</button>
+      </div>
+      <div class="knobs">
+        <label class="ck"><span class="ck-dial" style="--a:55deg"><i></i></span><span class="ck-name">Thresh</span><input type="range" min="1" max="50" value="15" data-knob></label>
+        <label class="ck"><span class="ck-dial" style="--a:110deg"><i></i></span><span class="ck-name">Every</span><input type="range" min="1" max="10" value="2" data-knob></label>
+        <label class="cs" style="flex:1"><span class="cs-name">Sensitivity</span><input type="range" value="62"><span class="cs-val">62</span></label>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="v6" class="variant" data-name="Overlay">
+  <div class="well">
+    <img id="o-img" alt="Video" src="plaza.jpg">
+    <div class="marks" id="o-marks"></div>
+    <div class="top6">
+      <div class="kbar">
+        <button type="button" data-job="film" aria-pressed="true">Film</button>
+        <button type="button" data-job="still" aria-pressed="false">Still</button>
+        <button type="button" data-job="live" aria-pressed="false">Live</button>
+      </div>
+      <div class="lbl" style="color:var(--ink)">VisionBrain</div>
+    </div>
+    <div class="float">
+      <div class="nums">
+        <div><div class="lbl">People</div><div class="fig" id="o-p">18</div></div>
+        <div><div class="lbl">Vehicles</div><div class="fig" id="o-v">2</div></div>
+      </div>
+      <div class="slats">
+        <label class="cs"><span class="cs-name">Find</span><input type="range" value="74"><span class="cs-val">74</span></label>
+        <label class="cs"><span class="cs-name">Track</span><input type="range" value="58"><span class="cs-val">58</span></label>
+      </div>
+      <div style="display:flex;gap:12px;align-items:center">
+        <label class="ck"><span class="ck-dial" style="--a:60deg"><i></i></span><span class="ck-name">Thresh</span><input type="range" min="1" max="50" value="15" data-knob></label>
+        <form class="cmd" data-hold style="width:220px"><input type="text" value="people and vehicles" aria-label="Query"></form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="v7" class="variant" data-name="Quad">
+  <div class="app">
+    <div class="cell hero">
+      <img id="q-img" alt="Main" src="plaza.jpg">
+      <div class="marks" id="q-marks"></div>
+    </div>
+    <div class="cell">
+      <h2>Tracks</h2>
+      <div class="list"><table class="sheet"><tbody id="q-rows"></tbody></table></div>
+    </div>
+    <div class="cell pad">
+      <h2 style="border:0;padding:0">People</h2>
+      <div class="fig" id="q-p">18</div>
+      <svg class="spark" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true"><polyline fill="none" stroke="#e8b86a" stroke-width="1.5" points="0,18 15,16 30,12 45,14 60,8 75,10 90,6 105,11 120,9"/></svg>
+    </div>
+    <div class="cell pad">
+      <h2 style="border:0;padding:0">Note</h2>
+      <p id="q-note" style="margin:0;color:var(--ink-2);line-height:1.45">People occupy the square in small groups. Two vehicles remain at the south curb.</p>
+    </div>
+    <div class="cell pad">
+      <h2 style="border:0;padding:0">Vehicles</h2>
+      <div class="fig" id="q-v">2</div>
+      <label class="cs"><span class="cs-name">Hold</span><input type="range" value="40"><span class="cs-val">40</span></label>
+    </div>
+    <div class="dock">
+      <div class="kbar">
+        <button type="button" data-job="film" aria-pressed="true">Film</button>
+        <button type="button" data-job="still" aria-pressed="false">Still</button>
+        <button type="button" data-job="live" aria-pressed="false">Live</button>
+      </div>
+      <label class="ck"><span class="ck-dial" style="--a:50deg"><i></i></span><span class="ck-name">Thresh</span><input type="range" min="1" max="50" value="15" data-knob></label>
+      <form class="cmd" data-hold style="flex:1"><em>Query</em><input type="text" value="people and vehicles in the square" aria-label="Query"></form>
+    </div>
+  </div>
+</div>
+
+<div id="v8" class="variant" data-name="Monolith">
+  <div class="app">
+    <div class="top">
+      <div class="kbar">
+        <button type="button" data-job="film" aria-pressed="true">Film</button>
+        <button type="button" data-job="still" aria-pressed="false">Still</button>
+        <button type="button" data-job="live" aria-pressed="false">Live</button>
+      </div>
+      <div class="nums">
+        <div><div class="lbl">People</div><div class="fig" id="n-p">18</div></div>
+        <div><div class="lbl">Vehicles</div><div class="fig" id="n-v">2</div></div>
+      </div>
+    </div>
+    <div class="well">
+      <img id="n-img" alt="Frame" src="plaza.jpg">
+      <div class="marks" id="n-marks"></div>
+    </div>
+    <div class="dock">
+      <label class="ck"><span class="ck-dial" style="--a:48deg"><i></i></span><span class="ck-name">Thresh</span><input type="range" min="1" max="50" value="15" data-knob></label>
+      <label class="cs" style="width:180px"><span class="cs-name">Track</span><input type="range" value="66"><span class="cs-val">66</span></label>
+      <form class="cmd" data-hold><em>Ask</em><input type="text" value="people and vehicles in the square" aria-label="Query"></form>
+    </div>
+  </div>
+</div>
+
+<div id="proto-switch" role="navigation" aria-label="Prototype variants">
+  <button type="button" id="prev" aria-label="Previous variant">‹</button>
+  <span id="proto-label">1 — Ledger</span>
+  <button type="button" id="next" aria-label="Next variant">›</button>
+</div>
+
+<script>
+(function () {
+  const NAMES = ["Ledger","Mixer","Paper","Ladder","Keys","Overlay","Quad","Monolith"];
+  const JOBS = {
+    film: {
+      img: "plaza.jpg", people: 18, vehicles: 2, tracks: 8,
+      note: "People occupy the square in small groups. Two vehicles remain at the south curb.",
+      boxes: [
+        { l: 16.5, t: 74, w: 6, h: 12, label: "2 people", kind: "people" },
+        { l: 31, t: 78, w: 4, h: 10, label: "person", kind: "people" },
+        { l: 40, t: 76, w: 5, h: 11, label: "stroller", kind: "people" },
+        { l: 25, t: 48, w: 5, h: 10, label: "2 people", kind: "people" },
+        { l: 46, t: 49, w: 8, h: 12, label: "group", kind: "people" },
+        { l: 58, t: 36, w: 10, h: 14, label: "walkers", kind: "people" },
+        { l: 57, t: 77, w: 16, h: 11, label: "sedan", kind: "vehicle" },
+        { l: 75, t: 73, w: 12, h: 12, label: "hatchback", kind: "vehicle" }
+      ]
+    },
+    still: {
+      img: "group.jpg", people: 5, vehicles: 0, tracks: 5,
+      note: "Five figures on the road. Conversation, not crossing.",
+      boxes: [
+        { l: 37, t: 38, w: 11, h: 54, label: "person", kind: "people" },
+        { l: 48, t: 28, w: 11, h: 62, label: "person", kind: "people" },
+        { l: 58, t: 38, w: 10, h: 54, label: "person", kind: "people" },
+        { l: 69, t: 36, w: 11, h: 56, label: "person", kind: "people" },
+        { l: 82, t: 42, w: 10, h: 50, label: "person", kind: "people" }
+      ]
+    },
+    live: {
+      img: "overhead.jpg", people: 3, vehicles: 1, tracks: 4,
+      note: "Three people on the crosswalk. A white van waits at the stop line.",
+      boxes: [
+        { l: 44, t: 33, w: 5, h: 14, label: "person", kind: "people" },
+        { l: 54, t: 36, w: 8, h: 14, label: "stroller", kind: "people" },
+        { l: 65, t: 35, w: 5, h: 14, label: "person", kind: "people" },
+        { l: 45, t: 54, w: 14, h: 28, label: "van", kind: "vehicle" }
+      ]
+    }
+  };
+
+  function setJob(root, job) {
+    root.querySelectorAll("[data-job]").forEach(function (b) {
+      b.setAttribute("aria-pressed", b.getAttribute("data-job") === job ? "true" : "false");
+    });
+  }
+  function paintMarks(el, boxes) {
+    if (!el) return;
+    el.innerHTML = "";
+    boxes.forEach(function (b) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "box";
+      btn.style.left = b.l + "%";
+      btn.style.top = b.t + "%";
+      btn.style.width = b.w + "%";
+      btn.style.height = b.h + "%";
+      btn.innerHTML = "<span>" + b.label + "</span>";
+      el.appendChild(btn);
+    });
+  }
+  function rows(d) {
+    return d.boxes.map(function (b, i) {
+      return { id: "V" + (12 + i), name: b.label, conf: (0.72 + (i % 5) * 0.04).toFixed(2), kind: b.kind };
+    });
+  }
+  function bindJobs(root, apply) {
+    root.querySelectorAll("[data-job]").forEach(function (b) {
+      b.onclick = function () {
+        const job = b.getAttribute("data-job");
+        setJob(root, job);
+        apply(job);
+      };
+    });
+  }
+  function bindKnobs(root) {
+    root.querySelectorAll("[data-knob]").forEach(function (inp) {
+      const dial = inp.parentElement.querySelector(".ck-dial");
+      function sync() {
+        const min = Number(inp.min || 0);
+        const max = Number(inp.max || 100);
+        const t = (Number(inp.value) - min) / (max - min);
+        dial.style.setProperty("--a", Math.round(t * 270 - 135) + "deg");
+      }
+      inp.addEventListener("input", sync);
+      sync();
+    });
+    root.querySelectorAll(".cs input[type='range']").forEach(function (inp) {
+      const val = inp.parentElement.querySelector(".cs-val");
+      if (!val) return;
+      inp.addEventListener("input", function () { val.textContent = inp.value; });
+    });
+  }
+  document.querySelectorAll("[data-hold]").forEach(function (f) {
+    f.addEventListener("submit", function (e) { e.preventDefault(); });
+  });
+  document.querySelectorAll("#v5 .fkeys button:not([data-job])").forEach(function (b) {
+    b.onclick = function () { b.classList.toggle("on"); };
+  });
+
+  let v = 1;
+  const qv = parseInt(new URLSearchParams(location.search).get("v"), 10);
+  if (qv >= 1 && qv <= 8) v = qv;
+  function show(n) {
+    v = ((n - 1 + 8) % 8) + 1;
+    document.querySelectorAll(".variant").forEach(function (el, i) {
+      el.classList.toggle("is-on", i === v - 1);
+    });
+    document.getElementById("proto-label").textContent = v + " — " + NAMES[v - 1];
+    const url = new URL(location.href);
+    url.searchParams.set("v", String(v));
+    history.replaceState(null, "", url);
+  }
+  document.getElementById("prev").onclick = function () { show(v - 1); };
+  document.getElementById("next").onclick = function () { show(v + 1); };
+  document.addEventListener("keydown", function (e) {
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+    if (e.key === "ArrowLeft") show(v - 1);
+    if (e.key === "ArrowRight") show(v + 1);
+    if (e.key >= "1" && e.key <= "8") show(parseInt(e.key, 10));
+  });
+
+  /* 1 Ledger */
+  (function () {
+    const root = document.getElementById("v1");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("l-img").src = d.img;
+      document.getElementById("l-fig").textContent = String(d.people);
+      paintMarks(document.getElementById("l-marks"), d.boxes);
+      const tb = document.getElementById("l-rows");
+      tb.innerHTML = "";
+      rows(d).forEach(function (r, i) {
+        const tr = document.createElement("tr");
+        if (i === 0) tr.className = "is-on";
+        tr.innerHTML = "<td class='id'>" + r.id + "</td><td>" + r.name + "</td><td>" + r.conf + "</td><td class='ok'>live</td>";
+        tr.onclick = function () {
+          tb.querySelectorAll("tr").forEach(function (x) { x.classList.remove("is-on"); });
+          tr.classList.add("is-on");
+        };
+        tb.appendChild(tr);
+      });
+    }
+    bindJobs(root, apply); bindKnobs(root); apply("film");
+  })();
+
+  /* 2 Mixer */
+  (function () {
+    const root = document.getElementById("v2");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("m-img").src = d.img;
+      document.getElementById("m-fig").textContent = String(d.people);
+      document.getElementById("m-p").textContent = String(d.people);
+      document.getElementById("m-v").textContent = String(d.vehicles);
+      paintMarks(document.getElementById("m-marks"), d.boxes);
+    }
+    bindJobs(root, apply); bindKnobs(root); apply("film");
+  })();
+
+  /* 3 Paper */
+  (function () {
+    const root = document.getElementById("v3");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("p-img").src = d.img;
+      document.getElementById("p-p").textContent = String(d.people);
+      document.getElementById("p-v").textContent = String(d.vehicles);
+      document.getElementById("p-t").textContent = String(d.tracks);
+      paintMarks(document.getElementById("p-marks"), d.boxes);
+    }
+    bindJobs(root, apply); bindKnobs(root); apply("film");
+  })();
+
+  /* 4 Ladder */
+  (function () {
+    const root = document.getElementById("v4");
+    function fill(el, items, title) {
+      el.innerHTML = "<h2 class='lbl'>" + title + "</h2>";
+      items.forEach(function (b, i) {
+        const r = document.createElement("div");
+        r.className = "rung";
+        r.innerHTML = "<span>" + b.label + "</span><b>" + (0.91 - i * 0.03).toFixed(2) + "</b>";
+        el.appendChild(r);
+      });
+    }
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("d-img").src = d.img;
+      paintMarks(document.getElementById("d-marks"), d.boxes);
+      fill(document.getElementById("lad-l"), d.boxes.filter(function (b) { return b.kind === "people"; }), "People");
+      fill(document.getElementById("lad-r"), d.boxes.filter(function (b) { return b.kind === "vehicle"; }), "Vehicles");
+    }
+    bindJobs(root, apply); bindKnobs(root); apply("film");
+  })();
+
+  /* 5 Keys */
+  (function () {
+    const root = document.getElementById("v5");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("k-img").src = d.img;
+      document.getElementById("k-p").textContent = String(d.people);
+      document.getElementById("k-v").textContent = String(d.vehicles);
+      paintMarks(document.getElementById("k-marks"), d.boxes);
+    }
+    bindJobs(root, apply); bindKnobs(root); apply("film");
+  })();
+
+  /* 6 Overlay */
+  (function () {
+    const root = document.getElementById("v6");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("o-img").src = d.img;
+      document.getElementById("o-p").textContent = String(d.people);
+      document.getElementById("o-v").textContent = String(d.vehicles);
+      paintMarks(document.getElementById("o-marks"), d.boxes);
+    }
+    bindJobs(root, apply); bindKnobs(root); apply("film");
+  })();
+
+  /* 7 Quad */
+  (function () {
+    const root = document.getElementById("v7");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("q-img").src = d.img;
+      document.getElementById("q-p").textContent = String(d.people);
+      document.getElementById("q-v").textContent = String(d.vehicles);
+      document.getElementById("q-note").textContent = d.note;
+      paintMarks(document.getElementById("q-marks"), d.boxes);
+      const tb = document.getElementById("q-rows");
+      tb.innerHTML = "";
+      rows(d).forEach(function (r) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td class='id'>" + r.id + "</td><td>" + r.name + "</td><td>" + r.conf + "</td>";
+        tb.appendChild(tr);
+      });
+    }
+    bindJobs(root, apply); bindKnobs(root); apply("film");
+  })();
+
+  /* 8 Monolith */
+  (function () {
+    const root = document.getElementById("v8");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("n-img").src = d.img;
+      document.getElementById("n-p").textContent = String(d.people);
+      document.getElementById("n-v").textContent = String(d.vehicles);
+      paintMarks(document.getElementById("n-marks"), d.boxes);
+    }
+    bindJobs(root, apply); bindKnobs(root); apply("film");
+  })();
+
+  show(v);
+})();
+</script>
+</body>
+</html>

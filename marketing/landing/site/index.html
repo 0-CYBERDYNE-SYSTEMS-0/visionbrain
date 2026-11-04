@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VisionBridge — roof and perimeter intrusion watch for event security</title>
+<meta name="description" content="VisionBridge watches the rooftops and perimeters around an event and pushes a masked frame to your field team's phones in about three seconds. Runs on-prem on a single edge machine. No cloud.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..600&family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #eef1f3;
+    --paper-2: #e4e9ec;
+    --ink: #101820;
+    --graphite: #5b6570;
+    --rule: #c8d0d6;
+    --signal: #c8361a;        /* detection / alert only — never decoration */
+    --signal-ink: #9c2a13;
+    --max: 1180px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-weight: 400;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 { font-family: Fraunces, Georgia, serif; font-weight: 500; letter-spacing: -0.02em; }
+  a { color: var(--signal-ink); }
+  .wrap { width: min(var(--max), calc(100% - 48px)); margin: 0 auto; }
+
+  header.top {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 24px;
+    padding: 28px 0 20px; border-bottom: 1px solid var(--rule);
+  }
+  .mark { font-family: Fraunces, serif; font-weight: 600; font-size: 21px; letter-spacing: -0.01em; }
+  .mark span { color: var(--signal); }
+  .top nav { display: flex; gap: 22px; font-size: 14px; }
+  .top nav a { color: var(--graphite); text-decoration: none; }
+  .top nav a:hover { color: var(--ink); }
+
+  .hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; align-items: end; padding: 76px 0 40px; }
+  .hero h1 { font-size: clamp(42px, 5.4vw, 78px); line-height: 1.02; margin: 0 0 26px; }
+  .hero p.lede { font-size: 19px; color: var(--graphite); max-width: 46ch; margin: 0 0 30px; }
+  .hero p.lede b { color: var(--ink); font-weight: 500; }
+  .hero .plate { margin-right: calc(-1 * max(0px, (100vw - var(--max)) / 2)); }
+  .plate img { display: block; width: 100%; height: auto; border: 1px solid var(--rule); }
+  .plate figcaption { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--graphite); padding-top: 10px; }
+
+  .readout { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); margin: 30px 0 0; padding: 22px 0; }
+  .readout div {
+    font-family: "IBM Plex Mono", monospace; font-size: 13.5px; color: var(--graphite);
+    display: flex; gap: 14px; padding: 3px 0; flex-wrap: wrap;
+  }
+  .readout div b { color: var(--ink); font-weight: 500; min-width: 190px; }
+  .readout div em { color: var(--signal-ink); font-style: normal; }
+
+  section { padding: 84px 0; border-top: 1px solid var(--rule); }
+  section.bleed { border-top: 0; }
+  h2 { font-size: clamp(30px, 3.6vw, 48px); line-height: 1.08; margin: 0 0 22px; max-width: 22ch; }
+  .two { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: 56px; }
+  .two p { max-width: 68ch; }
+  p.big { font-size: 21px; line-height: 1.5; }
+  .quiet { color: var(--graphite); font-size: 15px; }
+
+  .diagram { margin-top: 8px; }
+  .diagram svg { width: 100%; height: auto; display: block; }
+  .beats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-top: 34px; border-top: 1px solid var(--rule); }
+  .beats > div { padding: 20px 22px 4px 0; }
+  .beats > div + div { border-left: 1px solid var(--rule); padding-left: 22px; }
+  .beats h3 { font-size: 17px; margin: 0 0 8px; }
+  .beats p { margin: 0; font-size: 14.5px; color: var(--graphite); }
+  .beats .n { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--signal-ink); display: block; margin-bottom: 10px; }
+
+  .measure { margin-top: 30px; border: 1px solid var(--ink); }
+  .measure table { width: 100%; border-collapse: collapse; font-family: "IBM Plex Mono", monospace; font-size: 13.5px; }
+  .measure th, .measure td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--rule); }
+  .measure th { font-weight: 500; background: var(--paper-2); }
+  .measure tr:last-child td { border-bottom: 0; }
+  .measure td.t { color: var(--signal-ink); }
+
+  .case { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; }
+  .case ol { margin: 0; padding-left: 20px; }
+  .case li { margin-bottom: 14px; max-width: 62ch; }
+  .case .stamp { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--graphite); margin-top: 22px; }
+
+  .alert { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 56px; align-items: start; }
+  .alert img { width: 100%; max-width: 340px; height: auto; display: block; border: 1px solid var(--rule); }
+  .alert ul { margin: 0; padding-left: 18px; }
+  .alert li { margin-bottom: 12px; max-width: 56ch; }
+
+  .deploy dl { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 9fr); gap: 10px 40px; margin: 0; }
+  .deploy dt { font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--graphite); padding-top: 3px; }
+  .deploy dd { margin: 0 0 12px; max-width: 66ch; }
+
+  .cta { background: var(--ink); color: var(--paper); margin-top: 20px; }
+  .cta .wrap { padding: 78px 0; }
+  .cta h2 { color: var(--paper); }
+  .cta p { color: #aab4bd; max-width: 58ch; }
+  .cta a.button {
+    display: inline-block; margin-top: 26px; padding: 15px 30px; border: 1px solid var(--paper);
+    color: var(--ink); background: var(--paper); text-decoration: none; font-size: 15px;
+    transition: background-color 160ms ease-out, color 160ms ease-out;
+  }
+  .cta a.button:hover { background: var(--signal); border-color: var(--signal); color: #fff; }
+  footer { padding: 30px 0 56px; font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--graphite); }
+
+  .reveal { opacity: 1; }
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal { opacity: 0; transform: translateY(14px); transition: opacity 520ms ease-out, transform 520ms ease-out; }
+    .reveal.in { opacity: 1; transform: none; }
+    .pulse { animation: pulse 2400ms ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+  }
+  @media (max-width: 900px) {
+    .hero, .two, .case, .alert, .deploy dl { grid-template-columns: 1fr; }
+    .beats { grid-template-columns: 1fr 1fr; }
+    .beats > div { border-left: 0 !important; padding-left: 0; }
+    .hero .plate { margin-right: 0; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top wrap">
+  <div class="mark">Vision<span>Bridge</span></div>
+  <nav>
+    <a href="#how">How it works</a>
+    <a href="#measured">Measured</a>
+    <a href="#butler">Why roofs</a>
+    <a href="#pilot">Pilot a site</a>
+  </nav>
+</header>
+
+<main>
+  <section class="wrap bleed hero">
+    <div>
+      <h1>A roof is a blind spot.</h1>
+      <p class="lede">VisionBridge watches the rooftops and perimeters around a venue and pushes a <b>masked frame of anything that shouldn't be there</b> to your field team's phones — in about three seconds, on one machine that sits on site.</p>
+      <p class="lede">No cloud. No subscription to somebody's data centre. Your cameras, your building, your call.</p>
+    </div>
+    <figure class="plate reveal">
+      <img src="assets/01-hero-locked-person.jpg" width="1024" height="1024" alt="Aerial view of a rooftop with a person on it, outlined by a red segmentation mask and a detection label.">
+      <figcaption>Person on a roof, locked and masked. Frame from the live pipeline — real model output, this machine.</figcaption>
+    </figure>
+  </section>
+
+  <div class="wrap readout">
+    <div><b>detection</b><span>person on roof · low-res tripwire · <em>1.3 s</em> warm</span></div>
+    <div><b>mask</b><span>SAM 3.1 segmentation · <em>1.8 s</em> warm</span></div>
+    <div><b>alert</b><span>annotated frame to field phones · under <em>2 s</em> after mask</span></div>
+    <div><b>where it runs</b><span>one on-site machine · <em>no cloud, no outbound link required</em></span></div>
+  </div>
+
+  <section class="wrap" id="how">
+    <h2>What the system actually does</h2>
+    <p class="big" style="max-width:70ch">Four beats, and none of them are complicated. A camera watches a zone. A fast model asks one narrow question. A second model draws the answer. The frame goes to the people who can walk over and look.</p>
+
+    <div class="diagram">
+      <svg viewBox="0 0 1120 250" role="img" aria-label="Four-stage diagram: camera watches a rooftop, a fast model asks whether a person is present, a segmentation model masks the frame, the annotated frame is pushed to a phone.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#5b6570"/>
+          </marker>
+        </defs>
+
+        <!-- 1 camera -->
+        <g fill="none" stroke="#101820" stroke-width="2">
+          <line x1="80" y1="196" x2="80" y2="96"/>
+          <rect x="60" y="70" width="40" height="26" rx="4"/>
+          <circle cx="80" cy="83" r="6"/>
+          <path d="M104 83 L206 143 L104 203" stroke-dasharray="5 6" stroke="#5b6570"/>
+          <line x1="40" y1="196" x2="120" y2="196"/>
+        </g>
+        <text x="60" y="226" font-size="15" fill="#101820">cameras on the zone</text>
+
+        <!-- 2 tripwire -->
+        <g>
+          <rect x="286" y="70" width="180" height="126" fill="none" stroke="#101820" stroke-width="2"/>
+          <line x1="286" y1="150" x2="466" y2="150" stroke="#5b6570" stroke-width="1"/>
+          <circle cx="392" cy="146" r="5" fill="#c8361a"/>
+          <rect x="382" y="132" width="20" height="28" fill="none" stroke="#c8361a" stroke-width="2" class="pulse"/>
+          <text x="286" y="226" font-size="15" fill="#101820">1 · is a person on the roof?</text>
+          <text x="286" y="246" font-size="13" fill="#5b6570" font-family="IBM Plex Mono, monospace">~1.3 s · narrow question, wide area</text>
+        </g>
+        <line x1="216" y1="133" x2="276" y2="133" stroke="#5b6570" stroke-width="2" marker-end="url(#ar)"/>
+
+        <!-- 3 mask -->
+        <g>
+          <rect x="532" y="70" width="180" height="126" fill="none" stroke="#101820" stroke-width="2"/>
+          <path d="M584 150 q10 -16 24 -14 q16 2 20 16 q4 16 -12 22 q-20 6 -30 -10 z" fill="#c8361a" opacity="0.55"/>
+          <path d="M584 150 q10 -16 24 -14 q16 2 20 16 q4 16 -12 22 q-20 6 -30 -10 z" fill="none" stroke="#c8361a" stroke-width="2"/>
+          <text x="532" y="226" font-size="15" fill="#101820">2 · draw the exact shape</text>
+          <text x="532" y="246" font-size="13" fill="#5b6570" font-family="IBM Plex Mono, monospace">~1.8 s · mask a person, not a box</text>
+        </g>
+        <line x1="482" y1="133" x2="522" y2="133" stroke="#5b6570" stroke-width="2" marker-end="url(#ar)"/>
+
+        <!-- 4 push -->
+        <g>
+          <rect x="778" y="66" width="80" height="134" rx="10" fill="none" stroke="#101820" stroke-width="2"/>
+          <rect x="792" y="86" width="52" height="62" fill="#101820"/>
+          <rect x="792" y="86" width="52" height="10" fill="#c8361a"/>
+          <rect x="792" y="162" width="52" height="18" fill="none" stroke="#5b6570" stroke-width="1"/>
+          <text x="778" y="226" font-size="15" fill="#101820">3 · send it to the field</text>
+          <text x="778" y="246" font-size="13" fill="#5b6570" font-family="IBM Plex Mono, monospace">phones on site · under 2 s</text>
+        </g>
+        <line x1="728" y1="133" x2="768" y2="133" stroke="#5b6570" stroke-width="2" marker-end="url(#ar)"/>
+      </svg>
+    </div>
+
+    <div class="beats">
+      <div><span class="n">ONE</span><h3>Watch the zone</h3><p>Your existing cameras, or a handful of cheap ones. Rooflines, gates, the outside of the perimeter — the places a person can be and nobody can see.</p></div>
+      <div><span class="n">TWO</span><h3>Ask one narrow question</h3><p>A small vision model watches for one thing: a person where a person shouldn't be. Narrow questions are fast — about 1.3 seconds on a low-resolution frame.</p></div>
+      <div><span class="n">THREE</span><h3>Draw the shape</h3><p>A second model outlines exactly what it found and labels it with a confidence. The field team sees a person, not a blinking dot on a map.</p></div>
+      <div><span class="n">FOUR</span><h3>Push it out</h3><p>The annotated frame arrives on the phones of the people already standing on the ground. They walk over and look. That is the whole loop.</p></div>
+    </div>
+  </section>
+
+  <section class="wrap" id="measured">
+    <div class="two">
+      <h2>Measured, not claimed</h2>
+      <div>
+        <p>Every number on this page was measured on the machine that runs it — a 32 GB Apple M2 Pro, on a 1024-pixel frame, using SAM 3.1 (bf16) and Falcon Perception 3B, both running locally through MLX. Warm figures are per-frame throughput with models resident; cold figures include model load and are only paid once per session.</p>
+        <div class="measure">
+          <table>
+            <thead><tr><th>stage</th><th>what it produces</th><th>cold</th><th>warm</th></tr></thead>
+            <tbody>
+              <tr><td>tripwire detect</td><td>is a person present — low-res frame</td><td>1.6–8.0 s</td><td class="t">1.3 s</td></tr>
+              <tr><td>full detect</td><td>boxes at full resolution</td><td>4.3–9.7 s</td><td class="t">3.9 s</td></tr>
+              <tr><td>SAM 3.1 detect</td><td>boxes, high confidence</td><td>1.8–11.3 s</td><td class="t">1.8 s</td></tr>
+              <tr><td>SAM 3.1 segment</td><td>pixel mask of the person</td><td>1.8 s</td><td class="t">1.8 s</td></tr>
+              <tr><td>Falcon segment</td><td>mask via the 3B grounding model</td><td>10.1–34.9 s</td><td class="t">9.8–11.0 s</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="quiet">Method: warm = second and later passes with the model resident; a 1 fps sampler therefore reaches first alert in under three seconds from a person arriving on the roofline. Masks exported as pixel-accurate overlays, not boxes.</p>
+        <figure class="plate" style="margin:34px 0 0" >
+          <img src="assets/02-wide-magnified.jpg" width="1024" height="1024" alt="Wide aerial view with a tiny marked figure on a roof and a magnified inset showing the same person enlarged, masked in red.">
+          <figcaption>The same detection at 140 metres, magnified 6×. The mask is model output; the inset is the crop, not a second image.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap" id="butler">
+    <div class="case">
+      <div>
+        <h2>Why roofs</h2>
+        <p class="quiet">Butler, Pennsylvania — 13 July 2024</p>
+      </div>
+      <div>
+        <p>On 13 July 2024, a shooter climbed onto the roof of the AGR International complex near the Butler Farm Show grounds and fired at a former president from a position roughly 400–450 feet from the stage. The public record of how that happened is a list of things a persistent, boring camera could have made visible.</p>
+        <ol>
+          <li>The building housed three police counter-snipers assigned to cover the event. None of them were on the roof, because of a staffing shortage.</li>
+          <li>The slant of that roof may have hidden the shooter from Secret Service snipers; a tree line blocked the northern team's view.</li>
+          <li>Bystanders saw a man on the roof and reported him to police minutes before the shots.</li>
+          <li>The independent reviews that followed called it the agency's most significant security failure since 1981.</li>
+        </ol>
+        <p>None of those failures were caused by a lack of people or a lack of cameras. They were caused by a roof that nobody could see continuously, and by a report that had to travel by radio through a chain of people.</p>
+        <p>VisionBridge is not a replacement for a counter-sniper team or a radio net. It is the cheap, tireless layer underneath them: it looks at the same roofs, every second, and the moment a shape appears on one, the picture is already on the phones of the people who can walk over and check.</p>
+        <p class="stamp">Sources: public reporting on the 13 July 2024 shooting, incl. the Senate Homeland Security &amp; Governmental Affairs review and contemporaneous investigative reporting. Facts stated as reported; figures in the table above measured on our own hardware, 15 Sept 2026.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap alert" id="field">
+    <div>
+      <h2>What the field team gets</h2>
+      <ul>
+        <li>An alert with the frame attached — the actual image, already masked, with confidence and the zone name.</li>
+        <li>No login ceremony. The alert goes to phones that are already on site, on your own link.</li>
+        <li>One tap opens the mask and the zone view, so the responder can see the angle before they walk.</li>
+        <li>Every alert is logged with a timestamp and the frame, so the day can be replayed afterwards.</li>
+      </ul>
+    </div>
+    <figure style="margin:0">
+      <img src="assets/03-field-alert.jpg" width="1080" height="1920" alt="Phone screen showing a roof alert with the masked frame, zone name, confidence and an open-mask button.">
+    </figure>
+  </section>
+
+  <section class="wrap deploy" id="deploy">
+    <h2>What it takes to stand it up</h2>
+    <dl>
+      <dt>hardware</dt><dd>One on-site machine — an Apple Silicon box or a small edge unit. No GPU cluster, no racks.</dd>
+      <dt>cameras</dt><dd>Anything that already streams: existing CCTV, a fixed camera on a pole, a drone feed. We read the stream; we don't replace it.</dd>
+      <dt>network</dt><dd>Nothing has to leave the site. Inference runs where the cameras are; alerts travel over the venue's own network.</dd>
+      <dt>setup</dt><dd>A camera pointed at the roofline, a zone drawn around it, the field phones added to the alert list. That is the whole configuration.</dd>
+      <dt>what it is not</dt><dd>Not a weapons system, not a face-recognition product, and not a replacement for your security plan. It is a persistent pair of eyes on the least-watched surface of your venue.</dd>
+    </dl>
+  </section>
+
+  <section class="cta" id="pilot">
+    <div class="wrap">
+      <h2>Pilot it on one venue.</h2>
+      <p>We're taking a small number of pilot sites — a roofline, a camera, and a few field phones. If it misses anything that matters, you tell us and we fix it. If it works, you'll have the only perimeter layer on the market that runs on hardware you already own.</p>
+      <a class="button" href="mailto:pilots@example.com?subject=VisionBridge%20pilot%20site">Request a pilot site</a>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap">
+  <div>VisionBridge · roof and perimeter intrusion watch · runs on-prem · <span id="yr">2026</span></div>
+</footer>
+
+<script>
+  (() => {
+    const els = [...document.querySelectorAll('.reveal')];
+    if (!('IntersectionObserver' in window) || !els.length) return;
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+    }, { rootMargin: '60px' });
+    els.forEach((el) => io.observe(el));
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VisionBrain — six screens</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500;1,600&family=Karla:wght@400;500;700&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Public+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,ital,wght@8..60,0,400;8..60,0,600;8..60,1,400&family=Figtree:wght@400;500;600&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&family=Newsreader:opsz,ital,wght@6..72,0,400;6..72,0,500;6..72,1,400&family=Outfit:wght@400;500&family=Syne:wght@600;700;800&family=Sora:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --sw-bg:#111; --sw-fg:#f4f1ea; }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body { background: #111; }
+  button, input { font: inherit; }
+  button { cursor: pointer; }
+  img { max-width: 100%; }
+  .variant { display: none; min-height: 100vh; }
+  .variant.is-on { display: block; }
+  :focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+
+  /* Prototype switcher — not part of any design */
+  #proto-switch {
+    position: fixed; z-index: 9999; left: 50%; bottom: 16px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px;
+    background: var(--sw-bg); color: var(--sw-fg);
+    border: 2px solid #fff; border-radius: 999px; padding: 7px 12px;
+    font: 700 12px/1 ui-sans-serif, "Helvetica Neue", sans-serif;
+    letter-spacing: .02em; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+  }
+  #proto-switch button {
+    background: #fff; color: #000; border: 0; width: 28px; height: 28px; border-radius: 50%; font-weight: 800;
+  }
+  #proto-label { min-width: 190px; text-align: center; white-space: nowrap; }
+
+  /* shared marks */
+  .marks { position: absolute; inset: 0; }
+  .box {
+    position: absolute; border: 1.5px solid currentColor; background: transparent;
+    padding: 0; color: inherit;
+  }
+  .box span {
+    position: absolute; left: -1px; top: -16px; font-size: 10px; letter-spacing: .04em;
+    white-space: nowrap; pointer-events: none; padding: 1px 5px;
+    background: #111; color: #fff;
+  }
+
+  /* ========== 1 CINEMA ========== */
+  #v1 { background: #050403; color: #e8c39a; font-family: Karla, sans-serif; padding-bottom: 64px; }
+  #v1 .cine-shell { min-height: calc(100vh - 64px); display: flex; flex-direction: column; }
+  #v1 .letter { flex: 1; display: flex; flex-direction: column; justify-content: center; background: #000; position: relative; }
+  #v1 .cine-top {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 16px 28px 10px; color: #e8c39a;
+  }
+  #v1 .leader { font-size: 11px; letter-spacing: .32em; font-variant-numeric: tabular-nums; opacity: .7; }
+  #v1 .modes { display: flex; gap: 26px; }
+  #v1 .modes button {
+    background: none; border: 0; color: #e8c39a; padding: 0 0 4px;
+    font-family: "Cormorant Garamond", serif; font-size: 22px; font-style: italic; opacity: .38;
+  }
+  #v1 .modes button[aria-pressed="true"] { opacity: 1; box-shadow: inset 0 -1px 0 #e8c39a; }
+  #v1 .rec {
+    position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
+    color: #c45c4a; font-size: 11px; letter-spacing: .46em; display: none; align-items: center; gap: 8px;
+  }
+  #v1 .rec.on { display: flex; }
+  #v1 .rec i { width: 7px; height: 7px; background: #c45c4a; border-radius: 50%; display: block; }
+  #v1 .frame {
+    position: relative; width: min(100%, calc(56vh * 2.39)); margin: 0 auto;
+    aspect-ratio: 2.39 / 1; height: auto; background: #000; overflow: hidden;
+  }
+  #v1 .frame img { width: 100%; height: 100%; object-fit: cover; display: block; filter: contrast(1.06) saturate(.92); }
+  #v1 .frame .box { color: #e8c39a; box-shadow: 0 0 0 1px rgba(10,9,8,.35); }
+  #v1 .frame .box span { background: #050403; color: #e8c39a; }
+  #v1 .composer {
+    position: absolute; left: 10%; right: 10%; bottom: 10px; z-index: 3;
+    display: flex; align-items: center;
+  }
+  #v1 .composer input {
+    flex: 1; background: rgba(5,4,3,.55); border: 0; border-bottom: 1px solid #e8c39a;
+    color: #e8c39a; padding: 8px 4px 10px; text-align: center;
+    font-family: "Cormorant Garamond", serif; font-size: 24px; font-style: italic;
+  }
+  #v1 .credits {
+    width: min(100%, calc(56vh * 2.39)); margin: 10px auto 0; padding: 0 8px 8px;
+    font-family: "Cormorant Garamond", serif; letter-spacing: .06em;
+  }
+  #v1 .credits b { display: block; font-size: 24px; font-weight: 600; }
+  #v1 .credits small { font-size: 15px; opacity: .85; }
+  #v1 .strip-wrap {
+    height: 84px; background: #1a1410;
+    background-image:
+      repeating-linear-gradient(#1a1410 0 10px, transparent 10px 74px, #1a1410 74px 84px),
+      repeating-linear-gradient(90deg, #0a0806 0 8px, #c9b08a 8px 14px, #0a0806 14px 22px);
+    background-size: 100% 84px, 22px 84px;
+    padding: 10px 28px;
+  }
+  #v1 .strip { height: 64px; display: flex; gap: 6px; overflow-x: auto; }
+  #v1 .strip button { border: 0; padding: 0; background: #000; flex: 0 0 108px; height: 64px; opacity: .5; }
+  #v1 .strip button[aria-current="true"] { opacity: 1; outline: 1px solid #e8c39a; }
+  #v1 .strip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  /* ========== 2 LIGHT TABLE ========== */
+  #v2 {
+    background: #f3ead8;
+    background-image:
+      radial-gradient(rgba(26,22,18,.04) 0.7px, transparent 0.8px),
+      linear-gradient(#f3ead8, #efe3cc);
+    background-size: 3px 3px, 100% 100%;
+    color: #1a1612; font-family: "Public Sans", sans-serif; padding-bottom: 72px;
+  }
+  #v2 .lab { display: flex; flex-direction: column; align-items: center; min-height: calc(100vh - 72px); padding: 28px 40px 8px; }
+  #v2 .lab-name {
+    font-family: Fraunces, serif; font-optical-sizing: auto;
+    font-size: 18px; letter-spacing: .28em; margin: 0 0 18px;
+  }
+  #v2 .stamps { display: flex; gap: 10px; margin: 0 0 18px; }
+  #v2 .stamps button {
+    background: #efe4cc; border: 2px solid #9a5b32; color: #9a5b32;
+    border-radius: 3px; padding: 8px 14px; font-size: 11px; letter-spacing: .16em;
+    text-transform: uppercase; box-shadow: 1px 2px 0 #9a5b32;
+  }
+  #v2 .stamps button[aria-pressed="true"] { background: #9a5b32; color: #f3ead8; }
+  #v2 .table { width: min(860px, 100%); display: flex; flex-direction: column; align-items: center; }
+  #v2 .modes2 { width: min(860px, 100%); display: flex; gap: 20px; margin-bottom: 18px; font-size: 11px; letter-spacing: .18em; text-transform: uppercase; }
+  #v2 .modes2 button { background: none; border: 0; color: #1a1612; padding: 0 0 3px; opacity: .35; }
+  #v2 .modes2 button[aria-pressed="true"] { opacity: 1; box-shadow: inset 0 -2px 0 #9a5b32; }
+  #v2 .print {
+    position: relative; width: min(860px, 100%); background: #fff; padding: 16px 16px 52px;
+    box-shadow: 10px 16px 34px rgba(26,22,18,.16), 0 0 0 1px #ddd4c0;
+    transform: rotate(-0.5deg);
+  }
+  #v2 .clip {
+    position: absolute; top: -16px; left: 50%; width: 52px; height: 26px; margin-left: -26px;
+    background: linear-gradient(#3a3a36, #1c1c1a); border-radius: 0 0 5px 5px;
+    box-shadow: 0 5px 8px rgba(0,0,0,.28);
+  }
+  #v2 .clip::before {
+    content: ""; position: absolute; left: 50%; top: 4px; width: 18px; height: 10px; margin-left: -9px;
+    border: 2px solid #8a8a84; border-bottom: 0; border-radius: 8px 8px 0 0;
+  }
+  #v2 .shot { position: relative; }
+  #v2 .shot img { width: 100%; height: 44vh; object-fit: cover; display: block; }
+  #v2 .shot .box { color: #2f5f73; }
+  #v2 .shot .box span { background: #2f5f73; color: #f3ead8; padding: 1px 5px; }
+  #v2 .caption { margin-top: 14px; font-family: Fraunces, serif; font-optical-sizing: auto; font-size: 16px; }
+  #v2 .card {
+    width: min(860px, 100%); margin-top: 24px; background: #fffdf6;
+    border: 1px solid #c9b89a; padding: 10px 16px 10px 28px; position: relative;
+    background-image:
+      linear-gradient(#e24b3a, #e24b3a),
+      repeating-linear-gradient(#fffdf6, #fffdf6 27px, #d7cbb3 28px);
+    background-size: 2px 100%, 100% 28px;
+    background-position: 16px 0, 0 0; background-repeat: no-repeat, repeat;
+  }
+  #v2 .card input {
+    width: 100%; border: 0; background: transparent; font-family: Fraunces, serif;
+    font-size: 20px; line-height: 28px; padding: 0;
+  }
+  #v2 .carbon {
+    width: min(860px, 100%); margin-top: 18px; background: #e7e1d0; border: 1px solid #b7aa90;
+    padding: 16px 18px; font-size: 13px; line-height: 1.55; box-shadow: inset 0 0 0 1px #fff;
+    color: #3a4650;
+  }
+  #v2 .carbon h2 { font-family: Fraunces, serif; font-size: 17px; margin: 0 0 10px; color: #1a1612; }
+  #v2 .cyan { color: #2f5f73; font-weight: 600; }
+
+  /* ========== 3 THREAD ========== */
+  #v3 { background: #eef1f4; color: #243038; font-family: Figtree, sans-serif; padding-bottom: 80px; }
+  #v3 .wrap {
+    max-width: 680px; margin: 0 auto; min-height: calc(100vh - 80px); padding: 36px 28px 24px;
+    border-left: 1px solid #d3dbe0;
+  }
+  #v3 header h1 { font-family: "Source Serif 4", serif; font-weight: 400; font-size: 30px; margin: 0; letter-spacing: -.02em; }
+  #v3 header p { margin: 8px 0 28px; color: #5a6a72; font-size: 15px; }
+  #v3 .start { display: flex; gap: 22px; margin-bottom: 36px; font-size: 13px; }
+  #v3 .start button {
+    background: none; border: 0; padding: 0 0 4px; color: #243038; opacity: .4;
+  }
+  #v3 .start button[aria-pressed="true"] { opacity: 1; box-shadow: inset 0 -1px 0 #2a6f74; color: #2a6f74; }
+  #v3 .row { display: grid; grid-template-columns: 64px 1fr; gap: 14px; margin: 0 0 22px; }
+  #v3 .when { font-size: 11px; color: #7a8a92; padding-top: 4px; letter-spacing: .04em; }
+  #v3 .who { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: #2a6f74; margin-bottom: 6px; }
+  #v3 .who.you { color: #243038; }
+  #v3 .said { font-family: "Source Serif 4", serif; font-size: 17px; line-height: 1.5; margin: 0; }
+  #v3 .you .said { font-style: italic; }
+  #v3 .media { margin: 0 0 22px; position: relative; }
+  #v3 .media img { width: 100%; height: 48vh; object-fit: cover; display: block; }
+  #v3 .media .box { color: #2a6f74; }
+  #v3 .facts { margin-top: 10px; font-size: 13px; color: #2a6f74; font-weight: 600; letter-spacing: .04em; }
+  #v3 .composer3 {
+    position: sticky; bottom: 72px; display: flex; gap: 10px; background: #eef1f4;
+    padding: 12px 0 8px; border-top: 1px solid #d3dbe0;
+  }
+  #v3 .composer3 input {
+    flex: 1; border: 0; border-bottom: 1px solid #243038; background: transparent; padding: 10px 0; border-radius: 0;
+  }
+  #v3 .composer3 button {
+    background: none; border: 0; color: #2a6f74; font-weight: 600; padding: 0;
+  }
+
+  /* ========== 4 DOSSIER ========== */
+  #v4 { background: #cfcbbb; color: #14110e; font-family: "IBM Plex Sans", sans-serif; padding: 20px 24px 88px; }
+  #v4 .folder { max-width: 1240px; margin: 0 auto; }
+  #v4 .tabs { display: flex; gap: 6px; padding-left: 12px; }
+  #v4 .tabs button {
+    background: #bdb8a6; border: 1px solid #a39e8c; border-bottom: 0; color: #14110e;
+    padding: 11px 26px 12px; font-family: "Libre Baskerville", serif; font-size: 14px;
+    clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 100%, 0 100%);
+  }
+  #v4 .tabs button[aria-pressed="true"] { background: #efe6cc; }
+  #v4 .sheet {
+    background: #efe6cc; border: 1px solid #a39e8c;
+    display: grid; grid-template-columns: 1.05fr .95fr; min-height: 76vh;
+    box-shadow: 0 18px 40px rgba(20,17,14,.12);
+  }
+  #v4 .evidence { position: relative; padding: 18px; border-right: 1px solid #c9bfa4; }
+  #v4 .evidence .shot { position: relative; }
+  #v4 .evidence img { width: 100%; height: 64vh; object-fit: cover; display: block; }
+  #v4 .evidence .box { color: #b42318; }
+  #v4 .dot {
+    position: absolute; width: 22px; height: 22px; border-radius: 50%; background: #b42318; color: #fff;
+    font-family: "IBM Plex Mono", monospace; font-size: 11px; display: flex; align-items: center; justify-content: center;
+    border: 0; transform: translate(-50%, -50%); z-index: 2;
+  }
+  #v4 .dot.is-on, #v4 .dot:hover { outline: 2px solid #efe6cc; box-shadow: 0 0 0 2px #b42318; }
+  #v4 .docket { padding: 26px 28px; }
+  #v4 .docket h1 { font-family: "Libre Baskerville", serif; font-size: 24px; margin: 0 0 6px; }
+  #v4 .meta { font-size: 12px; color: #5a5246; margin-bottom: 20px; }
+  #v4 .ex {
+    display: grid; grid-template-columns: 36px 1fr auto; gap: 8px; padding: 8px 4px;
+    border-bottom: 1px dotted #b3ae9c; font-size: 14px;
+  }
+  #v4 .ex.is-on { background: rgba(180,35,24,.08); }
+  #v4 .num { color: #b42318; font-family: "IBM Plex Mono", monospace; font-weight: 500; }
+  #v4 .report { margin-top: 22px; font-family: "Libre Baskerville", serif; font-size: 15px; line-height: 1.7; }
+  #v4 .ask { margin-top: 22px; display: flex; gap: 8px; }
+  #v4 .ask input { flex: 1; border: 0; border-bottom: 1px solid #14110e; background: transparent; padding: 8px 0; }
+  #v4 .stamp {
+    margin: 8px 0 18px; display: inline-block; border: 3px solid #b42318; color: #b42318;
+    padding: 7px 16px; font-weight: 700; letter-spacing: .3em; transform: rotate(-8deg);
+    background: transparent; font-family: "IBM Plex Sans", sans-serif;
+  }
+
+  /* ========== 5 SEARCH ========== */
+  #v5 { background: #fafafa; color: #111; font-family: Outfit, sans-serif; padding: 24px 56px 96px; }
+  #v5 .cube { min-height: calc(100vh - 120px); display: flex; flex-direction: column; align-items: center; }
+  #v5 .top5 {
+    width: min(1080px, 100%); display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 20px;
+  }
+  #v5 .top5 h1 { font-family: Newsreader, serif; font-weight: 400; font-size: 20px; margin: 0; }
+  #v5 .top5 nav button { background: none; border: 0; color: #111; opacity: .28; margin-left: 18px; padding: 0; }
+  #v5 .top5 nav button[aria-pressed="true"] { opacity: 1; }
+  #v5 .more { background: none; border: 0; font-size: 20px; letter-spacing: .2em; color: #111; }
+  #v5 .settings { width: min(1080px, 100%); display: none; font-size: 12px; margin-bottom: 10px; color: #666; }
+  #v5 .settings.open { display: block; }
+  #v5 .print5 { width: min(1080px, 100%); position: relative; }
+  #v5 .print5 img { width: 100%; height: 66vh; object-fit: cover; display: block; }
+  #v5 .print5 .box { color: #111; }
+  #v5 .print5 .box span { background: #fff; color: #111; padding: 1px 6px; border: 1px solid #111; }
+  #v5 .countline {
+    width: min(1080px, 100%); margin: 14px 0 0;
+    font-family: Newsreader, serif; font-size: 18px; font-weight: 400;
+  }
+  #v5 .search {
+    width: min(1080px, 100%); margin-top: 18px; display: flex;
+    background: transparent; border-bottom: 1px solid #111;
+  }
+  #v5 .search input {
+    flex: 1; border: 0; background: transparent; padding: 12px 4px;
+    font-family: Newsreader, serif; font-size: 20px; font-style: italic;
+  }
+  #v5 .search button {
+    border: 0; background: #c46b3a; color: #fff; padding: 0 16px; font-size: 12px; letter-spacing: .08em;
+  }
+
+  /* ========== 6 ATELIER ========== */
+  #v6 { background: #2b2724; color: #e8e0d4; font-family: Sora, sans-serif; min-height: 100vh; padding-bottom: 96px; }
+  #v6 .board {
+    min-height: calc(100vh - 108px); padding: 28px 32px 16px;
+    background-image: radial-gradient(rgba(232,224,212,.07) 1px, transparent 1.2px);
+    background-size: 16px 16px;
+  }
+  #v6 .bar6 { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  #v6 .bar6 h1 { font-family: Syne, sans-serif; font-weight: 800; letter-spacing: -.045em; margin: 0; font-size: 30px; }
+  #v6 .modes6 button {
+    background: none; border: 0; color: #e8e0d4; opacity: .35;
+    font-family: Syne, sans-serif; font-weight: 700; margin-left: 16px;
+  }
+  #v6 .modes6 button[aria-pressed="true"] { opacity: 1; }
+  #v6 .pins { position: relative; min-height: 64vh; }
+  #v6 .polaroid {
+    position: absolute; background: #e8e0d4; color: #2b2724; padding: 10px 10px 32px;
+    width: 188px; box-shadow: 4px 10px 22px rgba(0,0,0,.38); cursor: pointer;
+  }
+  #v6 .polaroid::before {
+    content: ""; position: absolute; top: -8px; left: 50%; width: 14px; height: 14px; margin-left: -7px;
+    background: #d24a2c; border-radius: 50%; box-shadow: 0 2px 0 #1d1b19;
+  }
+  #v6 .polaroid img { width: 100%; height: 124px; object-fit: cover; display: block; }
+  #v6 .hid { font-family: Syne, sans-serif; font-size: 13px; margin-top: 8px; transform: rotate(-1.5deg); }
+  #v6 .livepin {
+    position: absolute; right: 8px; top: 8px; width: min(440px, 42vw); background: #1d1b19; padding: 10px;
+    box-shadow: 0 14px 36px rgba(0,0,0,.45);
+  }
+  #v6 .livepin .shot { position: relative; }
+  #v6 .livepin img { width: 100%; height: 250px; object-fit: cover; display: block; }
+  #v6 .livepin .box { color: #e8e0d4; }
+  #v6 .livepin .box[data-hot] { color: #d24a2c; }
+  #v6 .livecap { padding: 10px 4px 4px; font-size: 12px; letter-spacing: .04em; }
+  #v6 .typebar {
+    margin: 0 32px; display: flex; align-items: stretch; background: #e8e0d4; color: #2b2724;
+  }
+  #v6 .seal {
+    width: 54px; height: 54px; margin: 6px; border: 0; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #e36a4c, #d24a2c 55%, #9a2e1c);
+    color: #e8e0d4; font-family: Syne, sans-serif; font-weight: 800; font-size: 11px;
+    letter-spacing: .08em;
+  }
+  #v6 .typebar input {
+    flex: 1; border: 0; background: transparent; padding: 16px 18px; font-size: 16px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+  }
+</style>
+</head>
+<body>
+
+<div id="v1" class="variant" data-name="Cinema">
+  <div class="cine-shell">
+    <div class="letter">
+      <div class="cine-top">
+        <div class="leader" id="c-leader">00:01:14:08 &nbsp; 2.39</div>
+        <nav class="modes" aria-label="Job">
+          <button type="button" data-job="film" aria-pressed="true">Film</button>
+          <button type="button" data-job="still" aria-pressed="false">Still</button>
+          <button type="button" data-job="live" aria-pressed="false">Live</button>
+        </nav>
+      </div>
+      <div class="rec" id="c-rec"><i></i> REC</div>
+      <div class="frame">
+        <img id="c-img" alt="Footage" src="plaza.jpg">
+        <div class="marks" id="c-marks"></div>
+        <form class="composer" id="c-form">
+          <input id="c-q" type="text" value="people and vehicles in the square" aria-label="Query as subtitle">
+        </form>
+      </div>
+      <div class="credits" id="c-credits"><b>18 people</b><small>2 vehicles · square, east light</small></div>
+    </div>
+    <div class="strip-wrap"><div class="strip" id="c-strip" role="list"></div></div>
+  </div>
+</div>
+
+<div id="v2" class="variant" data-name="Light table">
+  <div class="lab">
+    <div class="lab-name">VisionBrain</div>
+    <nav class="modes2" aria-label="Job">
+      <button type="button" data-job="film" aria-pressed="false">Film</button>
+      <button type="button" data-job="still" aria-pressed="true">Still</button>
+      <button type="button" data-job="live" aria-pressed="false">Live</button>
+    </nav>
+    <div class="stamps">
+      <button type="button" data-tool="find" aria-pressed="true">Find</button>
+      <button type="button" data-tool="mask" aria-pressed="false">Mask</button>
+      <button type="button" data-tool="read" aria-pressed="false">Read</button>
+      <button type="button" data-tool="track" aria-pressed="false">Track</button>
+    </div>
+    <main class="table">
+      <figure class="print">
+        <span class="clip" aria-hidden="true"></span>
+        <div class="shot">
+          <img id="lt-img" alt="Print on the light table" src="group.jpg">
+          <div class="marks" id="lt-marks"></div>
+        </div>
+        <figcaption class="caption" id="lt-cap">Path still · 14:02 · cyanotype marks</figcaption>
+      </figure>
+      <div class="card">
+        <form id="lt-form">
+          <input id="lt-q" type="text" value="find the people standing on the road" aria-label="Index card query">
+        </form>
+      </div>
+    </main>
+    <div class="carbon">
+      <h2>Carbon copy</h2>
+      <p class="cyan" id="lt-tool">Tool: Find</p>
+      <p id="lt-note">Five figures on the road. Conversation, not crossing. Trees hold the west edge. No vehicles in frame.</p>
+      <p>Count: <strong id="lt-count">5 people</strong></p>
+    </div>
+  </div>
+</div>
+
+<div id="v3" class="variant" data-name="Thread">
+  <div class="wrap">
+    <header>
+      <h1>VisionBrain</h1>
+      <p>Talk to the camera. Drop footage. Ask in a sentence.</p>
+    </header>
+    <div class="start" aria-label="Start a thread">
+      <button type="button" data-job="film" aria-pressed="true">Start with film</button>
+      <button type="button" data-job="still" aria-pressed="false">Start with a still</button>
+      <button type="button" data-job="live" aria-pressed="false">Start from live</button>
+    </div>
+    <div class="media">
+      <img id="th-img" alt="Dropped footage" src="plaza.jpg">
+      <div class="marks" id="th-marks"></div>
+    </div>
+    <div id="thread">
+      <div class="row">
+        <div class="when">14:02</div>
+        <div>
+          <div class="who">Dropped</div>
+          <p class="said">Square clip, 00:01:14. Golden hour. East light.</p>
+        </div>
+      </div>
+      <div class="row you">
+        <div class="when">14:03</div>
+        <div>
+          <div class="who you">You</div>
+          <p class="said">Count the people. Note vehicles at the curb.</p>
+        </div>
+      </div>
+      <div class="row">
+        <div class="when">14:03</div>
+        <div>
+          <div class="who">Reply</div>
+          <p class="said" id="th-reply">Eighteen people in the square. Two cars wait at the south curb — silver sedan, red hatchback. A motorcycle sits between them.</p>
+          <div class="facts" id="th-facts">18 people · 2 vehicles · 1 motorcycle</div>
+        </div>
+      </div>
+    </div>
+    <form class="composer3" id="th-form">
+      <input id="th-q" type="text" placeholder="Ask about this footage" aria-label="Message">
+      <button type="submit">Ask</button>
+    </form>
+  </div>
+</div>
+
+<div id="v4" class="variant" data-name="Dossier">
+  <div class="folder">
+    <nav class="tabs" aria-label="Folder">
+      <button type="button" data-job="film" aria-pressed="true">Film</button>
+      <button type="button" data-job="still" aria-pressed="false">Still</button>
+      <button type="button" data-job="live" aria-pressed="false">Live</button>
+    </nav>
+    <div class="sheet">
+      <div class="evidence">
+        <div class="shot">
+          <img id="d-img" alt="Exhibit photograph" src="plaza.jpg">
+          <div class="marks" id="d-marks"></div>
+          <div id="d-dots"></div>
+        </div>
+      </div>
+      <div class="docket">
+        <h1 id="d-title">File 08 — Square crossing</h1>
+        <div class="meta" id="d-meta">Operator notes · 28 Aug · 18 people · 2 vehicles</div>
+        <button type="button" class="stamp" id="d-mark">MARK</button>
+        <div id="exhibits"></div>
+        <div class="report" id="d-report">
+          People occupy the square in small groups. Two vehicles remain at the south curb. The crossing itself is clear.
+        </div>
+        <form class="ask" id="d-form">
+          <input id="d-q" type="text" value="people and vehicles in the square" aria-label="Docket query">
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="v5" class="variant" data-name="Search">
+  <div class="cube">
+    <div class="top5">
+      <h1>VisionBrain</h1>
+      <div>
+        <nav aria-label="Job">
+          <button type="button" data-job="film" aria-pressed="false">Film</button>
+          <button type="button" data-job="still" aria-pressed="true">Still</button>
+          <button type="button" data-job="live" aria-pressed="false">Live</button>
+        </nav>
+      </div>
+    </div>
+    <div class="print5">
+      <img id="s-img" alt="Gallery print" src="group.jpg">
+      <div class="marks" id="s-marks"></div>
+    </div>
+    <form class="search" id="s-form">
+      <input id="s-q" type="text" placeholder="what should I find" value="people standing on the road">
+      <button type="submit">Find</button>
+    </form>
+    <p class="countline" id="s-count">5 people</p>
+  </div>
+</div>
+
+<div id="v6" class="variant" data-name="Atelier">
+  <div class="board">
+    <div class="bar6">
+      <h1>VisionBrain</h1>
+      <nav class="modes6" aria-label="Job">
+        <button type="button" data-job="film" aria-pressed="false">Film</button>
+        <button type="button" data-job="still" aria-pressed="false">Still</button>
+        <button type="button" data-job="live" aria-pressed="true">Live</button>
+      </nav>
+    </div>
+    <div class="pins" id="pins">
+      <div class="polaroid" style="left:20px;top:28px;transform:rotate(-4deg)">
+        <img src="overhead.jpg" alt="Crop" style="object-position:46% 38%">
+        <div class="hid">id 12 · person</div>
+      </div>
+      <div class="polaroid" style="left:228px;top:86px;transform:rotate(3deg)">
+        <img src="overhead.jpg" alt="Crop" style="object-position:58% 42%">
+        <div class="hid">id 13 · person + stroller</div>
+      </div>
+      <div class="polaroid" style="left:64px;top:290px;transform:rotate(2deg)">
+        <img src="overhead.jpg" alt="Crop" style="object-position:52% 72%">
+        <div class="hid">id 2 · van</div>
+      </div>
+      <div class="polaroid" style="left:300px;top:330px;transform:rotate(-2deg)">
+        <img src="overhead.jpg" alt="Crop" style="object-position:68% 40%">
+        <div class="hid">id 15 · person</div>
+      </div>
+      <div class="livepin">
+        <div class="shot">
+          <img id="a-img" alt="Live feed" src="overhead.jpg">
+          <div class="marks" id="a-marks"></div>
+        </div>
+        <div class="livecap" id="a-cap">Live hub · 3 people · 1 van</div>
+      </div>
+    </div>
+  </div>
+  <form class="typebar" id="a-form">
+    <button class="seal" type="submit" aria-label="Pin this command">VB</button>
+    <input id="a-q" type="text" value="track people crossing the line" aria-label="Typewriter command">
+  </form>
+</div>
+
+<div id="proto-switch" role="navigation" aria-label="Prototype variants">
+  <button type="button" id="prev" aria-label="Previous variant">‹</button>
+  <span id="proto-label">1 — Cinema</span>
+  <button type="button" id="next" aria-label="Next variant">›</button>
+</div>
+
+<script>
+(function () {
+  const NAMES = ["Cinema", "Light table", "Thread", "Dossier", "Search", "Atelier"];
+  const JOBS = {
+    film: {
+      img: "plaza.jpg",
+      count: "18 people · 2 vehicles",
+      title: "File 08 — Square crossing",
+      note: "People occupy the square in small groups. Two vehicles remain at the south curb. The crossing itself is clear.",
+      boxes: [
+        { l: 16.5, t: 74, w: 6, h: 12, label: "2 people" },
+        { l: 31, t: 78, w: 4, h: 10, label: "person" },
+        { l: 40, t: 76, w: 5, h: 11, label: "stroller" },
+        { l: 25, t: 48, w: 5, h: 10, label: "2 people" },
+        { l: 46, t: 49, w: 8, h: 12, label: "group" },
+        { l: 58, t: 36, w: 10, h: 14, label: "walkers" },
+        { l: 57, t: 77, w: 16, h: 11, label: "sedan" },
+        { l: 75, t: 73, w: 12, h: 12, label: "hatchback" }
+      ]
+    },
+    still: {
+      img: "group.jpg",
+      count: "5 people",
+      title: "File 11 — Path still",
+      note: "Five figures on the road. Conversation, not crossing. Trees hold the west edge. No vehicles in frame.",
+      boxes: [
+        { l: 37, t: 38, w: 11, h: 54, label: "person" },
+        { l: 48, t: 28, w: 11, h: 62, label: "person" },
+        { l: 58, t: 38, w: 10, h: 54, label: "person" },
+        { l: 69, t: 36, w: 11, h: 56, label: "person" },
+        { l: 82, t: 42, w: 10, h: 50, label: "person" }
+      ]
+    },
+    live: {
+      img: "overhead.jpg",
+      count: "3 people · 1 van",
+      title: "File 02 — Crosswalk live",
+      note: "Three people on the crosswalk, one with a stroller. A white van waits at the stop line.",
+      boxes: [
+        { l: 44, t: 33, w: 5, h: 14, label: "person", hot: true },
+        { l: 54, t: 36, w: 8, h: 14, label: "stroller" },
+        { l: 65, t: 35, w: 5, h: 14, label: "person" },
+        { l: 45, t: 54, w: 14, h: 28, label: "van" }
+      ]
+    }
+  };
+
+  function setJob(root, job) {
+    root.querySelectorAll("[data-job]").forEach(function (b) {
+      b.setAttribute("aria-pressed", b.getAttribute("data-job") === job ? "true" : "false");
+    });
+  }
+
+  function paintMarks(el, boxes, withDots) {
+    if (!el) return;
+    el.innerHTML = "";
+    (boxes || []).forEach(function (b, i) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "box";
+      btn.style.left = b.l + "%";
+      btn.style.top = b.t + "%";
+      btn.style.width = b.w + "%";
+      btn.style.height = b.h + "%";
+      if (b.hot) btn.setAttribute("data-hot", "1");
+      btn.innerHTML = "<span>" + b.label + "</span>";
+      btn.setAttribute("aria-label", b.label);
+      el.appendChild(btn);
+      if (withDots) {
+        const d = document.createElement("button");
+        d.type = "button";
+        d.className = "dot";
+        d.textContent = String(i + 1);
+        d.style.left = (b.l + b.w / 2) + "%";
+        d.style.top = b.t + "%";
+        d.setAttribute("data-ex", String(i + 1));
+        d.setAttribute("aria-label", "Exhibit " + (i + 1));
+        el.parentNode.appendChild(d);
+      }
+    });
+  }
+
+  function exhibitsFor(job) {
+    return JOBS[job].boxes.map(function (b, i) {
+      return { n: i + 1, label: b.label };
+    });
+  }
+
+  let v = 1;
+  const params = new URLSearchParams(location.search);
+  const qv = parseInt(params.get("v"), 10);
+  if (qv >= 1 && qv <= 6) v = qv;
+
+  function show(n) {
+    v = ((n - 1 + 6) % 6) + 1;
+    document.querySelectorAll(".variant").forEach(function (el, i) {
+      el.classList.toggle("is-on", i === v - 1);
+    });
+    document.getElementById("proto-label").textContent = v + " — " + NAMES[v - 1];
+    const url = new URL(location.href);
+    url.searchParams.set("v", String(v));
+    history.replaceState(null, "", url);
+  }
+
+  document.getElementById("prev").onclick = function () { show(v - 1); };
+  document.getElementById("next").onclick = function () { show(v + 1); };
+  document.addEventListener("keydown", function (e) {
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+    if (e.key === "ArrowLeft") show(v - 1);
+    if (e.key === "ArrowRight") show(v + 1);
+    if (e.key >= "1" && e.key <= "6") show(parseInt(e.key, 10));
+  });
+
+  /* Cinema */
+  (function () {
+    const root = document.getElementById("v1");
+    const strip = document.getElementById("c-strip");
+    const frames = [
+      { src: "plaza.jpg", t: "00:01:14:08", job: "film" },
+      { src: "overhead.jpg", t: "00:00:22:16", job: "live" },
+      { src: "group.jpg", t: "00:00:00:01", job: "still" }
+    ];
+    frames.forEach(function (f, i) {
+      const b = document.createElement("button");
+      b.type = "button";
+      if (i === 0) b.setAttribute("aria-current", "true");
+      b.innerHTML = "<img alt=\"Keyframe\" src=\"" + f.src + "\">";
+      b.onclick = function () {
+        strip.querySelectorAll("button").forEach(function (x) { x.removeAttribute("aria-current"); });
+        b.setAttribute("aria-current", "true");
+        setJob(root, f.job);
+        applyCinema(f.job, f.src, f.t);
+      };
+      strip.appendChild(b);
+    });
+    function applyCinema(job, src, t) {
+      const d = JOBS[job];
+      document.getElementById("c-img").src = src || d.img;
+      document.getElementById("c-leader").textContent = (t || (job === "live" ? "LIVE" : "00:01:14:08")) + "   2.39";
+      const parts = d.count.split("·");
+      document.getElementById("c-credits").innerHTML = "<b>" + parts[0].trim() + "</b><small>" + d.count + "</small>";
+      document.getElementById("c-rec").classList.toggle("on", job === "live");
+      document.querySelector("#v1 .strip-wrap").style.display = job === "still" ? "none" : "block";
+      paintMarks(document.getElementById("c-marks"), d.boxes);
+    }
+    root.querySelectorAll("[data-job]").forEach(function (b) {
+      b.onclick = function () {
+        const job = b.getAttribute("data-job");
+        setJob(root, job);
+        applyCinema(job);
+      };
+    });
+    document.getElementById("c-form").onsubmit = function (e) {
+      e.preventDefault();
+      document.getElementById("c-credits").innerHTML = "<b>held</b><small>" + document.getElementById("c-q").value + "</small>";
+    };
+    applyCinema("film");
+  })();
+
+  /* Light table */
+  (function () {
+    const root = document.getElementById("v2");
+    const notes = {
+      find: "Five figures on the road. Conversation, not crossing. Trees hold the west edge. No vehicles in frame.",
+      mask: "Masks drawn on five torsos. Ground and canopy left unmarked.",
+      read: "No readable text in this print. Try a still with signage.",
+      track: "Still has no time. Switch to Film or Live to track."
+    };
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("lt-img").src = d.img;
+      document.getElementById("lt-count").textContent = d.count;
+      document.getElementById("lt-note").textContent = d.note;
+      document.getElementById("lt-cap").textContent = (job === "still" ? "Path still" : job === "live" ? "Live frame" : "Film still") + " · cyanotype marks";
+      paintMarks(document.getElementById("lt-marks"), d.boxes);
+    }
+    root.querySelectorAll("[data-tool]").forEach(function (b) {
+      b.onclick = function () {
+        root.querySelectorAll("[data-tool]").forEach(function (x) { x.setAttribute("aria-pressed", "false"); });
+        b.setAttribute("aria-pressed", "true");
+        const tool = b.getAttribute("data-tool");
+        document.getElementById("lt-tool").textContent = "Tool: " + b.textContent;
+        document.getElementById("lt-note").textContent = notes[tool];
+      };
+    });
+    root.querySelectorAll("[data-job]").forEach(function (b) {
+      b.onclick = function () {
+        const job = b.getAttribute("data-job");
+        setJob(root, job);
+        apply(job);
+      };
+    });
+    document.getElementById("lt-form").onsubmit = function (e) {
+      e.preventDefault();
+      document.getElementById("lt-note").textContent = "Query held on the card: " + document.getElementById("lt-q").value;
+    };
+    apply("still");
+  })();
+
+  /* Thread */
+  (function () {
+    const root = document.getElementById("v3");
+    const thread = document.getElementById("thread");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("th-img").src = d.img;
+      document.getElementById("th-reply").textContent = d.note;
+      document.getElementById("th-facts").textContent = d.count;
+      paintMarks(document.getElementById("th-marks"), d.boxes);
+    }
+    root.querySelectorAll("[data-job]").forEach(function (b) {
+      b.onclick = function () {
+        const job = b.getAttribute("data-job");
+        setJob(root, job);
+        apply(job);
+      };
+    });
+    document.getElementById("th-form").onsubmit = function (e) {
+      e.preventDefault();
+      const q = document.getElementById("th-q").value.trim();
+      if (!q) return;
+      const row = document.createElement("div");
+      row.className = "row you";
+      row.innerHTML = "<div class=\"when\">now</div><div><div class=\"who you\">You</div><p class=\"said\"></p></div>";
+      row.querySelector(".said").textContent = q;
+      const bot = document.createElement("div");
+      bot.className = "row";
+      bot.innerHTML = "<div class=\"when\">now</div><div><div class=\"who\">Reply</div><p class=\"said\">Marked on the current frame. Count holds.</p><div class=\"facts\">" + document.getElementById("th-facts").textContent + "</div></div>";
+      thread.appendChild(row);
+      thread.appendChild(bot);
+      document.getElementById("th-q").value = "";
+    };
+    apply("film");
+  })();
+
+  /* Dossier */
+  (function () {
+    const root = document.getElementById("v4");
+    function renderEx(job) {
+      const host = document.getElementById("exhibits");
+      host.innerHTML = "";
+      exhibitsFor(job).forEach(function (x) {
+        const row = document.createElement("div");
+        row.className = "ex";
+        row.setAttribute("data-ex", String(x.n));
+        row.innerHTML = "<span class=\"num\">(" + x.n + ")</span><span>" + x.label + "</span><span>id " + (10 + x.n) + "</span>";
+        host.appendChild(row);
+      });
+    }
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("d-img").src = d.img;
+      document.getElementById("d-title").textContent = d.title;
+      document.getElementById("d-report").textContent = d.note;
+      document.getElementById("d-meta").textContent = "Operator notes · 28 Aug · " + d.count;
+      const marks = document.getElementById("d-marks");
+      marks.innerHTML = "";
+      marks.parentNode.querySelectorAll(".dot").forEach(function (n) { n.remove(); });
+      const shot = marks.parentNode;
+      d.boxes.forEach(function (b, i) {
+        const dot = document.createElement("button");
+        dot.type = "button";
+        dot.className = "dot";
+        dot.textContent = String(i + 1);
+        dot.style.left = (b.l + b.w / 2) + "%";
+        dot.style.top = (b.t) + "%";
+        dot.setAttribute("data-ex", String(i + 1));
+        shot.appendChild(dot);
+      });
+      renderEx(job);
+      bindDots();
+    }
+    function bindDots() {
+      root.querySelectorAll(".dot").forEach(function (d) {
+        d.onclick = function () {
+          const n = d.getAttribute("data-ex");
+          root.querySelectorAll(".dot").forEach(function (x) { x.classList.toggle("is-on", x === d); });
+          root.querySelectorAll(".ex").forEach(function (x) { x.classList.toggle("is-on", x.getAttribute("data-ex") === n); });
+          document.getElementById("d-report").textContent = "Exhibit (" + n + ") is active on the photograph.";
+        };
+      });
+    }
+    root.querySelectorAll("[data-job]").forEach(function (b) {
+      b.onclick = function () {
+        const job = b.getAttribute("data-job");
+        setJob(root, job);
+        apply(job);
+      };
+    });
+    document.getElementById("d-mark").onclick = function () {
+      document.getElementById("d-report").textContent = "Stamped. Query held: " + document.getElementById("d-q").value + ".";
+    };
+    document.getElementById("d-form").onsubmit = function (e) {
+      e.preventDefault();
+      document.getElementById("d-mark").click();
+    };
+    apply("film");
+  })();
+
+  /* Search */
+  (function () {
+    const root = document.getElementById("v5");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("s-img").src = d.img;
+      document.getElementById("s-count").textContent = d.count;
+      paintMarks(document.getElementById("s-marks"), d.boxes);
+    }
+    root.querySelectorAll("[data-job]").forEach(function (b) {
+      b.onclick = function () {
+        const job = b.getAttribute("data-job");
+        setJob(root, job);
+        apply(job);
+      };
+    });
+    document.getElementById("s-form").onsubmit = function (e) {
+      e.preventDefault();
+      document.getElementById("s-count").textContent = document.getElementById("s-count").textContent.split("—")[0].trim() + "  —  " + document.getElementById("s-q").value;
+    };
+    apply("still");
+  })();
+
+  /* Atelier */
+  (function () {
+    const root = document.getElementById("v6");
+    function apply(job) {
+      const d = JOBS[job];
+      document.getElementById("a-img").src = d.img;
+      document.getElementById("a-cap").textContent = (job === "live" ? "Live hub · " : "") + d.count;
+      paintMarks(document.getElementById("a-marks"), d.boxes);
+      const pins = document.getElementById("pins");
+      pins.querySelectorAll(".polaroid").forEach(function (p) { p.remove(); });
+      const rot = [-4, 3, 2, -2, 5, -3];
+      const pos = [[20,28],[228,86],[64,290],[300,330],[140,180],[360,40]];
+      d.boxes.slice(0, 4).forEach(function (b, i) {
+        const pin = document.createElement("div");
+        pin.className = "polaroid";
+        pin.style.left = pos[i][0] + "px";
+        pin.style.top = pos[i][1] + "px";
+        pin.style.transform = "rotate(" + rot[i] + "deg)";
+        pin.innerHTML = "<img src=\"" + d.img + "\" alt=\"Crop\" style=\"object-position:" + (b.l + b.w / 2) + "% " + (b.t + b.h / 2) + "%\"><div class=\"hid\">id " + (12 + i) + " · " + b.label + "</div>";
+        pins.appendChild(pin);
+      });
+    }
+    root.querySelectorAll("[data-job]").forEach(function (b) {
+      b.onclick = function () {
+        const job = b.getAttribute("data-job");
+        setJob(root, job);
+        apply(job);
+      };
+    });
+    document.getElementById("a-form").onsubmit = function (e) {
+      e.preventDefault();
+      const pin = document.createElement("div");
+      pin.className = "polaroid";
+      pin.style.left = (24 + Math.random() * 260) + "px";
+      pin.style.top = (24 + Math.random() * 240) + "px";
+      pin.style.transform = "rotate(" + (Math.random() * 8 - 4) + "deg)";
+      const src = document.getElementById("a-img").src;
+      pin.innerHTML = "<img src=\"" + src + "\" alt=\"New crop\" style=\"object-position:" + (40 + Math.random() * 30) + "% " + (30 + Math.random() * 40) + "%\"><div class=\"hid\">id 21 · " + document.getElementById("a-q").value + "</div>";
+      document.getElementById("pins").appendChild(pin);
+    };
+    apply("live");
+  })();
+
+  show(v);
+})();
+</script>
+</body>
+</html>

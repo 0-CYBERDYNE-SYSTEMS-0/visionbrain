@@ -461,6 +461,22 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
 
     <!-- ■ INSPECT TAB (image: detect · segment · sam3 · ocr) -->
     <div class="tab-pane" id="tab-inspect">
+      <!-- image-run panel: always-on honest feedback while a STILL job runs
+           (task/phase/elapsed tick from SSE heartbeats; log line is real
+           subprocess output). No progress bar — single-shot jobs report no
+           frame counts, and fabricated ones are forbidden. -->
+      <div class="mission-run" id="inspect-run">
+        <div class="mr-head">
+          <div class="mr-title">IMAGE RUN</div>
+          <div class="mr-file" id="ir-file">—</div>
+        </div>
+        <div class="mr-grid">
+          <div class="mr-cell"><div class="mr-lbl">TASK</div><div class="mr-val" id="ir-task">—</div></div>
+          <div class="mr-cell"><div class="mr-lbl">PHASE</div><div class="mr-val" id="ir-phase">starting</div></div>
+          <div class="mr-cell"><div class="mr-lbl">ELAPSED</div><div class="mr-val" id="ir-elapsed">0s</div></div>
+        </div>
+        <div class="mr-log" id="ir-latest">Waiting for engine output…</div>
+      </div>
       <div id="image-result-inspect" style="display:none;flex:1;min-height:0;padding:14px;flex-direction:column;gap:8px">
         <img id="ri-inspect" style="max-width:100%;max-height:100%;object-fit:contain;border:1px solid var(--rule)">
         <button class="btn-browse" onclick="hideResults()">↥ new file</button>
@@ -486,7 +502,11 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
       </div>
       <div id="live-hub-row" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <button id="live-connect" class="btn-browse" onclick="liveToggle()">connect to hub</button>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button id="live-pause" class="btn-browse seg-btn" onclick="livePauseToggle()">⏸ PAUSE</button>
         <span id="live-status" style="font-size:11px;color:var(--ink-2)">ws://127.0.0.1:8765</span>
+        <span id="live-stats" style="font-family:var(--font-mono);font-size:10px;color:var(--ink-2);font-variant-numeric:tabular-nums"></span>
       </div>
       <div id="live-local-panel" style="display:none;flex-direction:column;gap:10px">
         <div class="cf"><label>SOURCE</label>
@@ -512,16 +532,29 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
           <input type="text" id="live-rtsp" placeholder="rtsp://user:pass@camera.local:554/stream" spellcheck="false" autocomplete="off">
         </div>
         <div class="sep"></div>
-        <div class="cf"><label>PROMPTS</label><input type="text" id="live-prompts" value="person" placeholder="boat person kayak…"></div>
+        <div class="cf"><label>PROMPTS</label><input type="text" id="live-prompts" placeholder="boat person kayak…"></div>
+        <div class="cf"><label>PRESETS</label>
+          <div id="live-preset-row" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0"></div>
+        </div>
         <div class="cf">
           <label>THRESHOLD</label>
-          <div class="range-row"><input type="range" id="live-thresh" min="0.01" max="0.5" step="0.01" value="0.15" oninput="document.getElementById('live-threshv').textContent=parseFloat(this.value).toFixed(2)"><span class="rv" id="live-threshv">0.15</span></div>
+          <div class="range-row"><input type="range" id="live-thresh" min="0.05" max="0.90" step="0.05" value="0.15" oninput="document.getElementById('live-threshv').textContent=parseFloat(this.value).toFixed(2)" onchange="liveThresholdChange()"><span class="rv" id="live-threshv">0.15</span></div>
+        </div>
+        <div class="cf"><label title="engine task — asks the engine for mask polygons">MASKS</label>
+          <label class="tog" title="engine task: request mask polygons (slower)"><input type="checkbox" id="live-masks" checked onchange="liveMasksChange()"><span>polygons · slower</span></label>
         </div>
         <div class="cf"><label>RES</label>
           <select id="live-res"><option value="224" selected>224 (fast)</option><option value="512">512</option><option value="1008">1008</option></select>
         </div>
         <div class="cf"><label>DETECT EVERY</label>
           <select id="live-every"><option value="1">1F</option><option value="5">5F</option><option value="10" selected>10F</option><option value="15">15F</option></select>
+        </div>
+        <div class="cf">
+          <label>JPEG QUALITY</label>
+          <div class="range-row"><input type="range" id="live-jpeg-q" min="30" max="95" step="1" value="70" oninput="document.getElementById('live-jpeg-qv').textContent=this.value" onchange="liveStreamChange()"><span class="rv" id="live-jpeg-qv">70</span></div>
+        </div>
+        <div class="cf"><label>SEND WIDTH</label>
+          <select id="live-send-w" onchange="liveStreamChange()"><option value="640">640</option><option value="960">960</option><option value="1280" selected>1280</option><option value="1920">1920</option></select>
         </div>
         <div class="cf"><label>ZONES</label>
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0">
@@ -567,6 +600,9 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
       <div style="position:relative;flex:1;min-height:0;border:1px solid var(--rule);background:#000">
         <canvas id="live-canvas" width="1280" height="720" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></canvas>
         <div class="ph" id="live-empty" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border:none">no feed — connect, or start a cockpit/scout stream</div>
+        <!-- Non-blocking staleness badge: the HUD is sacred, so a stalled feed
+             is flagged in the corner while the last frame stays visible. -->
+        <div id="live-stall" style="display:none;position:absolute;top:10px;left:10px;padding:4px 10px;border:1px solid var(--warn);background:rgba(14,16,13,.85);color:var(--warn);font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;pointer-events:none;z-index:5">feed stalled</div>
       </div>
       <div id="live-events" style="display:none;max-height:130px;overflow-y:auto;border-top:1px solid var(--rule);font-family:var(--font-mono);font-size:10px;color:var(--ink-1);flex-shrink:0"></div>
       <pre id="live-ask-out" style="display:none;font-family:var(--font-mono);font-size:11px;color:var(--ink-1);white-space:pre-wrap;max-height:120px;overflow-y:auto;border-top:1px solid var(--rule);padding-top:8px"></pre>
@@ -732,14 +768,23 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
 
     <!-- ─── LIVE HUB CONTROLS ─── -->
     <div class="cfg-pane" id="cfg-live">
-      <div class="cf"><label>ENGINES</label>
+      <div class="cf"><label title="detection engines — external field hub only">ENGINES</label>
         <div style="display:flex;gap:10px;font-size:11px;color:var(--ink-1)">
-          <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="live-sam" checked>sam</label>
-          <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="live-falcon">falcon</label>
-          <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="live-lfm">lfm</label>
+          <label id="live-eng-sam" style="display:flex;gap:4px;align-items:center" title="sam — the local engine's only detection model"><input type="checkbox" id="live-sam" checked onchange="liveApply()">sam</label>
+          <label id="live-eng-falcon" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="live-falcon" onchange="liveApply()">falcon</label>
+          <label id="live-eng-lfm" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="live-lfm" onchange="liveApply()">lfm</label>
         </div>
       </div>
-      <div class="cf"><label>LFM CHECKPOINT</label>
+      <div class="cf"><label title="rendering only — what this screen draws; does not change what the engine sends">OVERLAY</label>
+        <div class="togs" style="gap:5px 12px">
+          <label class="tog"><input type="checkbox" id="live-ly-mask" checked onchange="liveLayerChange('mask')"><span>MASK</span></label>
+          <label class="tog"><input type="checkbox" id="live-ly-box" checked onchange="liveLayerChange('box')"><span>BOX</span></label>
+          <label class="tog"><input type="checkbox" id="live-ly-label" checked onchange="liveLayerChange('label')"><span>LABEL</span></label>
+          <label class="tog"><input type="checkbox" id="live-ly-track" onchange="liveLayerChange('track')"><span>TRACK</span></label>
+          <label class="tog"><input type="checkbox" id="live-ly-conf" checked onchange="liveLayerChange('conf')"><span>CONF</span></label>
+        </div>
+      </div>
+      <div class="cf" id="live-lfm-row"><label>LFM CHECKPOINT</label>
         <select id="live-lfm-model"><option value="lfm" selected>LFM2.5-VL 450M</option><option value="lfm3b">LFM2.5-VL 3B</option></select>
       </div>
       <div class="cf"><label>ASK VLM</label>
@@ -747,9 +792,9 @@ body.dragging-col #workspace,body.dragging-row #workspace{transition:none}
       </div>
       <div class="cf"><label>ASK</label><input type="text" id="live-q" value="what do you see?" placeholder="ask about the live view…"></div>
       <div class="sep"></div>
-      <button class="btn-launch" onclick="liveApply()">apply to hub</button>
-      <button class="btn-launch" style="margin-top:6px;background:var(--ink-1);color:var(--canvas)" onclick="liveAsk()">ask</button>
-      <button class="btn-launch" style="margin-top:6px" onclick="liveReport()">report</button>
+      <button class="btn-launch" id="btn-live-engines" onclick="liveApply()">apply to hub</button>
+      <button class="btn-launch" id="btn-live-ask" style="margin-top:6px;background:var(--ink-1);color:var(--canvas)" onclick="liveAsk()">ask</button>
+      <button class="btn-launch" id="btn-live-report" style="margin-top:6px" onclick="liveReport()">report</button>
       <button class="btn-launch" id="live-rec-btn" style="margin-top:6px;background:#a33;color:#fff" onclick="liveRecToggle()">● record</button>
     </div>
 
@@ -808,6 +853,8 @@ const S = {
     chunkIndex: 0,
     chunkTotal: 0,
     timerId: null,
+    panel: 'mr',      // which run panel renders mission state: mr (video) | ir (image)
+    queuePos: null,   // live queue spot while the job waits for a slot
   },
 };
 
@@ -922,10 +969,28 @@ document.addEventListener('DOMContentLoaded', () => {
   checkStatus();
   refreshVlmBackend();
   checkHealth();
+  // ?live=1 — viewer shortcut (SIMPLIFICATION_SPEC §1): open the Live tab in
+  // local mode and connect as a viewer only — never send `start`. The form is
+  // populated from remembered settings alone; empty storage leaves it empty
+  // and starts no source. Starting an idle engine needs the Start action.
+  try {
+    if (new URLSearchParams(location.search).has('live')) {
+      switchTab('live');
+      liveSetMode('local');
+      const savedUrl = localStorage.getItem('vb.liveUrl');
+      if (savedUrl) { g('live-src').value = 'url'; liveSrcChange('url'); g('live-rtsp').value = savedUrl; }
+      const savedPrompts = localStorage.getItem('vb.livePrompts');
+      if (savedPrompts) g('live-prompts').value = savedPrompts;
+      const savedThresh = parseFloat(localStorage.getItem('vb.liveThresh'));
+      if (!isNaN(savedThresh)) { g('live-thresh').value = savedThresh; const tv = g('live-threshv'); if (tv) tv.textContent = savedThresh; }
+      if (!LIVE.connected) liveEngineConnect();   // viewer attach — no pendingStart, no start
+    }
+  } catch (e) { /* viewer attach is best-effort */ }
   log('aerial intel ground control · ready', 'h');
   log('all models initializing — awaiting status check…', 'i');
   setInterval(checkStatus, 30000);
   setInterval(checkHealth, 5000);
+  setInterval(liveWatchdog, 1000);   // live-tab honesty: startup ticks, stall flags, aging stats
 });
 
 // ══════════════════════════════════════════════════════
@@ -1176,7 +1241,7 @@ async function startJob(kind, fd, btn, filename) {
   resetPipeline();
   hideResults();
   clearOcrOutput();
-  showRunningState(FAMILY[kind], filename);
+  showRunningState(FAMILY[kind], filename, kind);
 
   btn.disabled = true;
   btn.classList.add('running');
@@ -1197,6 +1262,7 @@ async function startJob(kind, fd, btn, filename) {
     S.mission.progress = 0;
     S.mission.chunkIndex = 0;
     S.mission.chunkTotal = 0;
+    S.mission.queuePos = d.queue_position ?? null;
     startMissionTicker();
     setMissionPill('running', `${kind} · running`);
     log(`Job ${d.job_id} dispatched.`, 'i');
@@ -1316,6 +1382,7 @@ function connectSSE(jid, kind, btn) {
       S.mission.running = d.status === 'running';
       S.mission.status = d.status;
       S.mission.phase = d.phase || 'running';
+      S.mission.queuePos = d.queued ? (d.queue_position ?? S.mission.queuePos) : null;
       S.mission.lastHeartbeatAt = d.last_heartbeat_at || d.ts || Date.now()/1000;
       if (!S.mission.startedAt) S.mission.startedAt = (d.ts || Date.now()/1000);
       renderMissionFromState();
@@ -1476,6 +1543,8 @@ function showImage(url) {
   const imgEl = g('ri-inspect');
   const resDiv = g('image-result-inspect');
   const dz = g('dz-inspect');
+  const ir = g('inspect-run');
+  if (ir) ir.style.display = 'none';
   if (imgEl) { imgEl.src = url; resDiv.style.display = 'flex'; if(dz)dz.style.display='none'; }
 }
 
@@ -1569,6 +1638,8 @@ function showOcrOutput(text) {
   }
   g('ocr-text').textContent = out || '(no text extracted)';
   g('ocr-output').style.display = 'block';
+  const ir = g('inspect-run');
+  if (ir) ir.style.display = 'none';
   const dz = g('dz-inspect');
   if (dz) dz.style.display = 'none';
 }
@@ -1585,6 +1656,8 @@ function showAgentOutput(text) {
   if (ph) ph.textContent = 'AGENT ANSWER';
   g('ocr-text').textContent = out || '(no answer)';
   g('ocr-output').style.display = 'block';
+  const ir = g('inspect-run');
+  if (ir) ir.style.display = 'none';
   const dz = g('dz-inspect');
   if (dz) dz.style.display = 'none';
 }
@@ -1607,8 +1680,27 @@ function hideResults() {
   });
 }
 
-function showRunningState(tab, filename) {
-  if (tab !== 'analyze' && tab !== 'fastscan') return;
+function showRunningState(tab, filename, kind) {
+  if (tab !== 'analyze' && tab !== 'fastscan' && tab !== 'inspect') return;
+  S.mission.panel = tab === 'inspect' ? 'ir' : 'mr';
+  if (tab === 'inspect') {
+    // STILL jobs: swap the drop zone for the image-run panel (no progress
+    // bar — single-shot tasks report no frame counts).
+    const dz = g('dz-inspect');
+    if (dz) dz.style.display = 'none';
+    const res = g('image-result-inspect');
+    if (res) res.style.display = 'none';
+    const ocr = g('ocr-output');
+    if (ocr) ocr.style.display = 'none';
+    const ir = g('inspect-run');
+    if (ir) ir.style.display = 'flex';
+    g('ir-file').textContent = filename || 'image input';
+    g('ir-task').textContent = kind || g('c-task').value;
+    g('ir-phase').textContent = 'starting';
+    g('ir-elapsed').textContent = '0s';
+    g('ir-latest').textContent = 'Waiting for engine output…';
+    return;
+  }
   const dz = g('dz-analyze');
   const mr = g('mission-run');
   if (dz) dz.style.display = 'none';
@@ -1728,8 +1820,9 @@ function renderMissionFromState() {
   const elapsed = S.mission.startedAt ? Math.max(0, now - S.mission.startedAt) : 0;
   const ageTxt = hbAge.toFixed(1) + 's';
   const elapsedTxt = elapsed.toFixed(0) + 's';
+  const queueTxt = S.mission.phase === 'queued' && S.mission.queuePos ? ` · spot ${S.mission.queuePos}` : '';
   if (hbAge <= 3) {
-    setMissionPill('running', `running · hb ${ageTxt} · ${elapsedTxt}`);
+    setMissionPill('running', `${S.mission.phase}${queueTxt} · hb ${ageTxt} · ${elapsedTxt}`);
   } else if (hbAge <= 10) {
     setMissionPill('stale', `quiet · hb ${ageTxt} · ${elapsedTxt}`);
   } else {
@@ -1738,15 +1831,26 @@ function renderMissionFromState() {
   updateMissionDisplay();
 }
 
+// Mission state renders into whichever run panel the active job owns:
+// #mission-run (film) or #inspect-run (still).
 function updateMissionDisplay() {
-  const mr = g('mission-run');
-  if (!mr || mr.style.display === 'none') return;
+  const isStill = S.mission.panel === 'ir';
+  const panel = g(isStill ? 'inspect-run' : 'mission-run');
+  if (!panel || panel.style.display === 'none') return;
   const now = Date.now()/1000;
   const elapsed = S.mission.startedAt ? Math.max(0, now - S.mission.startedAt) : 0;
-  g('mr-phase').textContent = S.mission.phase || 'running';
-  g('mr-elapsed').textContent = elapsed.toFixed(0) + 's';
-  g('mr-latest').textContent = S.mission.latest || 'Running…';
-  updateProgress(S.mission.progress || 0);
+  const phase = S.mission.phase || 'running';
+  const queueTxt = phase === 'queued' && S.mission.queuePos ? ` · spot ${S.mission.queuePos}` : '';
+  if (isStill) {
+    g('ir-phase').textContent = phase + queueTxt;
+    g('ir-elapsed').textContent = elapsed.toFixed(0) + 's';
+    g('ir-latest').textContent = S.mission.latest || 'Running…';
+  } else {
+    g('mr-phase').textContent = phase;
+    g('mr-elapsed').textContent = elapsed.toFixed(0) + 's';
+    g('mr-latest').textContent = S.mission.latest || 'Running…';
+    updateProgress(S.mission.progress || 0);
+  }
 }
 
 function startMissionTicker() {
@@ -1763,10 +1867,40 @@ function stopMissionTicker() {
 // ══════════════════════════════════════════════════════
 //  LIVE HUB (field bridge ws://…:8765 — observer relay)
 // ══════════════════════════════════════════════════════
-const LIVE = { ws: null, connected: false, lastDets: [], img: null,
+const LIVE_LAYERS_KEY = 'vb.liveLayers';
+const LIVE_LAYERS_DEFAULTS = { mask: true, box: true, label: true, track: false, conf: true };
+const LIVE_PRESETS_KEY = 'vb.livePresets';
+const LIVE_PRESETS_SEED = ['person, vehicle', 'fence, gate, vehicle', 'person, bicycle, dog'];
+
+function liveLoadLayers() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LIVE_LAYERS_KEY));
+    if (raw && typeof raw === 'object') {
+      const out = { ...LIVE_LAYERS_DEFAULTS };
+      for (const k of Object.keys(LIVE_LAYERS_DEFAULTS)) out[k] = !!raw[k];
+      return out;
+    }
+  } catch (e) { /* private mode etc. */ }
+  return { ...LIVE_LAYERS_DEFAULTS };
+}
+
+function liveLoadPresets() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LIVE_PRESETS_KEY));
+    if (Array.isArray(raw)) return raw.filter(p => typeof p === 'string' && p.trim()).map(p => p.trim());
+  } catch (e) { /* private mode etc. */ }
+  return [...LIVE_PRESETS_SEED];
+}
+
+const LIVE = { ws: null, connected: false, lastDets: [], lastDetsAt: null, img: null,
                mode: 'hub', pendingStart: null, engineRunning: false,
                zones: [], drawMode: 'off', lineStart: null, rectStart: null, zoneSeq: 0,
-               targets: [], targetSeq: 0 };
+               targets: [], targetSeq: 0,
+               layers: liveLoadLayers(), presets: liveLoadPresets(),
+               paused: false, pausedPrompts: '',
+               connectedAt: null, startingAt: null, lastFrameAt: null,
+               ask: null,
+               stats: { firstId: null, lastId: null, recv: 0, stamps: [] }, statsPaintAt: 0 };
 
 const LIVE_PALETTE = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6','#bcf60c'];
 
@@ -1779,27 +1913,42 @@ function wireSocket(ws) {
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: 'hello', role: 'dashboard' }));
     LIVE.connected = true;
+    LIVE.connectedAt = Date.now();
     btn.textContent = 'disconnect';
     liveStatus(LIVE.mode === 'local' ? '● local engine connected' : '● connected');
-    document.getElementById('live-empty').style.display = 'none';
-    // Local engine: a START press before the socket opened parks its payload here.
+    // The stage stays honest while nothing flows: a parked START resumes
+    // below (straight into its starting note); otherwise say what we wait for.
     if (LIVE.mode === 'local' && LIVE.pendingStart) {
       const payload = LIVE.pendingStart;
       LIVE.pendingStart = null;
       liveSend(payload);
       liveSetRunning(true);
+      liveBeginStarting();
       liveRestoreControls();
+    } else {
+      liveStageNote(LIVE.mode === 'local' ? 'connected · engine not started' : 'connected · waiting for frames');
     }
   };
   ws.onmessage = (ev) => {
     if (ev.data instanceof ArrayBuffer) { liveDrawFrame(ev.data); return; }
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
-    if (msg.type === 'detections') { LIVE.lastDets = msg.detections || msg.items || []; }
-    else if (msg.type === 'answer') { liveOut('ANSWER\n' + (msg.answer || msg.text || '')); }
-    else if (msg.type === 'ask_ack') { liveOut('thinking… [' + (msg.model || 'vlm') + ']'); }
-    else if (msg.type === 'report_result') { liveOut('REPORT\n' + (msg.text || '')); }
-    else if (msg.type === 'status') { liveStatus('● ' + (msg.note || 'ok')); }
-    else if (msg.type === 'engine_stopped') { liveSetRunning(false); liveStatus('engine stopped'); }
+    if (msg.type === 'detections') { LIVE.lastDets = msg.detections || msg.items || []; LIVE.lastDetsAt = Date.now(); }
+    else if (msg.type === 'answer') { liveAskEnd(); liveOut('ANSWER\n' + (msg.answer || msg.text || '')); }
+    else if (msg.type === 'ask_ack') { if (LIVE.ask && msg.model) LIVE.ask.model = msg.model; }
+    else if (msg.type === 'report_result') { liveAskEnd(); liveOut('REPORT\n' + (msg.text || '')); }
+    else if (msg.type === 'status') {
+      // Multi-viewer: the engine streams to every connected dashboard.
+      if ((msg.note || '').includes('attached as viewer')) liveSetRunning(true);
+      liveStatus('● ' + (msg.note || 'ok'));
+    }
+    else if (msg.type === 'error') { liveAskEnd(); liveStatus('✗ ' + (msg.error || msg.note || msg.message || 'error')); }
+    else if (msg.type === 'engine_stopped') {
+      liveSetRunning(false);
+      LIVE.lastFrameAt = null;
+      liveStallShow(false);
+      liveStageNote('engine stopped — press ▶ start');
+      liveStatus('engine stopped');
+    }
     else if (msg.type === 'event') { liveEventFeed(msg.event || {}); }
     else if (msg.type === 'capture') { liveCaptureFeed(msg.clip || {}); }
   };
@@ -1808,8 +1957,17 @@ function wireSocket(ws) {
     btn.textContent = 'connect to hub';
     liveStatus('— disconnected');
     liveSetRunning(false);
-    const le = g('live-empty');
-    if (le) le.style.display = 'flex';
+    if (LIVE.ask) { liveAskEnd(); liveOut('connection closed while waiting — no answer will arrive.'); }
+    LIVE.lastDets = [];
+    LIVE.lastDetsAt = null;
+    LIVE.connectedAt = null;
+    LIVE.startingAt = null;
+    LIVE.lastFrameAt = null;
+    liveStallShow(false);
+    LIVE.stats = { firstId: null, lastId: null, recv: 0, stamps: [] };
+    const se = document.getElementById('live-stats');
+    if (se) se.textContent = '';
+    liveStageNote('no feed — not connected');
   };
   ws.onerror = () => liveStatus(LIVE.mode === 'local' ? '✗ engine unreachable' : '✗ hub unreachable');
 }
@@ -1835,12 +1993,31 @@ function liveSetMode(m) {
   LIVE.connected = false;
   LIVE.pendingStart = null;
   liveSetRunning(false);
+  LIVE.paused = false;
+  LIVE.pausedPrompts = '';
+  const pb = g('live-pause');
+  if (pb) { pb.textContent = '⏸ PAUSE'; pb.classList.remove('active'); }
   LIVE.mode = m;
   g('live-mode-local').classList.toggle('active', m === 'local');
   g('live-mode-hub').classList.toggle('active', m === 'hub');
   g('live-local-panel').style.display = m === 'local' ? 'flex' : 'none';
   g('live-hub-row').style.display = m === 'hub' ? 'flex' : 'none';
+  // §2 — one supported meaning per control: local mode runs SAM only (the sam
+  // chip becomes a static indicator; falcon/lfm switches and the LFM detection
+  // checkpoint hide). Hub mode keeps every engine choice and wire message.
+  const local = m === 'local';
+  const sam = document.getElementById('live-sam');
+  if (sam) { sam.disabled = local; if (local) sam.checked = true; }
+  const fe = document.getElementById('live-eng-falcon');
+  if (fe) fe.style.display = local ? 'none' : 'flex';
+  const le = document.getElementById('live-eng-lfm');
+  if (le) le.style.display = local ? 'none' : 'flex';
+  const lfmRow = document.getElementById('live-lfm-row');
+  if (lfmRow) lfmRow.style.display = local ? 'none' : '';
+  const applyBtn = document.getElementById('btn-live-engines');
+  if (applyBtn) applyBtn.textContent = local ? 'apply' : 'apply to hub';
   liveStatus(m === 'local' ? 'local engine · not started' : 'ws://127.0.0.1:8765');
+  liveStageNote(m === 'local' ? 'local engine · not started' : 'no feed — connect to a field hub');
 }
 
 function liveEngineConnect() {
@@ -1911,18 +2088,37 @@ function liveStartToggle() {
     resolution: parseInt(g('live-res').value, 10),
     threshold: parseFloat(g('live-thresh').value),
     detect_every: parseInt(g('live-every').value, 10),
+    task: g('live-masks').checked ? 'segment' : 'detect',
+    jpeg_quality: parseInt(g('live-jpeg-q').value, 10),
+    send_width: parseInt(g('live-send-w').value, 10),
   };
   if (source === 'file') payload.file_id = S.files['live'].file_id;
   else if (source === 'url') payload.url = streamUrl;
   else payload.camera = parseInt(g('live-cam').value, 10);
+  // Remember the last source so ?live=1 auto-attach can restore it.
+  try {
+    if (source === 'url') localStorage.setItem('vb.liveUrl', streamUrl);
+    localStorage.setItem('vb.livePrompts', g('live-prompts').value.trim());
+    localStorage.setItem('vb.liveThresh', g('live-thresh').value);
+  } catch (e) { /* persistence is best-effort */ }
   if (LIVE.connected && LIVE.ws && LIVE.ws.readyState === 1) {
     liveSend(payload);
     liveSetRunning(true);
+    liveBeginStarting();
     liveRestoreControls();
   } else {
     LIVE.pendingStart = payload;
+    liveBeginStarting();
     liveEngineConnect();
   }
+}
+
+// START sent — the engine now opens its source and loads SAM 3.1 (a ~10s
+// cold start with no wire traffic). The watchdog ticks this note on the
+// stage until the first frame lands.
+function liveBeginStarting() {
+  LIVE.startingAt = Date.now();
+  liveStageNote('starting engine · loading SAM 3.1 · 0s');
 }
 
 function liveApplyPrompts() {
@@ -1935,6 +2131,103 @@ function liveEngineFree() {
   if (!liveSend({ type: 'shutdown' })) liveStatus('✗ not connected');
 }
 
+// ── Pause — stops painting detection items (video keeps flowing). Local engine
+// only: clearing/re-asserting prompts is Android pause semantics; hub observers
+// cannot control detection. Without a running engine it is purely visual.
+function livePauseToggle() {
+  LIVE.paused = !LIVE.paused;
+  const b = g('live-pause');
+  b.textContent = LIVE.paused ? '▶ RESUME' : '⏸ PAUSE';
+  b.classList.toggle('active', LIVE.paused);
+  if (LIVE.mode === 'local' && LIVE.engineRunning) {
+    if (LIVE.paused) {
+      LIVE.pausedPrompts = g('live-prompts').value.trim();
+      liveSend({ type: 'set_prompts', prompts: [] });
+    } else {
+      const prompts = LIVE.pausedPrompts.split(/\s+/).filter(Boolean);
+      if (prompts.length) liveSend({ type: 'set_prompts', prompts });
+    }
+  }
+  liveStatus(LIVE.paused ? 'AI ⏸ paused' : '▶ AI resumed');
+}
+
+function liveThresholdChange() {
+  if (!LIVE.engineRunning) return;
+  liveSend({ type: 'set_threshold', threshold: parseFloat(g('live-thresh').value) });
+}
+
+function liveStreamChange() {
+  if (!LIVE.engineRunning) return;
+  liveSend({ type: 'set_stream',
+             jpeg_quality: parseInt(g('live-jpeg-q').value, 10),
+             send_width: parseInt(g('live-send-w').value, 10) });
+}
+
+// MASKS is the task control — it asks the engine for mask polygons (the
+// OVERLAY chips, by contrast, only change what this screen draws). Hub
+// semantics: a task change drops prompts, so re-send them (Android behavior).
+// Local semantics: prompts survive a task change — re-sending would un-pause
+// a paused engine and clobber LIVE.pausedPrompts, so local sends set_task alone.
+function liveMasksChange() {
+  if (!LIVE.engineRunning) return;
+  liveSend({ type: 'set_task', task: g('live-masks').checked ? 'segment' : 'detect' });
+  if (LIVE.mode !== 'hub') return;
+  const prompts = g('live-prompts').value.trim().split(/\s+/).filter(Boolean);
+  if (prompts.length) liveSend({ type: 'set_prompts', prompts });
+}
+
+// ── Prompt presets — chips under the prompts field, persisted in localStorage.
+// Values may carry commas (seeded Android-style); normalized to spaces on apply.
+function livePromptsNorm(t) { return t.replace(/,/g, ' ').trim(); }
+
+function livePresetsStore() {
+  try { localStorage.setItem(LIVE_PRESETS_KEY, JSON.stringify(LIVE.presets)); } catch (e) { /* private mode etc. */ }
+}
+
+function livePresetsRender() {
+  const row = g('live-preset-row');
+  if (!row) return;
+  row.textContent = '';
+  for (const p of LIVE.presets) {
+    const chip = document.createElement('button');
+    chip.className = 'btn-browse seg-btn';
+    chip.textContent = p;
+    chip.onclick = () => livePresetApply(p);
+    const x = document.createElement('button');
+    x.className = 'btn-xs';
+    x.textContent = '✕';
+    x.title = 'delete preset';
+    x.onclick = () => {
+      LIVE.presets = LIVE.presets.filter(q => q !== p);
+      livePresetsStore();
+      livePresetsRender();
+    };
+    row.appendChild(chip);
+    row.appendChild(x);
+  }
+  const save = document.createElement('button');
+  save.className = 'btn-browse';
+  save.textContent = 'SAVE';
+  save.onclick = livePresetSave;
+  row.appendChild(save);
+}
+
+function livePresetApply(p) {
+  const v = livePromptsNorm(p);
+  g('live-prompts').value = v;
+  if (LIVE.engineRunning) liveSend({ type: 'set_prompts', prompts: v.split(/\s+/).filter(Boolean) });
+}
+
+function livePresetSave() {
+  const v = livePromptsNorm(g('live-prompts').value);
+  if (!v) { liveStatus('✗ nothing to save'); return; }
+  LIVE.presets = LIVE.presets.filter(q => livePromptsNorm(q) !== v);
+  LIVE.presets.unshift(v);
+  if (LIVE.presets.length > 12) LIVE.presets = LIVE.presets.slice(0, 12);
+  livePresetsStore();
+  livePresetsRender();
+}
+
 function liveDisconnect() { if (LIVE.ws) LIVE.ws.close(); }
 
 function liveStatus(t) { document.getElementById('live-status').textContent = t; }
@@ -1944,24 +2237,126 @@ function liveOut(t) {
 }
 
 // Binary frame (bridge wire format): >III (frame_id, timestamp_ms, jpeg_len)
-// + JPEG + >I telem_len + telemetry JSON — jpeg_len is at offset 8, pixels at 12.
+// + JPEG + >I telem_len + telemetry JSON — frame_id at 0, timestamp_ms at 4,
+// jpeg_len at offset 8, pixels at 12. Also feeds the rolling transport stats.
 function liveDrawFrame(buf) {
   const dv = new DataView(buf);
+  const now = Date.now();
+  liveStatFrame(dv.getUint32(0), buf.byteLength, now);
+  LIVE.lastFrameAt = now;
+  if (LIVE.startingAt) { LIVE.startingAt = null; liveStageHide(); }
   const jpegLen = dv.getUint32(8);
   const blob = new Blob([new Uint8Array(buf, 12, jpegLen)], { type: 'image/jpeg' });
   createImageBitmap(blob).then(bmp => {
     LIVE.img = bmp;
     const cv = document.getElementById('live-canvas'), ctx = cv.getContext('2d');
     ctx.drawImage(bmp, 0, 0, cv.width, cv.height);
-    for (const d of LIVE.lastDets) liveBox(ctx, d, cv.width, cv.height);
+    // Detections older than 3 s (or paused) go stale — keep painting video only.
+    if (!LIVE.paused && LIVE.lastDetsAt && now - LIVE.lastDetsAt <= 3000) {
+      for (const d of LIVE.lastDets) liveBox(ctx, d, cv.width, cv.height);
+    }
   }).catch(() => {});
 }
 
+// Rolling stats over a ~2 s window of (arrival time, bytes) samples; drop rate
+// from frame_id gaps since the first frame of the session. Painted at most 2×/s.
+function liveStatFrame(frameId, bytes, now) {
+  const st = LIVE.stats;
+  if (st.lastId != null && frameId < st.lastId) { st.firstId = null; st.recv = 0; } // stream restarted
+  if (st.firstId == null) st.firstId = frameId;
+  st.lastId = frameId;
+  st.recv += 1;
+  st.stamps.push([now, bytes]);
+  while (st.stamps.length && now - st.stamps[0][0] > 2000) st.stamps.shift();
+  if (now - LIVE.statsPaintAt >= 500) {
+    LIVE.statsPaintAt = now;
+    liveStatsPaint(st, now);
+  }
+}
+
+function liveStatsPaint(st, now) {
+  const el = document.getElementById('live-stats');
+  if (!el) return;
+  const parts = [];
+  const n = st.stamps.length;
+  if (n) {
+    let bytes = 0;
+    for (const s of st.stamps) bytes += s[1];
+    parts.push((n / 2).toFixed(1) + ' fps');
+    parts.push((bytes * 4 / 1e6).toFixed(1) + ' Mbps'); // ×8 bits over a 2 s window
+    const expected = st.lastId - st.firstId + 1;
+    parts.push((expected > st.recv ? 100 * (expected - st.recv) / expected : 0).toFixed(1) + '% drop');
+  }
+  // Frame age is displayed always (detection lag is physical truth — §6):
+  // fresh reads as "feed 0.2s", a silent stream reads as "feed stale 4.1s".
+  if (LIVE.lastFrameAt) {
+    const age = (now - LIVE.lastFrameAt) / 1000;
+    parts.push(age > 3 ? `feed stale ${age.toFixed(1)}s` : `feed ${age.toFixed(1)}s`);
+  }
+  if (LIVE.lastDetsAt && LIVE.lastDets.length) {
+    parts.push(LIVE.lastDets.length + ' objects');
+    parts.push(((now - LIVE.lastDetsAt) / 1000).toFixed(1) + 's');
+  } else {
+    parts.push('no detections');
+  }
+  if (LIVE.paused) parts.push('AI ⏸ paused');
+  el.textContent = parts.join(' · ');
+}
+
+// ── Always-on feedback watchdog — 1 Hz, independent of wire traffic ──
+// Nothing on the live tab may look frozen while the engine runs: the stage
+// note ticks during startup, the stats line repaints so ages keep counting,
+// and a silent feed gets flagged instead of freezing its last frame.
+function liveWatchdog() {
+  if (!LIVE.connected) return;
+  const now = Date.now();
+  if (LIVE.startingAt) {
+    const s = ((now - LIVE.startingAt) / 1000).toFixed(0);
+    liveStageNote(`starting engine · loading SAM 3.1 · ${s}s`);
+    return;
+  }
+  if (!LIVE.lastFrameAt) {
+    const s = LIVE.connectedAt ? ((now - LIVE.connectedAt) / 1000).toFixed(0) : '0';
+    liveStageNote(LIVE.engineRunning
+      ? `engine running · waiting for first frame · ${s}s`
+      : (LIVE.mode === 'local' ? 'connected · engine not started' : `connected · waiting for frames · ${s}s`));
+    return;
+  }
+  const age = (now - LIVE.lastFrameAt) / 1000;
+  liveStallShow(LIVE.engineRunning && age > 2.5, age);
+  liveStatsPaint(LIVE.stats, now);
+}
+
+function liveStageNote(t) {
+  const el = g('live-empty');
+  if (!el) return;
+  el.style.display = 'flex';
+  el.textContent = t;
+}
+
+function liveStageHide() {
+  const el = g('live-empty');
+  if (el) el.style.display = 'none';
+}
+
+function liveStallShow(show, age) {
+  const el = g('live-stall');
+  if (!el) return;
+  if (show) {
+    el.style.display = 'block';
+    el.textContent = `feed stalled · last frame ${(age || 0).toFixed(0)}s ago`;
+  } else {
+    el.style.display = 'none';
+  }
+}
+
 function liveBox(ctx, d, W, H) {
+  const LY = LIVE.layers;
   const color = LIVE_PALETTE[(d.color_id ?? d.track_id ?? 0) % 8];
   const poly = d.polygon;
+  const hasPoly = poly && poly.length >= 3;
   let labelAnchor = null;
-  if (poly && poly.length >= 3) {
+  if (hasPoly && LY.mask) {
     // Painted mask: fill the object's outline, stroke its edge.
     ctx.beginPath();
     ctx.moveTo(poly[0][0]*W, poly[0][1]*H);
@@ -1974,16 +2369,24 @@ function liveBox(ctx, d, W, H) {
     labelAnchor = [Math.min(...poly.map(p => p[0]))*W, Math.min(...poly.map(p => p[1]))*H];
   }
   const b = d.box;
-  if (b && b.length >= 4) {
-    const x1 = b[0]*W, y1 = b[1]*H, w = (b[2]-b[0])*W, h = (b[3]-b[1])*H;
-    if (!labelAnchor) {
-      ctx.strokeStyle = color; ctx.lineWidth = 2;
-      ctx.strokeRect(x1, y1, w, h);
-      labelAnchor = [x1, y1];
-    }
+  // §2 — BOX draws for every boxed item, polygon-bearing included; the MASK
+  // layer alone gates polygon painting.
+  if (b && b.length >= 4 && LY.box) {
+    const x1 = b[0]*W, y1 = b[1]*H;
+    ctx.strokeStyle = color; ctx.lineWidth = 2;
+    ctx.strokeRect(x1, y1, (b[2]-b[0])*W, (b[3]-b[1])*H);
+    if (!labelAnchor) labelAnchor = [x1, y1];
   }
-  if (!labelAnchor) return;
-  let label = `${d.label}${d.track_state === 'predicted' ? ' ·held' : ''} ${Math.round((d.score||0)*100)}%`;
+  if (!labelAnchor) {
+    // Nothing drawn (or mask hidden) — anchor the label on the item's
+    // best-known extent so labels never disappear with a layer toggle.
+    if (hasPoly) labelAnchor = [Math.min(...poly.map(p => p[0]))*W, Math.min(...poly.map(p => p[1]))*H];
+    else if (b && b.length >= 4) labelAnchor = [b[0]*W, b[1]*H];
+  }
+  if (!labelAnchor || !LY.label) return;
+  let label = `${d.label}${d.track_state === 'predicted' || d.track_state === 'held' ? ' ·held' : ''}`;
+  if (LY.track && d.track_id != null) label = '#' + d.track_id + ' ' + label;
+  if (LY.conf) label += ' ' + Math.round((d.score||0)*100) + '%';
   if (d.direction && d.direction !== 'unknown' && d.direction !== 'stationary') label += ' · ' + d.direction;
   ctx.font = '12px monospace';
   const tw = ctx.measureText(label).width + 8;
@@ -1993,27 +2396,88 @@ function liveBox(ctx, d, W, H) {
 
 function liveSend(obj) { if (LIVE.ws && LIVE.ws.readyState === 1) LIVE.ws.send(JSON.stringify(obj)); return !!LIVE.ws; }
 
+// §2 — hub mode: engine switches + LFM checkpoint + Ask-VLM. Local mode runs
+// SAM only, so no set_engine — the apply still sends set_vlm to preserve the
+// Ask/Report VLM choice. No success print — the engine's status reply owns
+// the status line in both modes.
 function liveApply() {
-  if (!liveSend({ type: 'set_engine',
-      sam: document.getElementById('live-sam').checked,
-      falcon: document.getElementById('live-falcon').checked,
-      lfm: document.getElementById('live-lfm').checked,
-      lfm_model: document.getElementById('live-lfm-model').value })) { liveStatus('✗ not connected'); return; }
-  liveSend({ type: 'set_vlm', model: document.getElementById('live-vlm').value });
-  liveStatus('● engines/vlm updated');
+  if (LIVE.mode === 'hub') {
+    if (!liveSend({ type: 'set_engine',
+        sam: document.getElementById('live-sam').checked,
+        falcon: document.getElementById('live-falcon').checked,
+        lfm: document.getElementById('live-lfm').checked,
+        lfm_model: document.getElementById('live-lfm-model').value })) { liveStatus('✗ not connected'); return; }
+    liveSend({ type: 'set_vlm', model: document.getElementById('live-vlm').value });
+    return;
+  }
+  if (!liveSend({ type: 'set_vlm', model: document.getElementById('live-vlm').value })) liveStatus('✗ not connected');
+}
+
+// Overlay layer chips — per-item drawing gates, persisted in localStorage.
+function liveLayerChange(k) {
+  const el = g('live-ly-' + k);
+  if (!el) return;
+  LIVE.layers[k] = el.checked;
+  try { localStorage.setItem(LIVE_LAYERS_KEY, JSON.stringify(LIVE.layers)); } catch (e) { /* private mode etc. */ }
+}
+
+// ── Ask/Report share one in-flight slot (§5.6): both buttons disable while
+// either runs and stay disabled until the slot clears — answer, error, or
+// disconnect (liveAskEnd). Past 100s the request is late, not cancelled: the
+// line keeps ticking with an explicit late marker and a late result still
+// renders. No retry, no cancellation, and never an enabled-but-refused state.
+const ASK_TIMEOUT_S = 100;
+
+function liveAskBegin(kind, model) {
+  liveAskStopTimer();
+  LIVE.ask = { kind, model: model || 'vlm', since: Date.now(), timer: null };
+  setAskButtons(true);
+  liveAskTick();
+  LIVE.ask.timer = setInterval(liveAskTick, 1000);
+}
+
+function liveAskTick() {
+  const a = LIVE.ask;
+  if (!a) return;
+  const s = Math.floor((Date.now() - a.since) / 1000);
+  // The slot stays busy past the timeout — re-enabling here would leave the
+  // buttons looking live while the click guards silently refuse them (§6).
+  if (s >= ASK_TIMEOUT_S) liveOut(`thinking · ${a.model} · ${s}s · late — answer will still be shown`);
+  else liveOut(`thinking · ${a.model} · ${s}s`);
+}
+
+function liveAskEnd() {
+  if (!LIVE.ask) return;
+  liveAskStopTimer();
+  LIVE.ask = null;
+  setAskButtons(false);
+}
+
+function liveAskStopTimer() {
+  if (LIVE.ask && LIVE.ask.timer) { clearInterval(LIVE.ask.timer); LIVE.ask.timer = null; }
+}
+
+function setAskButtons(busy) {
+  const a = g('btn-live-ask'), r = g('btn-live-report');
+  if (a) a.disabled = busy;
+  if (r) r.disabled = busy;
 }
 
 function liveAsk() {
   const q = document.getElementById('live-q').value.trim(); if (!q) return;
-  if (!liveSend({ type: 'ask', question: q })) liveStatus('✗ not connected');
+  if (LIVE.ask) return;   // one shared slot — never double-ask
+  if (liveSend({ type: 'ask', question: q })) liveAskBegin('ask', g('live-vlm').value);
+  else liveStatus('✗ not connected');
 }
 
 function liveReport() {
+  if (LIVE.ask) return;
   const n = LIVE.lastDets.length;
   const counts = {};
   for (const d of LIVE.lastDets) counts[d.label] = (counts[d.label] || 0) + 1;
   const summary = Object.entries(counts).map(([k, v]) => `${v}x ${k}`).join(', ') || 'no detections';
-  if (liveSend({ type: 'report', report_type: 'field', summary })) liveOut('report requested…');
+  if (liveSend({ type: 'report', report_type: 'field', summary })) liveAskBegin('report', g('live-vlm').value);
+  else liveStatus('✗ not connected');
 }
 
 // ── Zone drawing (local panel) — rect via mousedown/mouseup, line via two clicks.
@@ -2175,6 +2639,16 @@ function liveCaptureFeed(clip) {
   feedEntry(clip.kind || 'clip', clip.url || null);
   log('clip captured: ' + (clip.url || ''), 'h');
 }
+
+// Load-time init — persisted overlay layers onto their checkboxes, prompt
+// preset chips into the local panel.
+(function () {
+  for (const k of Object.keys(LIVE_LAYERS_DEFAULTS)) {
+    const el = g('live-ly-' + k);
+    if (el) el.checked = !!LIVE.layers[k];
+  }
+  livePresetsRender();
+})();
 
 // Canvas mouse handlers — attached once at load; do nothing when drawMode is
 // 'off'. Rect zones and targets share the press/drag/release gesture; lines

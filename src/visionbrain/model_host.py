@@ -33,23 +33,52 @@ class _Entry:
 
 
 class ModelHost:
-    """Refcounted, thread-safe checkpoint residency cache."""
+    """Refcounted, thread-safe checkpoint residency cache.
+
+    Loading happens OUTSIDE the global lock: a multi-second checkpoint load
+    must not stall ``acquire``/``release`` for every other key on a 16GB
+    field box. Per-key load slots (Events) let same-key acquirers wait for
+    the one real load instead of racing duplicate loads.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._entries: dict[Hashable, _Entry] = {}
+        self._loading: dict[Hashable, threading.Event] = {}
 
     def acquire(self, key: Hashable, loader: Callable[[], Any]) -> Any:
         """Return key's payload, loading it on first request. Bumps refcount."""
-        with self._lock:
-            entry = self._entries.get(key)
-            if entry is None:
-                log.info("loading %s...", key)
-                entry = _Entry(loader())
+        while True:
+            with self._lock:
+                entry = self._entries.get(key)
+                if entry is not None:
+                    entry.refcount += 1
+                    return entry.payload
+                event = self._loading.get(key)
+                mine = event is None
+                if mine:
+                    event = self._loading[key] = threading.Event()
+
+            if not mine:
+                # Another thread is loading this key — wait for it, then
+                # re-check (it may have failed, making us the next loader).
+                event.wait()
+                continue
+
+            try:
+                payload = loader()  # slow, network/disk — never under _lock
+            except BaseException:
+                with self._lock:
+                    self._loading.pop(key, None)
+                event.set()  # wake waiters so they retry or raise
+                raise
+            with self._lock:
+                entry = _Entry(payload)
+                entry.refcount = 1
                 self._entries[key] = entry
-                log.info("%s loaded", key)
-            entry.refcount += 1
-            return entry.payload
+                self._loading.pop(key, None)
+            event.set()
+            return payload
 
     def release(self, key: Hashable) -> None:
         """Drop one reference; free and clear MLX's cache once it hits zero."""
@@ -62,7 +91,7 @@ class ModelHost:
                 return
             del self._entries[key]
             log.info("evicted %s", key)
-            _clear_mlx_cache()
+        _clear_mlx_cache()
 
     def resident(self) -> list[Hashable]:
         """Checkpoint keys currently loaded — for status/debugging."""
